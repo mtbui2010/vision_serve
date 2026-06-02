@@ -3,7 +3,14 @@
     "allow": [
       "Bash(pdftotext *)",
       "Bash(pdfinfo *)",
-      "Bash(nvidia-smi)"
+      "Bash(nvidia-smi)",
+      "Bash(nvidia-smi --query-gpu=*)",
+      "Bash(nvidia-smi --query-compute-apps=*)",
+      "Bash(go version *)",
+      "Bash(command -v *)",
+      "Bash(ldd *)",
+      "Bash(curl -s http://localhost:11435/api/health)",
+      "Bash(curl -s http://localhost:11435/api/models)"
     ]
   }
 }

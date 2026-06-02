@@ -37,9 +37,9 @@ images = ["pillow>=8.0", "numpy>=1.20"]
 dev = ["pillow>=8.0", "numpy>=1.20", "pytest>=7.0"]
 
 [project.urls]
-Homepage = "https://github.com/visionserve/visionserve"
-Repository = "https://github.com/visionserve/visionserve"
-Issues = "https://github.com/visionserve/visionserve/issues"
+Homepage = "https://github.com/mtbui2010/vision_serve"
+Repository = "https://github.com/mtbui2010/vision_serve"
+Issues = "https://github.com/mtbui2010/vision_serve/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

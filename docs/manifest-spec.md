@@ -31,6 +31,7 @@ labels: coco.txt              # optional — one class per line
 
 runtime:
   prefer: [tensorrt, cuda, cpu]   # EP fallback chain (CPU is always appended last)
+                                  # valid EPs: tensorrt, cuda, coreml, directml, openvino, cpu
   idle_unload_seconds: 300        # 0 = never auto-unload
 ```
 
@@ -83,7 +84,7 @@ runtime:
 | `postprocess.text_threshold` | **GroundingDINO only** — threshold for assigning text tokens to a detected box (open-vocab label gating) |
 | `postprocess.max_detections` | cap on returned detections |
 | `labels` | optional labels file (one class per line) |
-| `runtime.prefer` | EP fallback chain |
+| `runtime.prefer` | EP fallback chain (NVIDIA `tensorrt`/`cuda`, Apple `coreml`, Windows `directml`, Intel `openvino`, `cpu`) |
 | `runtime.idle_unload_seconds` | idle auto-unload (0 = never) |
 
 ## Validation rules (the registry rejects violations)
@@ -96,7 +97,7 @@ runtime:
 | `model_file` / `files` | at least one required — `model_file` OR a non-empty `files:` map |
 | `input.width/height` | > 0 |
 | `input.layout` | NCHW / NHWC (or empty) |
-| `runtime.prefer` | each EP ∈ {tensorrt, cuda, cpu} |
+| `runtime.prefer` | each EP ∈ {tensorrt, cuda, coreml, directml, openvino, cpu} |
 
 A manifest that is invalid in **structure** is **skipped** during scan (collected into a
 warning) and does not crash the server.

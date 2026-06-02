@@ -97,4 +97,9 @@ premature optimization) until it's actually needed.
   `yalue/onnxruntime_go` binding — point to it via the **`ORT_DYLIB_PATH`** environment
   variable. On edge (Jetson) use an ORT build with the TensorRT/CUDA execution providers so
   the manifest's `tensorrt → cuda → cpu` fallback chain works.
+- **Supported execution providers** (EP allowlist in `internal/engine/provider.go`):
+  `tensorrt`, `cuda` (NVIDIA), `coreml` (Apple Silicon), `directml` (Windows GPU),
+  `openvino` (Intel), and `cpu` (always appended last). Each EP only works if the ORT build
+  on the host actually ships that provider; a missing EP silently falls back to the next.
+  Only EPs the `yalue/onnxruntime_go` binding exposes can be wired (no ROCm binding yet).
 - Default server port is **11435** (avoids clashing with Ollama's 11434).

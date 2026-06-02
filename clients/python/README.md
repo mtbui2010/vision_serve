@@ -1,5 +1,8 @@
 # VisionServe Python Client
 
+> Prefer JavaScript/TypeScript? There's a sibling client with the same API in
+> [`clients/js/`](../js/).
+
 A lightweight Python **client** SDK for the [VisionServe](../../) HTTP server. It talks
 to the Go runtime over HTTP (default `http://localhost:11435`) — it is **not** the
 inference runtime and pulls no inference engine into Python. Think of it like Ollama's

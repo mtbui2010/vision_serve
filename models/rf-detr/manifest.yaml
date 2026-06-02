@@ -2,7 +2,7 @@ name: rf-detr
 task: detection
 license: Apache-2.0
 architecture: rf-detr               # chọn factory models.New("rf-detr", ...)
-model_file: rf-detr-base.onnx       # đường dẫn tương đối; weights KHÔNG commit (xem README.md)
+model_file: rf-detr-base-real.onnx  # real weights (103 MB, Apache-2.0); benchmark 2026-06-02
 
 input:
   width: 560

@@ -6,7 +6,7 @@
 #
 # ONE-TIME SETUP (on pypi.org and test.pypi.org → your account → Publishing):
 #   Add a "Trusted Publisher" for project `visionserve` with:
-#     Owner/Repository: <your-org>/<your-repo>
+#     Owner/Repository: mtbui2010/visionserve
 #     Workflow name:    pypi.yml
 #     Environment:      pypi        (for PyPI)   /   testpypi (for TestPyPI)
 #   Keep the version in clients/python/pyproject.toml in sync with the git tag

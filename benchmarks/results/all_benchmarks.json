@@ -1,0 +1,132 @@
+{
+  "hardware": {
+    "gpu": "GPU 0: NVIDIA RTX A6000 (UUID: GPU-eae6cdda-91ef-d5fd-309d-6ef857dd3abf)",
+    "cpu_cores": 48,
+    "ram_gb": 251
+  },
+  "baselines": {
+    "visionserve_go_http": {
+      "gpu": {
+        "rf-detr": {
+          "p50": 70.5,
+          "p95": 83.8,
+          "p99": 86.6,
+          "mean": 70.0,
+          "rps": 14.29,
+          "n": 30,
+          "cold_ms": 2501.9,
+          "rss_mb": 835,
+          "vram_mb": 804,
+          "srv_p50": 41.2
+        },
+        "grounding-dino": {
+          "p50": 339.5,
+          "p95": 414.3,
+          "p99": 419.1,
+          "mean": 341.7,
+          "rps": 2.93,
+          "n": 30,
+          "cold_ms": 8903.2,
+          "rss_mb": 1532,
+          "vram_mb": 4392,
+          "srv_p50": 325.5
+        }
+      },
+      "cpu": {
+        "rf-detr": {
+          "p50": 267.3,
+          "p95": 324.7,
+          "p99": 328.7,
+          "mean": 266.3,
+          "rps": 3.75,
+          "n": 30,
+          "cold_ms": 1562.2,
+          "rss_mb": 508,
+          "vram_mb": null,
+          "srv_p50": 249.9
+        },
+        "grounding-dino": {
+          "p50": 2548.6,
+          "p95": 2801.4,
+          "p99": 3122.4,
+          "mean": 2595.6,
+          "rps": 0.39,
+          "n": 30,
+          "cold_ms": 9804.3,
+          "rss_mb": 3473,
+          "vram_mb": null,
+          "srv_p50": 2531.0
+        }
+      }
+    },
+    "python_ort_direct": {
+      "gpu": {
+        "rf-detr": {
+          "error": "_sess.run(output_names, input_feed, run_options)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nonnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(double)) , expected: (tensor(float))\n"
+        },
+        "grounding-dino": {
+          "cold_ms": 6071.8,
+          "p50": 2539.2,
+          "p95": 2695.4,
+          "p99": 2739.5,
+          "mean": 2538.8,
+          "rps": 0.39,
+          "rss_mb": 3395,
+          "providers": [
+            "AzureExecutionProvider",
+            "CPUExecutionProvider"
+          ],
+          "n": 30
+        }
+      },
+      "cpu": {
+        "rf-detr": {
+          "error": "_sess.run(output_names, input_feed, run_options)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nonnxruntime.capi.onnxruntime_pybind11_state.InvalidArgument: [ONNXRuntimeError] : 2 : INVALID_ARGUMENT : Unexpected input data type. Actual: (tensor(double)) , expected: (tensor(float))\n"
+        },
+        "grounding-dino": {
+          "cold_ms": 6989.7,
+          "p50": 2544.0,
+          "p95": 2760.9,
+          "p99": 2816.8,
+          "mean": 2574.1,
+          "rps": 0.39,
+          "rss_mb": 3368,
+          "providers": [
+            "AzureExecutionProvider",
+            "CPUExecutionProvider"
+          ],
+          "n": 30
+        }
+      }
+    },
+    "python_fastapi_http": {
+      "gpu": {
+        "rf-detr": {
+          "error": "cold: HTTP Error 500: Internal Server Error"
+        },
+        "grounding-dino": {
+          "error": "no successful runs"
+        }
+      },
+      "cpu": {
+        "rf-detr": {
+          "error": "cold: HTTP Error 500: Internal Server Error"
+        },
+        "grounding-dino": {
+          "error": "no successful runs"
+        }
+      }
+    },
+    "cpp_ort_direct": {
+      "rf-detr": {
+        "cpu": {
+          "error": "exit -6: terminate called after throwing an instance of 'Ort::Exception'\n  what():  Invalid output name: logits\n"
+        },
+        "gpu": {
+          "error": "exit -6: terminate called after throwing an instance of 'Ort::Exception'\n  what():  /onnxruntime_src/onnxruntime/core/session/provider_bridge_ort.cc:1539 onnxruntime::Provider& onnxruntime::ProviderLibrary::Ge"
+        }
+      },
+      "note": "ceiling reference \u2014 ORT engine only, no preprocess/postprocess"
+    }
+  }
+}

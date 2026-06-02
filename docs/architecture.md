@@ -18,7 +18,7 @@ flowchart TD
     ModelIf --> RFDETR[RF-DETR<br/>detection]
     ModelIf --> SAM[MobileSAM<br/>segmentation]
     ModelIf --> GDINO[GroundingDINO<br/>open-vocab]
-    Pipeline --> ORT[ONNX Runtime<br/>TensorRT/CUDA/CPU]
+    Pipeline --> ORT[ONNX Runtime<br/>TensorRT/CUDA/CoreML/DirectML/OpenVINO/CPU]
 ```
 
 ## Predict flow
@@ -83,6 +83,29 @@ gateway that exposes those sessions by role (`Run(role, inputs)`, `InputNames(ro
 locks a mutex, so concurrent requests are safely serialized, and the idle reaper
 unloads *all* of a model's sessions together.
 
+## Hardware / execution providers
+
+All inference runs through **ONNX Runtime** (VisionServe never implements its own kernels),
+so "hardware support" = which ONNX Runtime **execution providers (EPs)** the engine can
+append. The manifest's `runtime.prefer` declares a per-model fallback chain; `engine`
+normalizes it and **always appends `cpu` last** so every model can run somewhere.
+
+| EP | Hardware | Notes |
+|----|----------|-------|
+| `tensorrt` | NVIDIA GPU (incl. Jetson) | highest perf; edge-first |
+| `cuda` | NVIDIA GPU | general CUDA |
+| `coreml` | Apple Silicon / macOS | Neural Engine / GPU |
+| `directml` | Windows GPU (AMD / Intel / NVIDIA) | DirectX 12 |
+| `openvino` | Intel CPU / iGPU / VPU | |
+| `cpu` | any CPU | always-present final fallback |
+
+Appending an EP whose libraries are missing on the host is **not fatal** — the engine
+silently falls back to the next EP in the chain (set `VISIONSERVE_TRACE=1` to see which EP
+actually loaded). The EP allowlist lives in `internal/engine/provider.go`; adding a new EP
+means extending that allowlist plus the `appendProviders` switch in `ort.go` — but only EPs
+the `yalue/onnxruntime_go` binding exposes can be wired (it currently does **not** expose
+ROCm, so AMD discrete GPUs are reachable only via DirectML on Windows).
+
 ## Unified Result
 
 Every task returns the same `api.Result`. There is **no per-model schema**:
@@ -102,7 +125,7 @@ Open-vocab detection populates `Detections` (text → boxes); Grounded-SAM popul
 | `server` | REST API, JSON | unified `Result` schema; parses `prompt`/`box`/`point` |
 | `registry` | scan + validate manifests | **rejects AGPL / non-permissive licenses**, checks ONNX files (incl. multi-file `files:`) |
 | `lifecycle` | load/unload, idle reaper, role→`engine.Session`, `Runner` | **every ONNX session goes through here** (simple and pipeline) |
-| `engine` | wraps ONNX Runtime | EP fallback TensorRT→CUDA→CPU; `Run` thread-safe |
+| `engine` | wraps ONNX Runtime | EP fallback chain (e.g. TensorRT→CUDA→CPU); supported EPs: tensorrt, cuda, coreml, directml, openvino, cpu; `Run` thread-safe |
 | `models/*` | per-architecture pre/postprocess (`Model`) or `Infer` orchestration (`PipelineModel`) | implement interface + `Register()` |
 | `imageproc` | letterbox/resize/nms/tensor/RLE/draw | pure Go, no cgo |
 | `extension` | community extension hooks | no-op by default |

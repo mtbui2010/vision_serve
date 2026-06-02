@@ -155,6 +155,12 @@ func providerNames(providers []Provider) string {
 			names = append(names, "tensorrt")
 		case ProviderCUDA:
 			names = append(names, "cuda")
+		case ProviderCoreML:
+			names = append(names, "coreml")
+		case ProviderDirectML:
+			names = append(names, "directml")
+		case ProviderOpenVINO:
+			names = append(names, "openvino")
 		case ProviderCPU:
 			names = append(names, "cpu")
 		}
@@ -177,6 +183,15 @@ func appendProviders(opts *ort.SessionOptions, providers []Provider) {
 				_ = opts.AppendExecutionProviderCUDA(cuda)
 				cuda.Destroy()
 			}
+		case ProviderCoreML:
+			// Apple Silicon / macOS. flags=0 is the default behavior.
+			_ = opts.AppendExecutionProviderCoreML(0)
+		case ProviderDirectML:
+			// Windows GPU (AMD / Intel / NVIDIA). deviceID=0 = first adapter.
+			_ = opts.AppendExecutionProviderDirectML(0)
+		case ProviderOpenVINO:
+			// Intel CPU / iGPU / VPU. Empty options = let OpenVINO auto-select the device.
+			_ = opts.AppendExecutionProviderOpenVINO(map[string]string{})
 		case ProviderCPU:
 			// The CPU EP is ORT's default — no need to append.
 		}

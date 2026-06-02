@@ -11,6 +11,9 @@ type Provider string
 const (
 	ProviderTensorRT Provider = "tensorrt"
 	ProviderCUDA     Provider = "cuda"
+	ProviderCoreML   Provider = "coreml"   // Apple Silicon / macOS
+	ProviderDirectML Provider = "directml" // Windows GPU (AMD / Intel / NVIDIA)
+	ProviderOpenVINO Provider = "openvino" // Intel CPU / iGPU / VPU
 	ProviderCPU      Provider = "cpu"
 )
 
@@ -18,6 +21,9 @@ const (
 var validProviders = map[Provider]bool{
 	ProviderTensorRT: true,
 	ProviderCUDA:     true,
+	ProviderCoreML:   true,
+	ProviderDirectML: true,
+	ProviderOpenVINO: true,
 	ProviderCPU:      true,
 }
 
@@ -33,7 +39,7 @@ func ResolveProviders(prefer []string) ([]Provider, error) {
 			continue
 		}
 		if !validProviders[pv] {
-			return nil, fmt.Errorf("engine: invalid execution provider %q (valid: tensorrt, cuda, cpu)", p)
+			return nil, fmt.Errorf("engine: invalid execution provider %q (valid: tensorrt, cuda, coreml, directml, openvino, cpu)", p)
 		}
 		if seen[pv] {
 			continue

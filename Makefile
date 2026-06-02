@@ -30,7 +30,7 @@ PYTHON ?= python3
 # skip node_modules (avoids other-arch builds), prefer a full ORT build (onnxruntime/capi).
 ORT_DYLIB_PATH ?= $(shell find $(HOME) /usr/local/lib /usr/lib -name 'libonnxruntime.so*' 2>/dev/null | grep -v node_modules | grep -E 'onnxruntime/capi.*\.so\.[0-9]' | head -1)
 
-.PHONY: all build install run serve list ps rm pull demo test fmt vet tidy lint clean \
+.PHONY: all build install run serve list ps rm pull demo terminate test fmt vet tidy lint clean \
         build-linux-arm64 docker docker-edge pypi help
 
 all: build ## Default target: build
@@ -71,6 +71,16 @@ rm: build ## Unload a model from a running server: make rm MODEL=rf-detr [ADDR=:
 
 pull: build ## Download a model from HuggingFace: make pull MODEL=rf-detr [MODELS=./models]
 	$(BIN_DIR)/$(BINARY) pull $(MODEL) --models $(MODELS)
+
+terminate: ## Kill any process listening on :11435 (make terminate [ADDR=:11435])
+	@port=$$(echo "$(ADDR)" | sed 's/.*://'); \
+	pids=$$(lsof -ti tcp:$$port 2>/dev/null || true); \
+	if [ -z "$$pids" ]; then \
+		echo "terminate: no process listening on :$$port" >&2; \
+	else \
+		echo "terminate: killing PID(s) $$pids on :$$port" >&2; \
+		kill $$pids; \
+	fi
 
 demo: build ## Demo on real COCO images (boxes/masks -> demo/out/) [GPU=0]
 	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; fi; bash scripts/demo.sh'

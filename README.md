@@ -16,8 +16,8 @@ commercial, edge, and closed deployments.
 
 > **Status:** detection (RF-DETR), segmentation (MobileSAM), open-vocabulary detection
 > (GroundingDINO), and **Grounded-SAM** (text → boxes → masks) all run end-to-end,
-> GPU-accelerated. A Python client, a Docker server image, and Ollama-style `pull`
-> from HuggingFace are included.
+> GPU-accelerated. **Python** and **JavaScript/TypeScript** clients, a Docker server
+> image, and Ollama-style `pull` from HuggingFace are included.
 
 ---
 
@@ -33,7 +33,7 @@ flowchart TD
     ModelIf --> RFDETR[RF-DETR<br/>detection]
     ModelIf --> SAM[MobileSAM<br/>segmentation]
     ModelIf --> GDINO[GroundingDINO<br/>open-vocab]
-    Pipeline --> ORT[ONNX Runtime<br/>TensorRT/CUDA/CPU]
+    Pipeline --> ORT[ONNX Runtime<br/>TensorRT/CUDA/CoreML/DirectML/OpenVINO/CPU]
 ```
 
 ### Predict flow (detailed)
@@ -217,6 +217,38 @@ res = client.predict("grounded-sam", "image.jpg", prompt="cat. remote.")
 print([d.cls for d in res.detections], "→", len(res.masks), "masks")
 ```
 
+### 6b. Infer from JavaScript / TypeScript
+
+A sibling client lives in [`clients/js/`](clients/js/) with the same API as the Python
+one. It has **zero runtime dependencies** (uses built-in `fetch`/`FormData`/`Blob`) and
+runs on **Node >= 18** and in the browser. Image input accepts a file path (Node), raw
+bytes (`Uint8Array`/`ArrayBuffer`), or a `Blob`.
+
+```bash
+npm install visionserve               # once published to npm
+# or from source:
+cd clients/js && npm install && npm run build
+make serve                            # start the server (another terminal)
+```
+
+```ts
+import { Client } from "visionserve";
+
+const client = new Client("http://localhost:11435");
+
+// Detection
+const det = await client.predict("rf-detr", "image.jpg");
+for (const d of det.detections) console.log(d.cls, d.conf.toFixed(3), d.bbox);
+
+// Segmentation — box prompt; decode the column-major RLE mask
+const seg = await client.predict("mobile-sam", "image.jpg", { box: [34, 58, 120, 240] });
+const mask = seg.masks[0]?.toMask(640, 480); // row-major Uint8Array, 1 = inside mask
+
+// Open-vocab segmentation — text prompt → boxes + masks
+const gs = await client.predict("grounded-sam", "image.jpg", { prompt: "cat. remote." });
+console.log(gs.detections.map((d) => d.cls), "→", gs.masks.length, "masks");
+```
+
 ### 7. Run with Docker (self-contained, no host setup)
 
 A multi-stage image bundles the Go binary **and** ONNX Runtime (~141 MB).
@@ -278,6 +310,109 @@ Segmentation results come back under `masks` (each with a column-major RLE-encod
 
 **All models are permissive-licensed (Apache-2.0).** This is a deliberate, load-bearing
 constraint — not a limitation we work around. See [Licensing discipline](#licensing-discipline).
+
+---
+
+## Hardware support
+
+All inference goes through **ONNX Runtime**, so the same `.onnx` file runs across CPU and
+multiple accelerators. The manifest's `runtime.prefer` sets a per-model **execution-provider
+(EP) fallback chain**, and the engine **always appends `cpu` last** so a model can always
+run. If an EP's libraries aren't present, the engine silently falls back to the next one
+(set `VISIONSERVE_TRACE=1` to see which EP actually loaded).
+
+| EP (`runtime.prefer`) | Hardware | Notes |
+|-----------------------|----------|-------|
+| `tensorrt` | NVIDIA GPU (incl. **Jetson**) | highest perf; edge-first |
+| `cuda` | NVIDIA GPU | general CUDA |
+| `coreml` | **Apple Silicon** / macOS | Neural Engine / GPU |
+| `directml` | **Windows** GPU (AMD / Intel / NVIDIA) | DirectX 12 |
+| `openvino` | **Intel** CPU / iGPU / VPU | |
+| `cpu` | any CPU | always-present final fallback |
+
+> Example fallback chains: `[tensorrt, cuda, cpu]` (NVIDIA/Jetson), `[coreml, cpu]` (Mac),
+> `[directml, cpu]` (Windows), `[openvino, cpu]` (Intel). The EP allowlist is enforced by
+> the registry — see [docs/manifest-spec.md](docs/manifest-spec.md). Wiring a new EP is
+> bounded by what the `yalue/onnxruntime_go` binding exposes (no ROCm yet, so AMD discrete
+> GPUs are reached via DirectML on Windows).
+
+---
+
+## Performance
+
+Measured on a single **NVIDIA RTX A6000 (48 GB VRAM)**, 48-core CPU, 251 GB RAM.
+Latency = median of 30 warm requests via the HTTP server (model already loaded).
+Cold-start = wall-clock time from server launch to first response (includes model load +
+ONNX session creation + first inference). Scripts live in [`benchmarks/`](benchmarks/).
+
+### Latency — VisionServe Go vs Python baselines
+
+| Model | Baseline | Device | p50 ms | p95 ms | RPS | Cold start | RSS MB | VRAM MB |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| **RF-DETR** | VisionServe (Go HTTP) | GPU | **70.5** | — | **14.3** | 2 502 | 835 | 804 |
+| RF-DETR | VisionServe (Go HTTP) | CPU | 267 | — | 3.8 | 1 562 | 508 | — |
+| RF-DETR | Python raw ORT (no HTTP) | CPU¹ | 217 | 260 | 4.5 | — | — | — |
+| RF-DETR | Python FastAPI + ORT | CPU¹ | 230 | — | ~4.3 | — | — | — |
+| **GroundingDINO** | VisionServe (Go HTTP) | GPU | **340** | — | **2.9** | 8 903 | 1 532 | 4 392 |
+| GroundingDINO | VisionServe (Go HTTP) | CPU | 2 549 | — | 0.39 | 9 804 | 3 473 | — |
+| GroundingDINO | Python raw ORT (no HTTP) | CPU¹ | 2 478 | — | 0.40 | — | — | — |
+| **Grounded-SAM** | VisionServe (Go HTTP) | GPU | **450** | 498 | **2.2** | ~16 000² | — | ~5 000 |
+
+> ¹ The `onnxruntime` Python package is **CPU-only** (no CUDA EP) — `CUDAExecutionProvider`
+> is not available without installing `onnxruntime-gpu`. This is the default `pip install
+> onnxruntime` experience, which is what most Python users have.
+>
+> ² Grounded-SAM cold-start includes loading GroundingDINO (719 MB) + two SAM sessions.
+
+### Comparison with YOLO
+
+```
+YOLOv8n  GPU (PyTorch):       ~18 ms   CNN, 6 MB, AGPL-3.0 ✗
+RF-DETR-nano  GPU (VisionServe): ~23 ms   transformer, 108 MB, Apache-2.0 ✓
+RF-DETR-base  GPU (VisionServe): ~41 ms   transformer, 103 MB, Apache-2.0 ✓
+YOLOv8m  GPU (PyTorch):       ~45 ms   CNN, 52 MB, AGPL-3.0 ✗
+GroundingDINO GPU (VisionServe): ~325 ms  open-vocab (text query), 719 MB, Apache-2.0 ✓
+```
+
+RF-DETR-nano at 23 ms is **competitive with YOLOv8n**. The gap for RF-DETR-base comes from:
+1. **DETR transformer architecture** — global cross-attention on 300 queries is more expensive
+   than YOLO's local grid predictions, but NMS-free and more accurate on dense/occluded scenes.
+2. **CUDA EP vs TensorRT** — we're on CUDA EP (ONNX Runtime). TensorRT would add another
+   2–4× speedup; it requires `libnvinfer.so.10` which isn't installed on this host.
+3. **Go preprocess + HTTP** — adds ~29 ms, not the bottleneck.
+
+**YOLO (Ultralytics) is forbidden** in VisionServe by design — it is AGPL-3.0 copyleft,
+which would virally relicense the entire project and every downstream user. RF-DETR and
+GroundingDINO are both Apache-2.0 and can be used freely in commercial and closed products.
+
+To get RF-DETR-nano pull it from the catalog:
+```bash
+make pull MODEL=rf-detr-nano        # ~108 MB, 384×384 input, ~23 ms GPU
+```
+
+### Key takeaways
+
+- **Use `rf-detr-nano`** if latency matters — 23 ms GPU, near YOLO-speed, Apache-2.0.
+- **GPU is essential for GroundingDINO / Grounded-SAM** — 7.5× faster (340 ms vs 2 549 ms).
+  VisionServe auto-selects GPU via `scripts/gpu-env.sh` (default `GPU=1`).
+- **Go HTTP overhead is only 14–29 ms** — the bottleneck is always ORT inference, not the server.
+- **Python `onnxruntime` is CPU-only by default** — VisionServe properly wires the CUDA EP,
+  giving 3–7× speedup over a typical Python onnxruntime setup.
+- **Cold-start** (~2–16 s depending on model size) is the main cost for one-shot `run` —
+  use `make serve` for production; once warm, latency drops 5–20×.
+- **TensorRT EP** (needs `libnvinfer.so.10`) would give another 2–4× speedup.
+  Planned but not yet wired.
+
+### Reproducing
+
+```bash
+# run all benchmarks (writes benchmarks/results/all_benchmarks.json)
+python3 benchmarks/bench.py
+
+# GPU benchmark only
+source scripts/gpu-env.sh
+python3 benchmarks/bench.py
+```
 
 ---
 
