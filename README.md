@@ -188,9 +188,14 @@ A small client library lives in [`clients/python/`](clients/python/). It accepts
 path, a `PIL.Image`, a `numpy.ndarray`, or raw `bytes`, and parses the unified `Result`.
 
 ```bash
-pip install -e clients/python        # optional extras: 'clients/python[images]'
-make serve                           # start the server (another terminal)
+pip install visionserve               # once published to PyPI
+# or from source:
+pip install -e clients/python         # optional extras: 'clients/python[images]'
+make serve                            # start the server (another terminal)
 ```
+
+> Maintainers: `make pypi` builds + validates the package; pushing a `v*` tag publishes
+> it to PyPI via GitHub Actions Trusted Publishing (see `.github/workflows/pypi.yml`).
 
 ```python
 from visionserve import Client

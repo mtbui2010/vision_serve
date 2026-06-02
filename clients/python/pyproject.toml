@@ -10,7 +10,21 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }
 authors = [{ name = "VisionServe" }]
-keywords = ["visionserve", "computer-vision", "onnx", "rf-detr", "sam", "client"]
+keywords = ["visionserve", "computer-vision", "onnx", "rf-detr", "sam", "grounding-dino", "client"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Image Recognition",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 
 # The client is dependency-light: it uses only the Python standard library
 # (urllib, json, base64) for transport, so it works even in minimal environments.
@@ -24,6 +38,8 @@ dev = ["pillow>=8.0", "numpy>=1.20", "pytest>=7.0"]
 
 [project.urls]
 Homepage = "https://github.com/visionserve/visionserve"
+Repository = "https://github.com/visionserve/visionserve"
+Issues = "https://github.com/visionserve/visionserve/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]

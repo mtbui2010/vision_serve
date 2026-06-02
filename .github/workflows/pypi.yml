@@ -1,0 +1,70 @@
+# Publish the VisionServe Python client (clients/python) to PyPI / TestPyPI using
+# PyPI Trusted Publishing (OIDC) — no API tokens stored in the repo.
+#
+#   - Push a tag  v*           -> publish to PyPI         (real release)
+#   - Run manually (dispatch)  -> publish to TestPyPI     (dry run / staging)
+#
+# ONE-TIME SETUP (on pypi.org and test.pypi.org → your account → Publishing):
+#   Add a "Trusted Publisher" for project `visionserve` with:
+#     Owner/Repository: <your-org>/<your-repo>
+#     Workflow name:    pypi.yml
+#     Environment:      pypi        (for PyPI)   /   testpypi (for TestPyPI)
+#   Keep the version in clients/python/pyproject.toml in sync with the git tag
+#   (PyPI rejects re-uploading an existing version).
+name: Publish Python client
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist + wheel
+        working-directory: clients/python
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: clients/python/dist/
+
+  publish-testpypi:
+    # Manual runs go to TestPyPI (safe staging).
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write # required for Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    # Tag pushes (v*) go to the real PyPI.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write # required for Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1

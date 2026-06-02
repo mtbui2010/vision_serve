@@ -2,7 +2,7 @@
 /bin/
 visionserve
 
-# Weights ONNX — KHÔNG commit (dung lượng lớn). Tải theo README mỗi thư mục model.
+# ONNX weights — NOT committed (large). Download per each model directory's README.
 *.onnx
 *.pt
 *.pth
@@ -16,6 +16,16 @@ coverage.*
 
 # Demo artifacts (ảnh COCO tải về + ảnh kết quả có bbox)
 /demo/
+
+# Python client build artifacts
+clients/python/dist/
+clients/python/build/
+*.egg-info/
+__pycache__/
+*.pyc
+
+# Docker (.dockerignore copied to repo root by `make docker`)
+/.dockerignore
 
 # OS / editor
 .DS_Store

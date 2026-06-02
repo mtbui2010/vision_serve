@@ -23,12 +23,15 @@ MODELS ?= ./models
 # ORT lib is found. Override with `make run GPU=0` to force CPU.
 GPU    ?= 1
 
+# Python interpreter used to build the client package for PyPI.
+PYTHON ?= python3
+
 # The runtime needs libonnxruntime.so. If the user has not exported ORT_DYLIB_PATH, auto-detect:
 # skip node_modules (avoids other-arch builds), prefer a full ORT build (onnxruntime/capi).
 ORT_DYLIB_PATH ?= $(shell find $(HOME) /usr/local/lib /usr/lib -name 'libonnxruntime.so*' 2>/dev/null | grep -v node_modules | grep -E 'onnxruntime/capi.*\.so\.[0-9]' | head -1)
 
 .PHONY: all build install run serve list ps rm pull demo test fmt vet tidy lint clean \
-        build-linux-arm64 docker docker-edge help
+        build-linux-arm64 docker docker-edge pypi help
 
 all: build ## Default target: build
 
@@ -103,8 +106,17 @@ docker-edge: ## Build the edge image (arm64/Jetson)
 	cp deploy/.dockerignore .dockerignore
 	docker buildx build --platform linux/arm64 -f deploy/Dockerfile.edge -t visionserve:$(VERSION)-edge .
 
+## --- Python client (PyPI) ---
+
+pypi: ## Build + validate the Python client package (clients/python -> dist/). Publish via CI.
+	$(PYTHON) -m pip install --quiet --upgrade build twine
+	cd clients/python && rm -rf dist build *.egg-info && $(PYTHON) -m build && $(PYTHON) -m twine check dist/*
+	@echo "→ built clients/python/dist/"
+	@echo "  Publish to PyPI:      git tag vX.Y.Z && git push origin vX.Y.Z   (CI Trusted Publishing)"
+	@echo "  Publish to TestPyPI:  run the 'Publish Python client' workflow manually (workflow_dispatch)"
+
 clean: ## Remove build artifacts
-	rm -rf $(BIN_DIR)
+	rm -rf $(BIN_DIR) clients/python/dist clients/python/build
 
 help: ## Print the list of targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
