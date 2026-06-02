@@ -1,0 +1,28 @@
+name: rf-detr
+task: detection
+license: Apache-2.0
+architecture: rf-detr               # chọn factory models.New("rf-detr", ...)
+model_file: rf-detr-base.onnx       # đường dẫn tương đối; weights KHÔNG commit (xem README.md)
+
+input:
+  width: 560
+  height: 560
+  layout: NCHW
+  letterbox: true
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std:  [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr                        # RF-DETR là NMS-free, decode khác YOLO
+  box_format: cxcywh                # cxcywh chuẩn hóa [0,1] theo ảnh đầu vào
+  conf_threshold: 0.5
+  max_detections: 300
+
+labels: coco91.txt                  # 91 dòng (index 0 = N/A): RF-DETR xuất pred_logits[1,Q,91],
+                                    # KHÔNG phải 80-class liền mạch — xem README "Xác minh".
+                                    # (coco.txt 80-dòng giữ lại để tham khảo, KHÔNG dùng cho model này.)
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]     # fallback chain — quan trọng cho edge↔server
+  idle_unload_seconds: 300          # tự giải phóng sau 5 phút nhàn rỗi

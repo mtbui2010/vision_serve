@@ -1,0 +1,27 @@
+# MobileSAM — segmentation, Apache-2.0. Prompted, two-session model (PipelineModel).
+# Needs a PROMPT (box/point): `visionserve run mobile-sam img.jpg --box x,y,w,h`.
+# Weights are NOT committed — see README.md to download the ONNX files.
+name: mobile-sam
+task: segmentation
+license: Apache-2.0
+architecture: mobile-sam
+
+# Two ONNX graphs (roles). The encoder bakes SAM normalize + pad-to-1024 into the graph
+# and takes a raw HWC 0..255 image; Go only resizes the long side to 1024.
+files:
+  encoder: mobile_sam_encoder.onnx
+  decoder: mobile_sam_decoder_single.onnx
+
+input:
+  # Reference only — the encoder's resize/normalize/pad happen in the graph + in Go.
+  width: 1024
+  height: 1024
+  layout: NHWC
+  letterbox: false
+
+postprocess:
+  type: sam        # mask threshold = logit > 0; mask encoded as column-major RLE
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

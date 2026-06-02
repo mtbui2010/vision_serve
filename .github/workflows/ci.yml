@@ -1,0 +1,62 @@
+# CI — build, vet, gofmt, test + cross-build edge/arm64.
+# LƯU Ý: binding yalue/onnxruntime_go nạp libonnxruntime.so lúc RUNTIME (purego/dlopen),
+# nên build/vet/test KHÔNG cần ONNX Runtime. Unit test không chạy inference thật.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    name: Build · Vet · Fmt · Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: gofmt (chặn file chưa format)
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "Các file chưa gofmt:"; echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./... -count=1
+
+  cross-build-edge:
+    name: Cross-build edge (linux/arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      # Binding yalue/onnxruntime_go dùng cgo (ORT C API). Cross-build arm64 PHẢI bật
+      # CGO_ENABLED=1 + cross-compiler aarch64; nếu CGO=0 (mặc định khi cross) sẽ báo
+      # "build constraints exclude all Go files".
+      - name: Cài cross toolchain aarch64
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Build arm64 (Jetson target)
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: '1'
+          CC: aarch64-linux-gnu-gcc
+        run: go build ./...

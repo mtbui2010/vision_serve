@@ -1,0 +1,24 @@
+# docker-compose.yml — chạy VisionServe (GPU) cục bộ.
+# Yêu cầu nvidia-container-toolkit để cấp GPU cho container.
+services:
+  visionserve:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: visionserve:latest
+    ports:
+      - "11435:11435"
+    volumes:
+      # mount thư mục model (weights ONNX + manifest) từ host
+      - ../models:/models:ro
+    environment:
+      - VISIONSERVE_MODELS=/models
+      - ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped

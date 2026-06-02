@@ -1,0 +1,22 @@
+# Binary build
+/bin/
+visionserve
+
+# Weights ONNX — KHÔNG commit (dung lượng lớn). Tải theo README mỗi thư mục model.
+*.onnx
+*.pt
+*.pth
+*.engine
+*.trt
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Demo artifacts (ảnh COCO tải về + ảnh kết quả có bbox)
+/demo/
+
+# OS / editor
+.DS_Store
+*.swp
