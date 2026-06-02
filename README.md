@@ -7,16 +7,17 @@ behind one unified interface: lazy model loading, automatic unload when idle, an
 multiple models running concurrently — all through a REST API or a single CLI command.
 
 ```bash
-visionserve run rf-detr image.jpg     # → detection JSON, instantly
+make run MODEL=rf-detr IMAGE=image.jpg     # → detection JSON, instantly
 ```
 
 VisionServe is **fully free and open-source**, built for the community under
 **Apache-2.0**. Every feature here is in scope and free to use, including for
 commercial, edge, and closed deployments.
 
-> **Status:** built incrementally (see `PROMPT_CLAUDE_CODE.md`). The project skeleton
-> and interfaces are in place; RF-DETR detection runs end-to-end, MobileSAM
-> segmentation is wired as a prompted two-session pipeline.
+> **Status:** detection (RF-DETR), segmentation (MobileSAM), open-vocabulary detection
+> (GroundingDINO), and **Grounded-SAM** (text → boxes → masks) all run end-to-end,
+> GPU-accelerated. A Python client, a Docker server image, and Ollama-style `pull`
+> from HuggingFace are included.
 
 ---
 
@@ -66,77 +67,85 @@ sequenceDiagram
 
 ## Quickstart
 
-> **Run with Docker (no host setup):** a self-contained image bundles the binary and ONNX
-> Runtime. `docker build -f deploy/Dockerfile -t visionserve .` then
-> `docker run -p 11435:11435 -v "$PWD/models:/models" visionserve`. GPU, arm64/Jetson, and
-> published GHCR images are covered in [`deploy/README.md`](deploy/README.md).
+Everything is driven through `make` (which builds the binary, wires ONNX Runtime, and
+uses the **GPU by default** — add `GPU=0` to force CPU). Run `make help` to list targets.
 
 ### 1. Build
 
 Requires **Go >= 1.22**.
 
 ```bash
-go build -o bin/visionserve ./cmd/visionserve
+make build        # → bin/visionserve
 ```
 
-### 2. ONNX Runtime (required at runtime)
+### 2. ONNX Runtime + GPU
 
 The [`yalue/onnxruntime_go`](https://github.com/yalue/onnxruntime_go) binding loads
-`libonnxruntime.so` via an environment variable — point it at the shared library on
-your machine:
+`libonnxruntime.so` at runtime. The `make` targets handle this for you:
 
-```bash
-export ORT_DYLIB_PATH=/path/to/libonnxruntime.so
-```
+- **CPU:** `make` auto-detects a CPU ONNX Runtime library on your machine.
+- **GPU (default):** `make run/serve/demo` source [`scripts/gpu-env.sh`](scripts/gpu-env.sh),
+  which finds a CUDA-enabled ORT lib + the matching cuDNN/CUDA libraries, and falls back
+  to CPU if none is found. Force CPU with `GPU=0`. Set `VISIONSERVE_TRACE=1` to see which
+  execution provider actually loaded (TensorRT → CUDA → CPU).
 
-On edge devices (Jetson) use an ORT build with the **TensorRT/CUDA EP** so the
-`tensorrt → cuda → cpu` fallback chain declared in the manifest is usable.
+On edge devices (Jetson) use an ORT build with the **TensorRT/CUDA EP**.
 
-> **Weights:** `.onnx` files are NOT committed (see `.gitignore`). To exercise the
-> pipeline quickly, generate a ~2KB **dummy**: `python models/rf-detr/gen_dummy_onnx.py`.
-> For the REAL RF-DETR weights (108MB) see [models/rf-detr/README.md](models/rf-detr/README.md).
+> **Weights:** `.onnx` files are NOT committed (see `.gitignore`). Get them with:
+> ```bash
+> make pull MODEL=rf-detr        # download real weights from HuggingFace (Ollama-style)
+> ```
+> or generate a ~2KB **dummy** to just exercise the pipeline:
+> `python models/rf-detr/gen_dummy_onnx.py`. See [models/rf-detr/README.md](models/rf-detr/README.md).
 
 ### 3. Run a single command (in-process, no server)
 
 ```bash
-bin/visionserve run rf-detr image.jpg              # → print detection JSON to stdout
-bin/visionserve run rf-detr image.jpg --out r.png  # + draw bboxes onto the image, save r.png
+# Detection
+make run MODEL=rf-detr IMAGE=image.jpg                        # → detection JSON
+make run MODEL=rf-detr IMAGE=image.jpg OUT=out.png           # + draw bboxes, save out.png
+
+# Segmentation — MobileSAM needs a box or point prompt (original-image coords)
+make run MODEL=mobile-sam IMAGE=img.jpg BOX=34,58,120,240 OUT=mask.png
+make run MODEL=mobile-sam IMAGE=img.jpg POINT=95,180,1 OUT=mask.png   # label 1=fg 0=bg
+
+# Open-vocabulary detection — text prompt (lowercased, dot-separated)
+make run MODEL=grounding-dino IMAGE=img.jpg PROMPT="cat. remote." OUT=boxes.png
+
+# Grounded-SAM — text → boxes → masks
+make run MODEL=grounded-sam IMAGE=img.jpg PROMPT="cat. remote." OUT=masks.png
 ```
 
-Segmentation needs a **prompt** (a box or a point). MobileSAM takes a box `x,y,w,h`
-or a point `x,y[,label]` in original-image coordinates:
+**`make run` variables:**
 
-```bash
-# segment the object inside a box, save the mask overlay
-bin/visionserve run mobile-sam img.jpg --box 34,58,120,240 --out mask.png
+| Variable | For | Example |
+|----------|-----|---------|
+| `MODEL` | which model | `rf-detr`, `mobile-sam`, `grounding-dino`, `grounded-sam` |
+| `IMAGE` | input image path | `IMAGE=cats.jpg` |
+| `OUT` | save image with drawn bboxes/masks | `OUT=out.png` |
+| `PROMPT` | open-vocab text | `PROMPT="cat. remote."` |
+| `BOX` | SAM box prompt | `BOX=34,58,120,240` (multiple via `;`) |
+| `POINT` | SAM point prompt | `POINT=95,180,1` (label 1=fg 0=bg) |
+| `GPU` | `1` (default) or `0` to force CPU | `GPU=0` |
+| `MODELS` | registry directory | `MODELS=./models` |
 
-# or a foreground point (label 1 = foreground, 0 = background)
-bin/visionserve run mobile-sam img.jpg --point 95,180,1 --out mask.png
-```
-
-Open-vocabulary detection takes a `--prompt` text query (lowercased, dot-separated):
-
-```bash
-bin/visionserve run grounding-dino img.jpg --prompt "cat. remote."
-```
-
-**Run flags** (see `internal/cli/run.go`):
-
-| Flag | For | Format |
-|------|-----|--------|
-| `--out FILE` | any | save image with drawn bboxes/masks (`.png`/`.jpg`) |
-| `--prompt TEXT` | open-vocab (GroundingDINO / Grounded-SAM) | `"cat. remote."` |
-| `--box "x,y,w,h"` | SAM box prompt | multiple separated by `;` |
-| `--point "x,y[,label]"` | SAM point prompt | label 1=fg 0=bg; multiple separated by `;` |
-
-> **Demo:** `make demo` downloads a few real COCO images, runs RF-DETR (preferring the
-> real weights if present), and writes images with bboxes+labels+confidence into
-> `demo/out/`. Boxes are drawn in pure Go (no cgo).
+> **Demo:** `make demo` downloads a few real COCO images, runs detection, and writes
+> annotated images into `demo/out/` (boxes/masks drawn in pure Go, no cgo).
 
 ### 4. Run the server
 
 ```bash
-bin/visionserve serve                   # listen on :11435 (override with --addr)
+make serve                       # listen on :11435 (GPU by default; GPU=0 for CPU)
+make serve ADDR=:8080            # custom address
+```
+
+Manage models in a running server:
+
+```bash
+make pull MODEL=rf-detr          # download a model from HuggingFace into ./models
+make ps                          # which models are loaded
+make rm MODEL=rf-detr            # unload a model (free VRAM)
+make list                        # list local + pullable models
 ```
 
 ### 5. Call the API with curl
@@ -153,23 +162,17 @@ curl -s http://localhost:11435/api/models
 curl -s -F model=rf-detr -F image=@image.jpg \
   http://localhost:11435/api/predict
 
-# Predict — JSON with base64 image
-curl -s -H 'Content-Type: application/json' \
-  -d '{"model":"rf-detr","image_base64":"<base64>"}' \
-  http://localhost:11435/api/predict
-```
-
-Prompted models accept the same `prompt` / `box` / `point` fields on `/api/predict`
-(both multipart form fields and JSON keys):
-
-```bash
-# MobileSAM with a box prompt (JSON)
-curl -s -H 'Content-Type: application/json' \
-  -d '{"model":"mobile-sam","image_base64":"<base64>","box":"34,58,120,240"}' \
+# MobileSAM with a box prompt
+curl -s -F model=mobile-sam -F image=@image.jpg -F box=34,58,120,240 \
   http://localhost:11435/api/predict
 
-# GroundingDINO with a text prompt (multipart)
-curl -s -F model=grounding-dino -F image=@image.jpg -F prompt="cat. remote." \
+# Grounded-SAM with a text prompt (text → boxes → masks)
+curl -s -F model=grounded-sam -F image=@image.jpg -F prompt="cat. remote." \
+  http://localhost:11435/api/predict
+
+# Predict — JSON with base64 image + prompt fields
+curl -s -H 'Content-Type: application/json' \
+  -d '{"model":"grounding-dino","image_base64":"<base64>","prompt":"cat. remote."}' \
   http://localhost:11435/api/predict
 ```
 
@@ -179,21 +182,53 @@ curl -s -F model=grounding-dino -F image=@image.jpg -F prompt="cat. remote." \
 | `box` | SAM box | `"x,y,w,h"` (multiple separated by `;`) |
 | `point` | SAM point | `"x,y[,label]"` (multiple separated by `;`) |
 
-### 6. Manage model lifecycle
+### 6. Infer from Python
+
+A small client library lives in [`clients/python/`](clients/python/). It accepts a file
+path, a `PIL.Image`, a `numpy.ndarray`, or raw `bytes`, and parses the unified `Result`.
 
 ```bash
-# Preload into memory (warm-up)
-curl -s -H 'Content-Type: application/json' \
-  -d '{"model":"rf-detr"}' http://localhost:11435/api/load
-
-# See which models are loaded (CLI talks to a running server)
-bin/visionserve ps
-
-# Unload a model from memory (free VRAM)
-bin/visionserve rm rf-detr
-# equivalent to: curl -s -H 'Content-Type: application/json' \
-#   -d '{"model":"rf-detr"}' http://localhost:11435/api/unload
+pip install -e clients/python        # optional extras: 'clients/python[images]'
+make serve                           # start the server (another terminal)
 ```
+
+```python
+from visionserve import Client
+
+client = Client("http://localhost:11435")
+
+# Detection
+res = client.predict("rf-detr", "image.jpg")
+for d in res.detections:
+    print(d.cls, round(d.conf, 3), d.bbox)   # bbox = [x, y, w, h] in original pixels
+
+# Segmentation — pass a box; works with a numpy ndarray input too
+import numpy as np
+res = client.predict("mobile-sam", "image.jpg", box=[34, 58, 120, 240])
+mask = res.masks[0].to_ndarray(width=640, height=480)   # bool (H, W) numpy array
+
+# Open-vocab segmentation — text prompt → boxes + masks
+res = client.predict("grounded-sam", "image.jpg", prompt="cat. remote.")
+print([d.cls for d in res.detections], "→", len(res.masks), "masks")
+```
+
+### 7. Run with Docker (self-contained, no host setup)
+
+A multi-stage image bundles the Go binary **and** ONNX Runtime (~141 MB).
+
+```bash
+make docker                          # build visionserve:latest (CPU)
+# or a GPU image (CUDA/TensorRT EP): make docker ORT_VARIANT=gpu
+
+# Run the server; mount your models directory as the /models volume
+docker run --rm -p 11435:11435 -v "$PWD/models:/models" visionserve:latest
+
+# GPU (needs nvidia-container-toolkit):
+# docker run --rm --gpus all -p 11435:11435 -v "$PWD/models:/models" visionserve:latest serve
+```
+
+Then hit it with the same curl / Python calls above. arm64/Jetson images, GHCR
+publishing, and compose are covered in [`deploy/README.md`](deploy/README.md).
 
 ### Sample JSON output (detection)
 

@@ -47,7 +47,7 @@ RUN CGO_ENABLED=1 go build \
 # Stage 2a — fetch ONNX Runtime (CPU)
 ############################
 FROM debian:bookworm-slim AS ort-cpu
-ARG ORT_VERSION
+ARG ORT_VERSION=1.20.1
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
@@ -64,7 +64,7 @@ RUN set -eux; \
 # Stage 2b — fetch ONNX Runtime (GPU)
 ############################
 FROM debian:bookworm-slim AS ort-gpu
-ARG ORT_VERSION
+ARG ORT_VERSION=1.20.1
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
@@ -98,14 +98,16 @@ RUN apt-get update && \
 ############################
 # Final — pick runtime + ORT by variant
 ############################
+# ARG expands in FROM but NOT in `COPY --from=<stage>` (BuildKit limitation). So we
+# alias the chosen ORT download stage via a FROM, then COPY from that literal alias.
+# BuildKit only builds the stages actually referenced, so the unused variant never runs.
+FROM ort-${ORT_VARIANT} AS ort-selected
+
 # `runtime-${ORT_VARIANT}` resolves to runtime-cpu or runtime-gpu.
 FROM runtime-${ORT_VARIANT} AS final
-ARG ORT_VARIANT
 
-# Bundle the matching ONNX Runtime shared libraries. The stage name is interpolated
-# from ORT_VARIANT (ort-cpu or ort-gpu); BuildKit only builds the stage actually
-# referenced, so the unused ORT download stage never runs.
-COPY --from=ort-${ORT_VARIANT} /opt/ort/lib/libonnxruntime.so* /usr/local/lib/
+# Bundle the matching ONNX Runtime shared libraries from the aliased stage.
+COPY --from=ort-selected /opt/ort/lib/libonnxruntime.so* /usr/local/lib/
 
 # Server binary.
 COPY --from=build /out/visionserve /usr/local/bin/visionserve

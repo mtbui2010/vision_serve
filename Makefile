@@ -1,5 +1,5 @@
 # Makefile — VisionServe
-# Yêu cầu: Go >= 1.22. Runtime cần libonnxruntime.so (đặt ORT_DYLIB_PATH).
+# Requires Go >= 1.22. The runtime needs libonnxruntime.so (set ORT_DYLIB_PATH).
 
 BINARY      := visionserve
 PKG         := ./cmd/visionserve
@@ -8,13 +8,13 @@ VERSION     := $(shell git describe --tags --always 2>/dev/null || echo "0.1.0-d
 LDFLAGS     := -s -w -X visionserve/internal/cli.Version=$(VERSION)
 GOFLAGS     ?=
 
-# Cài đặt mặc định vào $GOBIN hoặc $GOPATH/bin
+# Install destination ($GOBIN, else $GOPATH/bin)
 INSTALL_DIR := $(shell go env GOBIN 2>/dev/null)
 ifeq ($(INSTALL_DIR),)
 INSTALL_DIR := $(shell go env GOPATH)/bin
 endif
 
-# Tham số mặc định cho `make run` / `make serve`
+# Defaults for run / serve / pull
 MODEL  ?= rf-detr
 IMAGE  ?= test/testdata/sample.jpg
 ADDR   ?= :11435
@@ -23,52 +23,61 @@ MODELS ?= ./models
 # ORT lib is found. Override with `make run GPU=0` to force CPU.
 GPU    ?= 1
 
-# Runtime cần libonnxruntime.so. Nếu user chưa export ORT_DYLIB_PATH, tự dò:
-# loại node_modules (tránh bản arch khác), ưu tiên bản ORT đầy đủ (onnxruntime/capi).
+# The runtime needs libonnxruntime.so. If the user has not exported ORT_DYLIB_PATH, auto-detect:
+# skip node_modules (avoids other-arch builds), prefer a full ORT build (onnxruntime/capi).
 ORT_DYLIB_PATH ?= $(shell find $(HOME) /usr/local/lib /usr/lib -name 'libonnxruntime.so*' 2>/dev/null | grep -v node_modules | grep -E 'onnxruntime/capi.*\.so\.[0-9]' | head -1)
 
-.PHONY: all build install run serve list demo test fmt vet tidy lint clean \
+.PHONY: all build install run serve list ps rm pull demo test fmt vet tidy lint clean \
         build-linux-arm64 docker docker-edge help
 
-all: build ## Mặc định: build
+all: build ## Default target: build
 
-## --- Build & cài đặt ---
+## --- Build & install ---
 
-build: ## Biên dịch binary vào ./bin/visionserve
+build: ## Compile the binary into ./bin/visionserve
 	@mkdir -p $(BIN_DIR)
 	go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BINARY) $(PKG)
 	@echo "→ $(BIN_DIR)/$(BINARY) ($(VERSION))"
 
-install: ## Cài binary vào GOBIN/GOPATH bin (dùng được lệnh `visionserve` toàn cục)
+install: ## Install the binary into GOBIN/GOPATH bin (use `visionserve` globally)
 	go install $(GOFLAGS) -ldflags '$(LDFLAGS)' $(PKG)
-	@echo "→ đã cài vào $(INSTALL_DIR)/$(BINARY)"
+	@echo "→ installed to $(INSTALL_DIR)/$(BINARY)"
 
 ## --- Run ---
-# Add GPU=1 to any of these to run on the CUDA EP (sources scripts/gpu-env.sh, which
-# auto-detects a CUDA-enabled ORT lib + the cuDNN/CUDA wheels). Without GPU=1 it uses the
-# auto-detected CPU ORT lib.
+# All of run/serve/demo use the GPU (CUDA EP) by default. They source scripts/gpu-env.sh
+# to auto-detect a CUDA-enabled ORT lib + the cuDNN/CUDA libs, and fall back to the
+# auto-detected CPU ORT lib if none is found. Add GPU=0 to force CPU.
 
-run: build ## Run on 1 image: make run MODEL=rf-detr IMAGE=path.jpg [OUT=r.png] [BOX=x,y,w,h] [PROMPT="cat."] [POINT=x,y] [GPU=0 to force CPU]
+run: build ## Run on 1 image: make run MODEL=rf-detr IMAGE=path.jpg [OUT=r.png] [BOX=x,y,w,h] [PROMPT="cat."] [POINT=x,y] [GPU=0]
 	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; else export ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)"; fi; \
 		"$(BIN_DIR)/$(BINARY)" run --models "$(MODELS)" $(MODEL) "$(IMAGE)" \
 		$(if $(OUT),--out "$(OUT)") $(if $(BOX),--box "$(BOX)") $(if $(PROMPT),--prompt "$(PROMPT)") $(if $(POINT),--point "$(POINT)")'
 
-serve: build ## Start the HTTP server: make serve [ADDR=:11435] [GPU=0 to force CPU]
+serve: build ## Start the HTTP server: make serve [ADDR=:11435] [GPU=0]
 	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; else export ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)"; fi; \
 		"$(BIN_DIR)/$(BINARY)" serve --models "$(MODELS)" --addr "$(ADDR)"'
 
-list: build ## List models in the registry
+list: build ## List models in the registry (+ pullable models)
 	$(BIN_DIR)/$(BINARY) list --models $(MODELS)
 
-demo: build ## Demo on real COCO images (boxes/masks -> demo/out/) [GPU=0 to force CPU]
+ps: build ## Show models loaded in a running server: make ps [ADDR=:11435]
+	$(BIN_DIR)/$(BINARY) ps --addr $(ADDR)
+
+rm: build ## Unload a model from a running server: make rm MODEL=rf-detr [ADDR=:11435]
+	$(BIN_DIR)/$(BINARY) rm $(MODEL) --addr $(ADDR)
+
+pull: build ## Download a model from HuggingFace: make pull MODEL=rf-detr [MODELS=./models]
+	$(BIN_DIR)/$(BINARY) pull $(MODEL) --models $(MODELS)
+
+demo: build ## Demo on real COCO images (boxes/masks -> demo/out/) [GPU=0]
 	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; fi; bash scripts/demo.sh'
 
-## --- Chất lượng ---
+## --- Quality ---
 
-test: ## Chạy unit test (pre/postprocess...)
+test: ## Run unit tests (pre/postprocess, etc.)
 	go test $(GOFLAGS) ./...
 
-fmt: ## gofmt toàn bộ
+fmt: ## gofmt the whole tree
 	gofmt -w .
 
 vet: ## go vet
@@ -77,24 +86,26 @@ vet: ## go vet
 tidy: ## go mod tidy
 	go mod tidy
 
-lint: vet ## Alias chạy vet (thêm golangci-lint nếu có)
-	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run || echo "golangci-lint chưa cài — chỉ chạy go vet"
+lint: vet ## Alias for vet (also runs golangci-lint if installed)
+	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run || echo "golangci-lint not installed — ran go vet only"
 
 ## --- Cross build / Docker ---
 
-build-linux-arm64: ## Build cho Jetson/arm64
+build-linux-arm64: ## Build for Jetson/arm64
 	@mkdir -p $(BIN_DIR)
 	GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BINARY)-linux-arm64 $(PKG)
 
-docker: ## Build image GPU (x86_64)
-	docker build -f deploy/Dockerfile -t visionserve:$(VERSION) .
+docker: ## Build the server image (CPU; add ORT_VARIANT=gpu for a GPU image)
+	cp deploy/.dockerignore .dockerignore
+	docker build -f deploy/Dockerfile $(if $(filter gpu,$(ORT_VARIANT)),--build-arg ORT_VARIANT=gpu) -t visionserve:$(VERSION) -t visionserve:latest .
 
-docker-edge: ## Build image edge (arm64/Jetson)
-	docker build -f deploy/Dockerfile.edge -t visionserve:$(VERSION)-edge .
+docker-edge: ## Build the edge image (arm64/Jetson)
+	cp deploy/.dockerignore .dockerignore
+	docker buildx build --platform linux/arm64 -f deploy/Dockerfile.edge -t visionserve:$(VERSION)-edge .
 
-clean: ## Xoá artifacts
+clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR)
 
-help: ## In danh sách target
+help: ## Print the list of targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
