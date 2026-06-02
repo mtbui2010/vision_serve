@@ -1,5 +1,5 @@
-// Package server cung cấp HTTP REST API (JSON) cho VisionServe.
-// Cổng mặc định 11435 (tránh trùng 11434 của Ollama).
+// Package server provides the HTTP REST API (JSON) for VisionServe.
+// Default port 11435 (to avoid clashing with Ollama's 11434).
 package server
 
 import (
@@ -12,17 +12,17 @@ import (
 	"visionserve/internal/registry"
 )
 
-// DefaultAddr là địa chỉ lắng nghe mặc định.
+// DefaultAddr is the default listen address.
 const DefaultAddr = ":11435"
 
-// Server gắn kết registry + lifecycle Manager + HTTP server.
+// Server ties together the registry + lifecycle Manager + HTTP server.
 type Server struct {
 	reg  *registry.Registry
 	mgr  *lifecycle.Manager
 	http *http.Server
 }
 
-// New tạo server. addr rỗng -> DefaultAddr.
+// New creates a server. Empty addr -> DefaultAddr.
 func New(reg *registry.Registry, mgr *lifecycle.Manager, addr string) *Server {
 	if addr == "" {
 		addr = DefaultAddr
@@ -46,19 +46,19 @@ func (s *Server) routes() http.Handler {
 	return logRequests(mux)
 }
 
-// ListenAndServe khởi động server (blocking).
+// ListenAndServe starts the server (blocking).
 func (s *Server) ListenAndServe() error {
-	log.Printf("VisionServe lắng nghe tại %s", s.http.Addr)
+	log.Printf("VisionServe listening on %s", s.http.Addr)
 	return s.http.ListenAndServe()
 }
 
-// Shutdown tắt server gọn gàng + giải phóng model.
+// Shutdown gracefully stops the server + releases models.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.mgr.Close()
 	return s.http.Shutdown(ctx)
 }
 
-// logRequests middleware ghi log mỗi request (method, path, thời gian).
+// logRequests is middleware that logs each request (method, path, duration).
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()

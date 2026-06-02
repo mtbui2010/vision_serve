@@ -18,7 +18,7 @@ Usage:
   visionserve list                  list models in the registry
   visionserve ps                    show models loaded in memory (requires a running server)
   visionserve rm <model>            unload a model from memory (requires a running server)
-  visionserve pull <model>          (future) download a model from a remote registry
+  visionserve pull <model>          download a curated model from HuggingFace into the registry (no arg = list)
   visionserve version               print the version
 
 Common flags:

@@ -9,7 +9,7 @@ import (
 	"io"
 	"net/http"
 
-	// đăng ký decoder cho các định dạng ảnh phổ biến
+	// register decoders for common image formats
 	_ "image/jpeg"
 	_ "image/png"
 
@@ -17,7 +17,7 @@ import (
 	"visionserve/pkg/api"
 )
 
-// maxImageBytes giới hạn kích thước ảnh upload (chống OOM). 32 MiB.
+// maxImageBytes limits the uploaded image size (to prevent OOM). 32 MiB.
 const maxImageBytes = 32 << 20
 
 // GET /api/health
@@ -25,7 +25,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// GET /api/models — liệt kê model + trạng thái (available / loaded).
+// GET /api/models — list models + state (available / loaded).
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	infos := make([]api.ModelInfo, 0)
 	for _, e := range s.reg.List() {
@@ -50,11 +50,11 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLoad(w http.ResponseWriter, r *http.Request) {
 	var req api.LoadRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("body JSON không hợp lệ: %w", err))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON body: %w", err))
 		return
 	}
 	if req.Model == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("thiếu trường 'model'"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("missing 'model' field"))
 		return
 	}
 	if err := s.mgr.Load(req.Model); err != nil {
@@ -68,11 +68,11 @@ func (s *Server) handleLoad(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUnload(w http.ResponseWriter, r *http.Request) {
 	var req api.LoadRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("body JSON không hợp lệ: %w", err))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON body: %w", err))
 		return
 	}
 	if req.Model == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("thiếu trường 'model'"))
+		writeError(w, http.StatusBadRequest, fmt.Errorf("missing 'model' field"))
 		return
 	}
 	if err := s.mgr.Unload(req.Model); err != nil {
@@ -84,7 +84,7 @@ func (s *Server) handleUnload(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/predict
 //   - multipart: model=<name>, image=<file>
-//   - hoặc JSON: { "model": "...", "image_base64": "..." }
+//   - or JSON: { "model": "...", "image_base64": "..." }
 func (s *Server) handlePredict(w http.ResponseWriter, r *http.Request) {
 	model, img, prompt, err := s.parsePredictRequest(r)
 	if err != nil {

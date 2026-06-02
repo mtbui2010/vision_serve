@@ -10,6 +10,7 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"visionserve/internal/catalog"
 	"visionserve/pkg/api"
 )
 
@@ -74,8 +75,50 @@ func runRm(args []string) error {
 	return nil
 }
 
-// runPull: TODO future phase — a remote registry is not part of the MVP (see CLAUDE.md).
+// runPull: visionserve pull <model> — download a curated, permissively-licensed
+// model from the HuggingFace Hub into the local registry (Ollama-style).
+//
+// It does NOT contact a remote registry: the catalog of available models is
+// built into the binary (internal/catalog). With no args it lists what can be
+// pulled.
 func runPull(args []string) error {
-	return fmt.Errorf("`pull` not supported yet: remote registry is a future phase (the MVP uses local models only). " +
-		"Place the model + manifest.yaml into the ./models directory manually")
+	fs := flag.NewFlagSet("pull", flag.ContinueOnError)
+	modelsFlag := fs.String("models", "", "model registry directory")
+	force := fs.Bool("force", false, "redownload files even if already present")
+
+	// Allow flags after the positional (e.g. `pull rf-detr --models DIR`). The standard
+	// flag package stops at the first positional, so we loop: parse flags -> take 1
+	// positional -> parse again.
+	var rest []string
+	rem := args
+	for len(rem) > 0 {
+		if err := fs.Parse(rem); err != nil {
+			return err
+		}
+		rem = fs.Args()
+		if len(rem) > 0 {
+			rest = append(rest, rem[0])
+			rem = rem[1:]
+		}
+	}
+	if len(rest) < 1 {
+		// No model named: print the catalog so the user can pick one.
+		tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "NAME\tTASK\tLICENSE\tSOURCE")
+		for _, e := range catalog.List() {
+			src := "huggingface.co/" + e.HFRepo
+			if !e.Verified {
+				src += " (unverified)"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.Name, e.Task, e.License, src)
+		}
+		tw.Flush()
+		return fmt.Errorf("usage: visionserve pull <model> [--models DIR] [--force]")
+	}
+
+	return catalog.Pull(rest[0], catalog.PullOptions{
+		ModelsDir: modelsDir(*modelsFlag),
+		Force:     *force,
+		Out:       os.Stderr,
+	})
 }

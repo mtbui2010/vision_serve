@@ -9,8 +9,8 @@ import (
 	"visionserve/internal/models"
 )
 
-// preprocess: ảnh gốc -> tensor NCHW [1,3,H,W] đã letterbox + normalize.
-// PreprocessMeta lưu scale/pad để postprocess map box về toạ độ ảnh GỐC.
+// preprocess: original image -> NCHW [1,3,H,W] tensor, letterboxed + normalized.
+// PreprocessMeta stores scale/pad so postprocess can map boxes back to ORIGINAL image coords.
 func (m *rfDETR) preprocess(img image.Image) (engine.Tensor, models.PreprocessMeta, error) {
 	b := img.Bounds()
 	origW, origH := b.Dx(), b.Dy()
@@ -19,14 +19,14 @@ func (m *rfDETR) preprocess(img image.Image) (engine.Tensor, models.PreprocessMe
 	var processed image.Image
 
 	if m.cfg.Letterbox {
-		// TODO(verify): màu pad đúng theo cách RF-DETR được train/export. Mặc định đen.
+		// TODO(verify): pad color matching how RF-DETR was trained/exported. Defaults to black.
 		lb = imageproc.Letterbox(img, m.cfg.Width, m.cfg.Height, color.NRGBA{0, 0, 0, 255})
 		processed = lb.Img
 	} else {
 		processed = imageproc.Resize(img, m.cfg.Width, m.cfg.Height)
 		sx, sy := imageproc.ResizeScale(origW, origH, m.cfg.Width, m.cfg.Height)
 		lb = imageproc.LetterboxResult{Scale: sx, PadX: 0, PadY: 0}
-		// khi không letterbox, scale theo 2 chiều có thể khác nhau
+		// without letterbox, the scale can differ between the two axes
 		meta := models.PreprocessMeta{
 			OrigWidth: origW, OrigHeight: origH,
 			ScaleX: sx, ScaleY: sy, PadX: 0, PadY: 0,
@@ -38,7 +38,7 @@ func (m *rfDETR) preprocess(img image.Image) (engine.Tensor, models.PreprocessMe
 		OrigWidth:  origW,
 		OrigHeight: origH,
 		ScaleX:     lb.Scale,
-		ScaleY:     lb.Scale, // letterbox giữ tỉ lệ -> scale 2 chiều bằng nhau
+		ScaleY:     lb.Scale, // letterbox preserves aspect ratio -> both axes share the same scale
 		PadX:       lb.PadX,
 		PadY:       lb.PadY,
 	}

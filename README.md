@@ -66,6 +66,11 @@ sequenceDiagram
 
 ## Quickstart
 
+> **Run with Docker (no host setup):** a self-contained image bundles the binary and ONNX
+> Runtime. `docker build -f deploy/Dockerfile -t visionserve .` then
+> `docker run -p 11435:11435 -v "$PWD/models:/models" visionserve`. GPU, arm64/Jetson, and
+> published GHCR images are covered in [`deploy/README.md`](deploy/README.md).
+
 ### 1. Build
 
 Requires **Go >= 1.22**.

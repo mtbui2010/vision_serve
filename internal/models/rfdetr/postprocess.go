@@ -9,33 +9,33 @@ import (
 	"visionserve/internal/models"
 )
 
-// postprocess decode output RF-DETR (DETR-style, NMS-free) -> Result chuẩn hóa.
+// postprocess decodes RF-DETR output (DETR-style, NMS-free) -> normalized Result.
 //
-// ===================== FORMAT OUTPUT =====================
-// Model xuất ĐÚNG 2 tensor:
-//   - logits: shape [1, Q, C]  (Q = số queries, C = số class)  — TRƯỚC sigmoid
-//   - boxes : shape [1, Q, 4]  — box format cxcywh, chuẩn hóa [0,1] theo ảnh ĐẦU VÀO
+// ===================== OUTPUT FORMAT =====================
+// The model emits EXACTLY 2 tensors:
+//   - logits: shape [1, Q, C]  (Q = number of queries, C = number of classes)  — BEFORE sigmoid
+//   - boxes : shape [1, Q, 4]  — box format cxcywh, normalized [0,1] relative to the INPUT image
 //
-// Ta nhận diện tensor nào là boxes bằng SHAPE (chiều cuối == 4), phần còn lại là logits
-// — bền vững hơn so với dựa vào tên tensor (khác nhau giữa các bản export RF-DETR).
+// We identify which tensor is boxes by SHAPE (last dim == 4); the other one is logits
+// — more robust than relying on tensor names (which differ across RF-DETR exports).
 //
-// RF-DETR dùng sigmoid (không có lớp "no-object" softmax) -> mỗi query lấy class có
-// xác suất cao nhất sau sigmoid, lọc theo conf_threshold.
+// RF-DETR uses sigmoid (no "no-object" softmax class) -> each query takes the class with
+// the highest probability after sigmoid, filtered by conf_threshold.
 //
-// ĐÃ XÁC MINH trên WEIGHTS THẬT (rf-detr-base, COCO; xem models/rf-detr/README.md):
+// VERIFIED on REAL WEIGHTS (rf-detr-base, COCO; see models/rf-detr/README.md):
 //
 //		inputs:  input      [1,3,560,560] f32
 //		outputs: pred_logits[1,Q,91] f32  |  pred_boxes[1,Q,4] f32   (Q=300 queries)
 //
-//	 1. đúng 2 output, phát hiện boxes theo chiều cuối == 4 (không phụ thuộc tên). OK.
-//	 2. logits qua SIGMOID (RF-DETR dùng focal loss, KHÔNG softmax+no-obj) — đối chiếu
-//	    thật cho score hợp lý (~0.95); softmax cho kết quả sai. OK.
-//	 3. box là CXCYWH chuẩn hóa [0,1] — giải mã cxcywh land đúng vật thể; xyxy thì lệch. OK.
+//	 1. exactly 2 outputs, boxes detected by last dim == 4 (name-independent). OK.
+//	 2. logits through SIGMOID (RF-DETR uses focal loss, NOT softmax+no-obj) — against
+//	    real data gives a reasonable score (~0.95); softmax gives wrong results. OK.
+//	 3. box is CXCYWH normalized [0,1] — decoding cxcywh lands on the right object; xyxy is off. OK.
 //
-// LƯU Ý C=91 (không gian COCO "paper", index 0 = N/A), KHÔNG phải 80 liền mạch — phải
-// dùng file labels 91 dòng (models/rf-detr/coco91.txt). File ONNX dummy bundled cũng
-// mô phỏng đúng [1,Q,91] để khớp hợp đồng này (xem models/rf-detr/gen_dummy_onnx.py).
-// Nếu một bản export khác trả C=80, đổi manifest labels cho khớp — đừng đoán.
+// NOTE C=91 (the COCO "paper" space, index 0 = N/A), NOT a contiguous 80 — you must use a
+// 91-line labels file (models/rf-detr/coco91.txt). The bundled dummy ONNX file also emulates
+// [1,Q,91] to match this contract (see models/rf-detr/gen_dummy_onnx.py).
+// If another export returns C=80, change the manifest labels to match — do not guess.
 // =========================================================
 func (m *rfDETR) postprocess(outs []engine.Tensor, meta models.PreprocessMeta) (models.Result, error) {
 	if len(outs) != 2 {
@@ -65,7 +65,7 @@ func (m *rfDETR) postprocess(outs []engine.Tensor, meta models.PreprocessMeta) (
 
 	dets := make([]models.Detection, 0, q)
 	for i := 0; i < q; i++ {
-		// class có score lớn nhất sau sigmoid
+		// class with the highest score after sigmoid
 		bestCls, bestScore := -1, 0.0
 		base := i * c
 		for k := 0; k < c; k++ {
@@ -85,16 +85,16 @@ func (m *rfDETR) postprocess(outs []engine.Tensor, meta models.PreprocessMeta) (
 		b2 := float64(boxes.Data[bo+2])
 		b3 := float64(boxes.Data[bo+3])
 
-		// -> toạ độ pixel trên ảnh ĐẦU VÀO (đã letterbox)
+		// -> pixel coordinates on the INPUT image (letterboxed)
 		x, y, w, h := toInputXYWH(b0, b1, b2, b3, boxFormat, m.cfg.Width, m.cfg.Height)
 
-		// map ngược về ảnh GỐC: orig = (input - pad) / scale
+		// map back to the ORIGINAL image: orig = (input - pad) / scale
 		ox := (x - float64(meta.PadX)) / meta.ScaleX
 		oy := (y - float64(meta.PadY)) / meta.ScaleY
 		ow := w / meta.ScaleX
 		oh := h / meta.ScaleY
 
-		// clamp vào biên ảnh gốc
+		// clamp to the original image bounds
 		ox, oy, ow, oh = clampBox(ox, oy, ow, oh, meta.OrigWidth, meta.OrigHeight)
 
 		dets = append(dets, models.Detection{
@@ -104,7 +104,7 @@ func (m *rfDETR) postprocess(outs []engine.Tensor, meta models.PreprocessMeta) (
 		})
 	}
 
-	// RF-DETR là NMS-free: chỉ sắp theo conf + cắt max_detections, KHÔNG chạy NMS.
+	// RF-DETR is NMS-free: only sort by conf + cut to max_detections, do NOT run NMS.
 	sort.Slice(dets, func(a, b int) bool { return dets[a].Conf > dets[b].Conf })
 	if m.cfg.MaxDet > 0 && len(dets) > m.cfg.MaxDet {
 		dets = dets[:m.cfg.MaxDet]
@@ -113,7 +113,7 @@ func (m *rfDETR) postprocess(outs []engine.Tensor, meta models.PreprocessMeta) (
 	return models.Result{Detections: dets}, nil
 }
 
-// toInputXYWH chuyển box (chuẩn hóa [0,1]) về [x,y,w,h] pixel trên ảnh đầu vào WxH.
+// toInputXYWH converts a box (normalized [0,1]) to [x,y,w,h] pixels on the WxH input image.
 func toInputXYWH(a, b, cc, d float64, format string, w, h int) (x, y, bw, bh float64) {
 	fw, fh := float64(w), float64(h)
 	switch format {

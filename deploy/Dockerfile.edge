@@ -1,32 +1,114 @@
-# deploy/Dockerfile.edge — image nhẹ cho edge/arm64 (vd Jetson).
-# Trên Jetson nên dùng base L4T (nvcr.io/nvidia/l4t-base) + ORT build kèm TensorRT EP.
+# deploy/Dockerfile.edge — VisionServe SERVER image for arm64 edge devices (e.g. Jetson).
+#
+# There is no single, stable, public download URL for an ONNX Runtime *C/C++ shared
+# library* built with the TensorRT/CUDA execution providers for Jetson: that build must
+# match the device's JetPack (CUDA + cuDNN + TensorRT) versions and is normally produced
+# from source or taken from a JetPack-matched package. We therefore expose a build-arg to
+# pick how the runtime ONNX Runtime is provided:
+#
+#   ORT_SOURCE=cpu  (default) — download the official linux-aarch64 CPU build from the
+#                   ONNX Runtime GitHub releases. Portable, works on any arm64 box and on
+#                   Jetson, but runs on CPU only (no TensorRT/CUDA acceleration).
+#
+#   ORT_SOURCE=jetson — use a base image that already ships ONNX Runtime with the
+#                   TensorRT/CUDA EP (NVIDIA L4T ML containers do), OR expect a Jetson ORT
+#                   .so to be present in the build context under deploy/ort-jetson/. This
+#                   path is hardware-specific; see the ASSUMPTIONS block below and
+#                   deploy/README.md before using it.
+#
+# Examples:
+#   # Portable arm64 CPU image:
+#   docker buildx build --platform linux/arm64 -f deploy/Dockerfile.edge -t visionserve:edge .
+#   # Jetson (TensorRT/CUDA), built ON the Jetson or with an L4T base:
+#   docker build -f deploy/Dockerfile.edge --build-arg ORT_SOURCE=jetson \
+#       --build-arg L4T_BASE=nvcr.io/nvidia/l4t-base:r36.3.0 -t visionserve:jetson .
+#
+# Model weights are NOT baked into the image — mount them into the /models VOLUME.
 
-# --- Stage build (cross-compile arm64) ---
-FROM golang:1.22-bookworm AS build
+ARG ORT_VERSION=1.20.1
+ARG ORT_SOURCE=cpu
+# Base used only when ORT_SOURCE=jetson. Pick the L4T release matching your JetPack.
+# r36.x = JetPack 6.x. The l4t-base image carries CUDA/cuDNN/TensorRT at runtime via the
+# NVIDIA container runtime; an L4T *ML* image additionally ships onnxruntime.
+ARG L4T_BASE=nvcr.io/nvidia/l4t-base:r36.3.0
+
+############################
+# Stage 1 — build the Go binary for arm64
+############################
+# The yalue/onnxruntime_go binding uses cgo, so cross-building to arm64 needs
+# CGO_ENABLED=1 plus the aarch64 cross-compiler. With buildx --platform linux/arm64 this
+# stage runs natively under emulation and CC is the native gcc; the explicit cross
+# toolchain below keeps an amd64-host cross build working too.
+FROM --platform=$BUILDPLATFORM golang:1.22-bookworm AS build
+ARG TARGETARCH
 WORKDIR /src
-# Binding ORT dùng cgo -> cross-build arm64 cần CGO_ENABLED=1 + cross-compiler aarch64.
-RUN apt-get update && apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu && \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu && \
     rm -rf /var/lib/apt/lists/*
 COPY go.mod go.sum* ./
-RUN go mod download || true
+RUN go mod download
 COPY . .
+ARG VERSION=docker-edge
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
-    go build -ldflags '-s -w' -o /out/visionserve ./cmd/visionserve
+    go build -ldflags "-s -w -X visionserve/internal/cli.Version=${VERSION}" \
+    -o /out/visionserve ./cmd/visionserve
 
-# --- Stage runtime (arm64) ---
-# Lưu ý: với Jetson, thay base bằng nvcr.io/nvidia/l4t-base:r36.x để có CUDA/TensorRT.
-FROM arm64v8/ubuntu:22.04
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
+############################
+# Stage 2 — fetch ONNX Runtime (portable arm64 CPU build)
+############################
+FROM --platform=linux/arm64 debian:bookworm-slim AS ort-cpu
+ARG ORT_VERSION
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
+# Official arm64 CPU asset: onnxruntime-linux-aarch64-<ver>.tgz
+RUN set -eux; \
+    url="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-aarch64-${ORT_VERSION}.tgz"; \
+    curl -fSL "$url" -o /tmp/ort.tgz; \
+    mkdir -p /opt/ort; \
+    tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1; \
+    rm /tmp/ort.tgz; \
+    ls -l /opt/ort/lib/libonnxruntime.so*
 
-# TODO: COPY libonnxruntime.so (bản arm64 + TensorRT/CUDA EP cho Jetson) vào /usr/local/lib/
+############################
+# Stage 3a — portable arm64 CPU runtime
+############################
+FROM --platform=linux/arm64 debian:bookworm-slim AS runtime-cpu
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=ort-cpu /opt/ort/lib/libonnxruntime.so* /usr/local/lib/
+
+############################
+# Stage 3b — Jetson runtime (TensorRT/CUDA EP)
+############################
+# ASSUMPTIONS for ORT_SOURCE=jetson:
+#   * You build this ON a Jetson (so the NVIDIA container runtime injects CUDA/cuDNN/
+#     TensorRT), or you use an L4T *ML* base that ships them.
+#   * libonnxruntime.so built with the TensorRT/CUDA EP for your JetPack is provided to
+#     the build by placing it under deploy/ort-jetson/ in the build context. It is NOT
+#     downloaded here because no stable public URL exists for a JetPack-matched build.
+# If deploy/ort-jetson/ is absent the build will fail at the COPY — that is intentional,
+# so you do not silently ship a CPU-only image while expecting GPU acceleration.
+FROM ${L4T_BASE} AS runtime-jetson
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/* || true
+# Provide your Jetson-matched ONNX Runtime shared library here:
+COPY deploy/ort-jetson/libonnxruntime.so* /usr/local/lib/
+
+############################
+# Final — select runtime by ORT_SOURCE
+############################
+FROM runtime-${ORT_SOURCE} AS final
+RUN ldconfig || true
+
 ENV ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
-ENV LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/usr/local/lib
 
 COPY --from=build /out/visionserve /usr/local/bin/visionserve
-VOLUME ["/models"]
-ENV VISIONSERVE_MODELS=/models
-EXPOSE 11435
 
+VOLUME ["/models"]
+EXPOSE 11435
 ENTRYPOINT ["visionserve"]
-CMD ["serve", "--addr", ":11435"]
+CMD ["serve", "--addr", ":11435", "--models", "/models"]

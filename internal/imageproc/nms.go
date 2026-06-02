@@ -6,10 +6,10 @@ import (
 	"visionserve/pkg/api"
 )
 
-// NMS (Non-Maximum Suppression) tiêu chuẩn theo IoU, dùng cho các model CẦN nó.
+// NMS (Non-Maximum Suppression) is the standard IoU-based suppression, for models that NEED it.
 //
-// LƯU Ý (CLAUDE.md): RF-DETR là NMS-free — KHÔNG gọi NMS cho RF-DETR. Hàm này
-// là tiện ích dùng chung cho các model anchor/grid-based mà cộng đồng thêm sau.
+// NOTE (CLAUDE.md): RF-DETR is NMS-free — do NOT call NMS for RF-DETR. This function
+// is a shared utility for anchor/grid-based models the community adds later.
 func NMS(dets []api.Detection, iouThresh float64) []api.Detection {
 	if len(dets) == 0 {
 		return dets
@@ -31,7 +31,7 @@ func NMS(dets []api.Detection, iouThresh float64) []api.Detection {
 			if j == i || suppressed[j] {
 				continue
 			}
-			// chỉ suppress trong cùng class
+			// only suppress within the same class
 			if dets[j].Class == dets[i].Class && iou(dets[i].BBox, dets[j].BBox) > iouThresh {
 				suppressed[j] = true
 			}
@@ -40,7 +40,7 @@ func NMS(dets []api.Detection, iouThresh float64) []api.Detection {
 	return keep
 }
 
-// iou tính Intersection-over-Union giữa hai box dạng [x,y,w,h].
+// iou computes the Intersection-over-Union of two boxes in [x,y,w,h] form.
 func iou(a, b [4]float64) float64 {
 	ax1, ay1, ax2, ay2 := a[0], a[1], a[0]+a[2], a[1]+a[3]
 	bx1, by1, bx2, by2 := b[0], b[1], b[0]+b[2], b[1]+b[3]

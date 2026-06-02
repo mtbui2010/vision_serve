@@ -19,6 +19,9 @@ MODEL  ?= rf-detr
 IMAGE  ?= test/testdata/sample.jpg
 ADDR   ?= :11435
 MODELS ?= ./models
+# Use the GPU (CUDA EP) by default; falls back to CPU automatically if no CUDA-enabled
+# ORT lib is found. Override with `make run GPU=0` to force CPU.
+GPU    ?= 1
 
 # Runtime cần libonnxruntime.so. Nếu user chưa export ORT_DYLIB_PATH, tự dò:
 # loại node_modules (tránh bản arch khác), ưu tiên bản ORT đầy đủ (onnxruntime/capi).
@@ -40,20 +43,25 @@ install: ## Cài binary vào GOBIN/GOPATH bin (dùng được lệnh `visionserv
 	go install $(GOFLAGS) -ldflags '$(LDFLAGS)' $(PKG)
 	@echo "→ đã cài vào $(INSTALL_DIR)/$(BINARY)"
 
-## --- Chạy ---
+## --- Run ---
+# Add GPU=1 to any of these to run on the CUDA EP (sources scripts/gpu-env.sh, which
+# auto-detects a CUDA-enabled ORT lib + the cuDNN/CUDA wheels). Without GPU=1 it uses the
+# auto-detected CPU ORT lib.
 
-run: build ## Run on 1 image: make run MODEL=rf-detr IMAGE=path.jpg [OUT=r.png] [BOX=x,y,w,h] [PROMPT="cat."] [POINT=x,y]
-	ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)" $(BIN_DIR)/$(BINARY) run --models $(MODELS) $(MODEL) $(IMAGE) \
-		$(if $(OUT),--out $(OUT)) $(if $(BOX),--box "$(BOX)") $(if $(PROMPT),--prompt "$(PROMPT)") $(if $(POINT),--point "$(POINT)")
+run: build ## Run on 1 image: make run MODEL=rf-detr IMAGE=path.jpg [OUT=r.png] [BOX=x,y,w,h] [PROMPT="cat."] [POINT=x,y] [GPU=0 to force CPU]
+	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; else export ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)"; fi; \
+		"$(BIN_DIR)/$(BINARY)" run --models "$(MODELS)" $(MODEL) "$(IMAGE)" \
+		$(if $(OUT),--out "$(OUT)") $(if $(BOX),--box "$(BOX)") $(if $(PROMPT),--prompt "$(PROMPT)") $(if $(POINT),--point "$(POINT)")'
 
-serve: build ## Khởi động HTTP server: make serve ADDR=:11435
-	ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)" $(BIN_DIR)/$(BINARY) serve --models $(MODELS) --addr $(ADDR)
+serve: build ## Start the HTTP server: make serve [ADDR=:11435] [GPU=0 to force CPU]
+	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; else export ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)"; fi; \
+		"$(BIN_DIR)/$(BINARY)" serve --models "$(MODELS)" --addr "$(ADDR)"'
 
-list: build ## Liệt kê model trong registry
+list: build ## List models in the registry
 	$(BIN_DIR)/$(BINARY) list --models $(MODELS)
 
-demo: build ## Demo: detection trên ảnh COCO thật, xuất ảnh có bbox vào demo/out/
-	@ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)" bash scripts/demo.sh
+demo: build ## Demo on real COCO images (boxes/masks -> demo/out/) [GPU=0 to force CPU]
+	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; fi; bash scripts/demo.sh'
 
 ## --- Chất lượng ---
 

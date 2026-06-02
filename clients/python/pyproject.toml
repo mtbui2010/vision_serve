@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visionserve"
+version = "0.1.0"
+description = "Python client SDK for the VisionServe HTTP server (talks to the Go runtime over HTTP)."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "Apache-2.0" }
+authors = [{ name = "VisionServe" }]
+keywords = ["visionserve", "computer-vision", "onnx", "rf-detr", "sam", "client"]
+
+# The client is dependency-light: it uses only the Python standard library
+# (urllib, json, base64) for transport, so it works even in minimal environments.
+# numpy and pillow are OPTIONAL — they unlock ndarray/PIL image inputs and
+# Mask.to_ndarray() decoding, but the client degrades gracefully without them.
+dependencies = []
+
+[project.optional-dependencies]
+images = ["pillow>=8.0", "numpy>=1.20"]
+dev = ["pillow>=8.0", "numpy>=1.20", "pytest>=7.0"]
+
+[project.urls]
+Homepage = "https://github.com/visionserve/visionserve"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["visionserve*"]

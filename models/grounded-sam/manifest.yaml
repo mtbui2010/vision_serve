@@ -1,0 +1,39 @@
+# Grounded-SAM — GroundingDINO (open-vocab detection) + MobileSAM (segmentation), Apache-2.0.
+# Text-prompted, three-session PipelineModel. A fully free community pipeline — no AGPL, no
+# Python at runtime (CLAUDE.md).
+# Run: `visionserve run grounded-sam img.jpg --prompt "cat. remote."`.
+#
+# task: open_vocab — the entry point is a text prompt (open-vocabulary); the output carries
+# both detections AND a per-box segmentation mask. (We classify by the PROMPT modality, so
+# open_vocab rather than segmentation.)
+#
+# Weights are NOT committed. This manifest REUSES the weights of the other two model dirs via
+# relative paths, so download those (see models/grounding-dino/README.md and
+# models/mobile-sam/README.md) and no extra files are needed here.
+name: grounded-sam
+task: open_vocab
+license: Apache-2.0
+architecture: grounded-sam
+
+# Three ONNX graphs by role, referenced from the sibling model directories (relative paths).
+# vocab.txt for the tokenizer is resolved next to files.gdino (../grounding-dino/vocab.txt).
+files:
+  gdino: ../grounding-dino/model.onnx
+  encoder: ../mobile-sam/mobile_sam_encoder.onnx
+  decoder: ../mobile-sam/mobile_sam_decoder_single.onnx
+
+input:
+  # Reference only — each sub-model preprocesses in Go (GroundingDINO 800x800 + ImageNet
+  # normalize; MobileSAM long-side-1024 raw HWC).
+  width: 800
+  height: 800
+  layout: NCHW
+  letterbox: false
+
+postprocess:
+  conf_threshold: 0.3
+  text_threshold: 0.25
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

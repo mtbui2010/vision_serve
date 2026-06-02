@@ -53,8 +53,14 @@ func promptToPointSets(p models.Prompt) ([]pointSet, error) {
 		sets = append(sets, ps)
 	}
 	if len(sets) == 0 {
+		if p.Text != "" {
+			return nil, fmt.Errorf("mobilesam: this model needs a BOX or POINT prompt, not text — "+
+				"a text prompt like %q is for the 'grounded-sam' model (text → boxes → masks). "+
+				"Either run `grounded-sam ... --prompt %q`, or give mobile-sam a box: `mobile-sam ... --box x,y,w,h`",
+				p.Text, p.Text)
+		}
 		return nil, fmt.Errorf("mobilesam: a prompt (box or point) is required — SAM segments around a prompt, " +
-			"e.g. `run mobile-sam img.jpg --box x,y,w,h`")
+			"e.g. `run mobile-sam img.jpg --box x,y,w,h` (for text-driven segmentation use the 'grounded-sam' model)")
 	}
 	return sets, nil
 }

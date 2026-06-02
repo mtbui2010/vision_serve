@@ -1,0 +1,31 @@
+# GroundingDINO — open-vocabulary detection, Apache-2.0. Text-prompted single-session model
+# (PipelineModel). A fully free community feature — no AGPL, no Python at runtime (CLAUDE.md).
+# Run: `visionserve run grounding-dino img.jpg --prompt "cat. remote."`.
+# Weights are NOT committed (model.onnx is 719MB) — see README.md to download them.
+name: grounding-dino
+task: open_vocab
+license: Apache-2.0
+architecture: grounding-dino
+
+# Single ONNX graph (role "model"). The BERT vocab.txt sits next to it (loaded in Go).
+files:
+  model: model.onnx
+
+input:
+  # Reference only — preprocess (resize 800x800 + ImageNet normalize) happens in Go.
+  width: 800
+  height: 800
+  layout: NCHW
+  letterbox: false
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+postprocess:
+  # box_threshold = conf_threshold (query score filter); text_threshold = token→label filter.
+  conf_threshold: 0.3
+  text_threshold: 0.25
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

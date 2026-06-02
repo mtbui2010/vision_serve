@@ -1,6 +1,6 @@
-// Package imageproc chứa tiện ích xử lý ảnh dùng chung, viết bằng Go thuần
-// (github.com/disintegration/imaging + package image) để giữ binary gọn.
-// KHÔNG dùng OpenCV/cgo ở đây (CLAUDE.md).
+// Package imageproc holds shared image-processing utilities, written in pure Go
+// (github.com/disintegration/imaging + the image package) to keep the binary lightweight.
+// Do NOT use OpenCV/cgo here (CLAUDE.md).
 package imageproc
 
 import (
@@ -10,8 +10,8 @@ import (
 	"github.com/disintegration/imaging"
 )
 
-// LetterboxResult chứa ảnh đã letterbox + thông tin để map ngược toạ độ.
-// Quan hệ: input_coord = orig_coord * Scale + Pad.
+// LetterboxResult holds the letterboxed image + the info needed to map coordinates back.
+// Relation: input_coord = orig_coord * Scale + Pad.
 type LetterboxResult struct {
 	Img   *image.NRGBA
 	Scale float64
@@ -19,11 +19,11 @@ type LetterboxResult struct {
 	PadY  int
 }
 
-// Letterbox resize ảnh giữ nguyên tỉ lệ vào khung WxH rồi pad cho đủ kích thước.
-// padColor là màu nền vùng pad.
+// Letterbox resizes the image preserving aspect ratio into a WxH frame, then pads it to full size.
+// padColor is the background color of the pad region.
 //
-// TODO(verify): màu pad đúng cho RF-DETR cần xác nhận theo cách model được train/
-// export (nhiều DETR pad bằng 0, một số pipeline dùng xám 114). Mặc định để (0,0,0).
+// TODO(verify): the correct pad color for RF-DETR needs to be confirmed against how the model was
+// trained/exported (many DETRs pad with 0, some pipelines use gray 114). Defaults to (0,0,0).
 func Letterbox(src image.Image, w, h int, padColor color.NRGBA) LetterboxResult {
 	b := src.Bounds()
 	sw, sh := b.Dx(), b.Dy()
@@ -51,8 +51,8 @@ func Letterbox(src image.Image, w, h int, padColor color.NRGBA) LetterboxResult 
 	return LetterboxResult{Img: canvas, Scale: scale, PadX: padX, PadY: padY}
 }
 
-// MapBoxToOriginal map một bbox [x,y,w,h] từ toạ độ ảnh đã letterbox về ảnh GỐC.
-// Đây là bước hay sai nhất (CLAUDE.md) — tách riêng để test kỹ.
+// MapBoxToOriginal maps a bbox [x,y,w,h] from letterboxed-image coordinates back to the ORIGINAL image.
+// This is the most error-prone step (CLAUDE.md) — kept separate to test it thoroughly.
 func (lb LetterboxResult) MapBoxToOriginal(x, y, w, h float64) (ox, oy, ow, oh float64) {
 	ox = (x - float64(lb.PadX)) / lb.Scale
 	oy = (y - float64(lb.PadY)) / lb.Scale

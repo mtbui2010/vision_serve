@@ -1,0 +1,47 @@
+# Keep the Docker build context small and reproducible.
+#
+# NOTE: Docker reads the ignore file from the BUILD CONTEXT ROOT (here the repo root),
+# i.e. it looks for `./.dockerignore`. Because the Dockerfiles live in deploy/, copy this
+# file to the repo root before building, or let CI do it:
+#
+#     cp deploy/.dockerignore .dockerignore
+#     docker build -f deploy/Dockerfile -t visionserve .
+#
+# (BuildKit also auto-detects `deploy/Dockerfile.dockerignore` if you name it that way.)
+
+# VCS / CI
+.git
+.github
+.gitignore
+
+# Build outputs (binary is rebuilt inside the image)
+bin/
+visionserve
+
+# Model weights & exported artifacts (mounted at runtime via the /models volume)
+*.onnx
+*.pt
+*.pth
+*.engine
+*.trt
+
+# Demo / sample / client material not needed by the server build
+demo/
+clients/
+scripts/
+docs/
+*.png
+*.jpg
+*.jpeg
+
+# Local tooling / editor noise
+.claude
+.DS_Store
+*.swp
+*.test
+*.out
+coverage.*
+
+# Jetson ORT drop-in is only consumed by Dockerfile.edge (kept out of CPU/x64 builds)
+# Comment the next line out if you build the Jetson variant from this context.
+deploy/ort-jetson/

@@ -1,18 +1,45 @@
-# Thêm model mới vào VisionServe
+# Adding a new model to VisionServe
 
-> Mục tiêu thiết kế: **thêm model = thêm package, KHÔNG sửa core** (`server`/`engine`/`lifecycle`).
+> Design goal: **adding a model = adding a package, with NO core changes**
+> (`server` / `engine` / `lifecycle`).
 
-## ⚖️ Ràng buộc license (BẮT BUỘC)
+VisionServe is fully free and open-source (Apache-2.0). Contributions of new
+permissive models are welcome.
 
-Chỉ chấp nhận model **license permissive**: Apache-2.0 / MIT / BSD.
-**TUYỆT ĐỐI KHÔNG** thêm model AGPL (YOLO/Ultralytics, FastSAM, YOLO-World). Manifest
-phải khai báo `license` đúng — registry sẽ từ chối nếu không nằm trong allowlist.
+## Licensing constraint (MANDATORY)
 
-## 4 bước
+Only **permissive-licensed** models are accepted: **Apache-2.0 / MIT / BSD**.
+**NEVER** add an AGPL model (Ultralytics YOLO, FastSAM, YOLO-World). Your manifest
+must declare `license` accurately — the registry rejects anything outside the allowlist.
 
-### 1. Tạo package `internal/models/<name>/`
+Why this matters even though the project is free: AGPL is viral copyleft. Pulling one
+AGPL model in would relicense the whole project — and every downstream deployer —
+under AGPL, breaking the permissive promise that lets the entire community (including
+commercial and closed deployments) use VisionServe freely. "It's on HuggingFace" is
+**not** a license; verify the model's actual license. Being community-driven *requires*
+this discipline.
 
-Implement interface `Model` (xem `internal/models/model.go`):
+## Two kinds of model
+
+Pick the interface that matches your architecture (`internal/models/model.go`):
+
+- **Plain `Model`** — a single ONNX graph driven by the engine as `pre → infer → post`.
+  The model implements `Preprocess` / `Postprocess` only; it does **not** call the
+  session itself. Example: RF-DETR.
+- **`PipelineModel`** — a **prompted** and/or **multi-session** model that drives its
+  own inference. It implements `Roles()` (session keys) + `Infer(img, prompt, Runner)`,
+  and its manifest declares a `files:` map (role → ONNX path). Lifecycle loads and owns
+  the sessions; the model orchestrates them via the `Runner`. Examples: MobileSAM
+  (encoder + decoder), GroundingDINO (text-prompted), Grounded-SAM (GroundingDINO → MobileSAM).
+
+Both produce the same unified `Result` (`Detections` and/or `Masks`, masks as
+column-major RLE). Never invent a per-model schema.
+
+## Steps
+
+### 1. Create the package `internal/models/<name>/`
+
+#### Plain `Model` (no core change):
 
 ```go
 package mymodel
@@ -27,45 +54,75 @@ func init() { models.Register("my-arch", New) }
 
 type myModel struct{ cfg models.Config }
 
-func New(cfg models.Config) (models.Model, error) { return &myModel{cfg: cfg}, nil }
+func New(cfg models.Config) (models.Base, error) { return &myModel{cfg: cfg}, nil }
 
 func (m *myModel) Name() string          { return m.cfg.Name }
 func (m *myModel) Task() models.Task     { return models.TaskDetection }
-func (m *myModel) InputName() string     { return "" } // "" = engine tự dò từ ONNX
+func (m *myModel) InputName() string     { return "" } // "" = let the engine probe the ONNX
 func (m *myModel) OutputNames() []string { return nil }
 
 func (m *myModel) Preprocess(img image.Image) (engine.Tensor, models.PreprocessMeta, error) {
-    // resize/letterbox/normalize → tensor; lưu scale/pad vào meta
+    // resize/letterbox/normalize → tensor; record scale/pad in meta
 }
 func (m *myModel) Postprocess(outs []engine.Tensor, meta models.PreprocessMeta) (models.Result, error) {
-    // decode output → Result; BBox PHẢI map về toạ độ ảnh GỐC qua meta
+    // decode output → Result; BBox MUST be mapped back to ORIGINAL image coords via meta
 }
 ```
 
-### 2. Đăng ký import blank trong `cmd/visionserve/main.go`
+#### Prompted / multi-session `PipelineModel`:
+
+```go
+func init() { models.Register("my-pipeline", New) }
+
+type myPipe struct{ cfg models.Config }
+
+func New(cfg models.Config) (models.Base, error) { return &myPipe{cfg: cfg}, nil }
+
+func (m *myPipe) Name() string      { return m.cfg.Name }
+func (m *myPipe) Task() models.Task { return models.TaskSegmentation }
+
+// Roles are the session keys to load; each MUST be a key in the manifest 'files' map.
+func (m *myPipe) Roles() []string { return []string{"encoder", "decoder"} }
+
+// Infer drives the full pipeline. The prompt carries Text / Boxes / Points (in original
+// image coords). Call r.Run(role, inputs) per stage; lifecycle owns the sessions.
+func (m *myPipe) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
+    // e.g. encode image, then decode with the box/point/text prompt → Result (Detections/Masks)
+}
+```
+
+The prompt is shared across CLI flags and HTTP fields (`models.ParsePrompt`):
+`--prompt`/`prompt` (text), `--box`/`box` (`x,y,w,h`), `--point`/`point` (`x,y[,label]`).
+
+### 2. Register a blank import in `cmd/visionserve/main.go`
 
 ```go
 import _ "visionserve/internal/models/mymodel"
 ```
 
-(Đây là chỗ DUY NHẤT trong core cần đụng tới — chỉ một dòng import.)
+(This is the ONLY core touch point — a single import line.)
 
-### 3. Tạo thư mục registry `models/<name>/`
+### 3. Create the registry directory `models/<name>/`
 
-- `manifest.yaml` (xem [manifest-spec.md](manifest-spec.md)) — `architecture` khớp tên đã `Register`.
-- `README.md` hướng dẫn tải/export weights ONNX (**không commit** file lớn).
-- (tuỳ chọn) file labels.
+- `manifest.yaml` (see [manifest-spec.md](manifest-spec.md)) — `architecture` must match
+  the name you `Register`ed. Multi-session models declare a `files:` map instead of (or
+  alongside) `model_file`.
+- `README.md` explaining how to download/export the ONNX weights (**do not commit** large files).
+- (optional) a labels file.
 
-### 4. Viết test cho pre/postprocess
+### 4. Write tests for pre/postprocess
 
-Đây là phần dễ sai nhất (CLAUDE.md). Test tối thiểu:
-- letterbox/normalize ra đúng shape + giá trị mẫu.
-- postprocess map box về toạ độ ảnh gốc đúng (kiểm tra trường hợp có padding).
+This is the most error-prone part (CLAUDE.md). At minimum:
+- letterbox/normalize produce the correct shape + sample values.
+- postprocess maps boxes back to original-image coords correctly (test the padded case).
+- for `PipelineModel`s, prompt parsing and stage chaining behave as expected.
 
-## Lưu ý quan trọng
+## Important notes
 
-- **KHÔNG đoán format output ONNX.** Xác minh shape thật trước khi viết postprocess.
-  Chưa rõ → viết stub + `TODO`, đừng bịa.
-- RF-DETR là **NMS-free** — đừng áp NMS của YOLO. Model anchor-based mới có thể dùng
+- **Do NOT guess the ONNX output format.** Verify the real tensor shapes before writing
+  postprocess. If unsure → write a stub + `TODO`, do not fabricate.
+- RF-DETR is **NMS-free** — do not apply YOLO-style NMS. Anchor-based models may use
   `imageproc.NMS`.
-- `Infer` (gọi session) KHÔNG thuộc model — engine+lifecycle lo. Model chỉ pre/post.
+- Running a session is **not** the model's job for plain `Model`s — engine + lifecycle
+  handle it; the model does pre/post only. `PipelineModel`s orchestrate via `Runner`, but
+  lifecycle still owns and frees the sessions.

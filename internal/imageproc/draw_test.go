@@ -10,7 +10,7 @@ import (
 
 func TestDrawDetectionsKeepsBoundsAndDrawsBox(t *testing.T) {
 	src := image.NewRGBA(image.Rect(0, 0, 200, 150))
-	// nền trắng để dễ phát hiện pixel bị vẽ đè.
+	// white background to make overdrawn pixels easy to detect.
 	for y := 0; y < 150; y++ {
 		for x := 0; x < 200; x++ {
 			src.Set(x, y, color.RGBA{0xFF, 0xFF, 0xFF, 0xFF})
@@ -20,13 +20,13 @@ func TestDrawDetectionsKeepsBoundsAndDrawsBox(t *testing.T) {
 
 	out := DrawDetections(src, dets)
 	if out.Bounds() != src.Bounds() {
-		t.Fatalf("bounds đổi: %v != %v", out.Bounds(), src.Bounds())
+		t.Fatalf("bounds changed: %v != %v", out.Bounds(), src.Bounds())
 	}
-	// nguồn KHÔNG bị sửa (DrawDetections vẽ trên bản sao).
+	// the source is NOT modified (DrawDetections draws on a copy).
 	if src.RGBAAt(20, 30) != (color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}) {
-		t.Fatalf("ảnh nguồn bị sửa tại mép box")
+		t.Fatalf("source image was modified at the box edge")
 	}
-	// có ít nhất một pixel trên đường viền box khác trắng.
+	// at least one pixel on the box outline differs from white.
 	changed := false
 	for x := 20; x < 80; x++ {
 		if out.RGBAAt(x, 30) != (color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}) {
@@ -35,21 +35,21 @@ func TestDrawDetectionsKeepsBoundsAndDrawsBox(t *testing.T) {
 		}
 	}
 	if !changed {
-		t.Fatalf("không thấy viền box được vẽ ở mép trên")
+		t.Fatalf("no box outline drawn at the top edge")
 	}
 }
 
 func TestDrawDetectionsClampsOutOfBounds(t *testing.T) {
 	src := image.NewRGBA(image.Rect(0, 0, 64, 64))
-	// box tràn ra ngoài biên + box rỗng — không được panic, không vẽ ngoài ảnh.
+	// boxes overflowing the bounds + an empty box — must not panic, must not draw outside the image.
 	dets := []api.Detection{
-		{BBox: [4]float64{50, 50, 100, 100}, Class: "x", Conf: 0.5}, // tràn phải/dưới
-		{BBox: [4]float64{-10, -10, 5, 5}, Class: "y", Conf: 0.5},   // tràn trái/trên
-		{BBox: [4]float64{10, 10, 0, 0}, Class: "z", Conf: 0.5},     // rỗng
+		{BBox: [4]float64{50, 50, 100, 100}, Class: "x", Conf: 0.5}, // overflow right/bottom
+		{BBox: [4]float64{-10, -10, 5, 5}, Class: "y", Conf: 0.5},   // overflow left/top
+		{BBox: [4]float64{10, 10, 0, 0}, Class: "z", Conf: 0.5},     // empty
 	}
-	out := DrawDetections(src, dets) // chỉ cần không panic
+	out := DrawDetections(src, dets) // just needs to not panic
 	if out.Bounds() != src.Bounds() {
-		t.Fatalf("bounds đổi")
+		t.Fatalf("bounds changed")
 	}
 }
 
@@ -57,6 +57,6 @@ func TestDrawDetectionsEmpty(t *testing.T) {
 	src := image.NewRGBA(image.Rect(0, 0, 32, 32))
 	out := DrawDetections(src, nil)
 	if out.Bounds() != src.Bounds() {
-		t.Fatalf("bounds đổi với 0 detection")
+		t.Fatalf("bounds changed with 0 detections")
 	}
 }

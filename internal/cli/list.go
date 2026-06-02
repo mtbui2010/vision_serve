@@ -6,6 +6,7 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"visionserve/internal/catalog"
 	"visionserve/internal/registry"
 )
 
@@ -27,9 +28,12 @@ func runList(args []string) error {
 	}
 
 	entries := reg.List()
-	if len(entries) == 0 {
-		fmt.Printf("No models found in %s\n", reg.Root())
-		return nil
+
+	// Track which model names already exist locally, so catalog models that are
+	// not yet downloaded can be listed as "available to pull" (Ollama-style).
+	local := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		local[e.Manifest.Name] = true
 	}
 
 	tw := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
@@ -42,5 +46,19 @@ func runList(args []string) error {
 		}
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%dx%d\t%s\n", m.Name, m.Task, m.License, m.Input.Width, m.Input.Height, weights)
 	}
-	return tw.Flush()
+	// Append catalog models not present locally (pullable via `visionserve pull`).
+	for _, c := range catalog.List() {
+		if local[c.Name] {
+			continue
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%dx%d\t%s\n",
+			c.Name, c.Task, c.License, c.InputWidth, c.InputHeight, "available to pull")
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		fmt.Printf("\nNo models downloaded in %s yet. Use `visionserve pull <name>` to fetch one.\n", reg.Root())
+	}
+	return nil
 }

@@ -1,19 +1,51 @@
-# docker-compose.yml — chạy VisionServe (GPU) cục bộ.
-# Yêu cầu nvidia-container-toolkit để cấp GPU cho container.
+# deploy/docker-compose.yml — run the VisionServe SERVER locally.
+#
+# Default service runs the CPU image (no GPU / no host setup required):
+#   docker compose -f deploy/docker-compose.yml up --build
+# Then call http://localhost:11435/api/health
+#
+# GPU is opt-in via a compose profile (requires nvidia-container-toolkit on the host):
+#   docker compose -f deploy/docker-compose.yml --profile gpu up --build visionserve-gpu
+
 services:
   visionserve:
     build:
       context: ..
       dockerfile: deploy/Dockerfile
+      args:
+        ORT_VARIANT: cpu
+    # Or use a published image instead of building locally:
+    # image: ghcr.io/OWNER/visionserve:latest
     image: visionserve:latest
     ports:
       - "11435:11435"
     volumes:
-      # mount thư mục model (weights ONNX + manifest) từ host
-      - ../models:/models:ro
-    environment:
-      - VISIONSERVE_MODELS=/models
-      - ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
+      # Model weights (ONNX) + manifests, populated on the host. See deploy/README.md.
+      - ./models:/models
+    command: ["serve", "--addr", ":11435", "--models", "/models"]
+    healthcheck:
+      # Slim runtime has bash but not curl/wget; probe the port via bash /dev/tcp.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/11435 && printf 'GET /api/health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q . <&3"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+
+  # ---- Optional: GPU image (profile "gpu") ----
+  visionserve-gpu:
+    profiles: ["gpu"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        ORT_VARIANT: gpu
+    image: visionserve:gpu
+    ports:
+      - "11435:11435"
+    volumes:
+      - ./models:/models
+    command: ["serve", "--addr", ":11435", "--models", "/models"]
     deploy:
       resources:
         reservations:
@@ -22,3 +54,21 @@ services:
               count: all
               capabilities: [gpu]
     restart: unless-stopped
+
+  # ---- Optional: pre-pull a model into the /models volume (profile "pull") ----
+  # One-shot helper. `visionserve pull` is provided by the CLI; this fetches the weights
+  # into the same ./models directory the server mounts, then exits.
+  #
+  #   docker compose -f deploy/docker-compose.yml --profile pull run --rm pull-rfdetr
+  #
+  pull-rfdetr:
+    profiles: ["pull"]
+    image: visionserve:latest
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    volumes:
+      - ./models:/models
+    # Pull the RF-DETR weights/manifest into the mounted /models volume.
+    command: ["pull", "rf-detr", "--models", "/models"]
+    restart: "no"

@@ -12,10 +12,19 @@ package engine
 import (
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
 )
+
+// Trace, when VISIONSERVE_TRACE is set, surfaces the execution-provider selection and
+// ORT's own diagnostic messages during session creation. This makes a silent fallback
+// to CPU (e.g. a GPU EP failing because libcudnn/libnvinfer is missing from
+// LD_LIBRARY_PATH) visible, instead of being swallowed. Use it to answer "is this
+// actually running on the GPU?".
+var Trace = os.Getenv("VISIONSERVE_TRACE") != ""
 
 var (
 	initOnce sync.Once
@@ -110,6 +119,11 @@ func NewSession(modelPath string, inputNames, outputNames []string, providers []
 	// (TensorRT→CUDA→CPU) but it is confusing. We redirect fd 2 around session creation:
 	// if the session is created SUCCESSFULLY (after fallback) -> swallow the noise; if it FAILS
 	// -> reprint everything so we don't hide the real error.
+	if Trace {
+		fmt.Fprintf(os.Stderr, "engine: [trace] creating session for %s — requested EPs: %s\n",
+			filepath.Base(modelPath), providerNames(providers))
+	}
+
 	var sess *ort.DynamicAdvancedSession
 	captured, runErr := captureStderr(func() error {
 		appendProviders(opts, providers)
@@ -123,7 +137,29 @@ func NewSession(modelPath string, inputNames, outputNames []string, providers []
 		}
 		return nil, fmt.Errorf("engine: failed to create session for %s: %w", modelPath, runErr)
 	}
+	if Trace && captured != "" {
+		// On success we normally swallow ORT's red EP-fallback noise; under trace, show it
+		// so EP load failures (e.g. "libcudnn.so.9: cannot open") are visible.
+		fmt.Fprintf(os.Stderr, "engine: [trace] ORT messages for %s (EP fallback is normal if a GPU lib is missing):\n%s",
+			filepath.Base(modelPath), captured)
+	}
 	return &Session{sess: sess, inputNames: inputNames, outputNames: outputNames}, nil
+}
+
+// providerNames renders the requested EP order for trace output.
+func providerNames(providers []Provider) string {
+	names := make([]string, 0, len(providers))
+	for _, p := range providers {
+		switch p {
+		case ProviderTensorRT:
+			names = append(names, "tensorrt")
+		case ProviderCUDA:
+			names = append(names, "cuda")
+		case ProviderCPU:
+			names = append(names, "cpu")
+		}
+	}
+	return strings.Join(names, " → ")
 }
 
 // appendProviders adds the EPs in priority order. CPU is the default and is skipped.

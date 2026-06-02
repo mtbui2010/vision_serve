@@ -6,11 +6,11 @@ import (
 	"visionserve/internal/engine"
 )
 
-// ImageToCHWFloat chuyển ảnh thành tensor float32 layout NCHW [1,3,H,W],
-// chuẩn hóa theo mean/std (ImageNet-style): v' = (v/255 - mean[c]) / std[c].
-// Nếu mean/std rỗng -> chỉ chia 255 (đưa về [0,1]).
+// ImageToCHWFloat converts an image into a float32 tensor with NCHW layout [1,3,H,W],
+// normalized by mean/std (ImageNet-style): v' = (v/255 - mean[c]) / std[c].
+// If mean/std are empty -> only divide by 255 (mapping to [0,1]).
 //
-// Thứ tự kênh: RGB (channel 0=R, 1=G, 2=B).
+// Channel order: RGB (channel 0=R, 1=G, 2=B).
 func ImageToCHWFloat(img image.Image, mean, std []float32) engine.Tensor {
 	nrgba := toNRGBA(img)
 	b := nrgba.Bounds()
