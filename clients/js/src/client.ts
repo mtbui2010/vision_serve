@@ -8,6 +8,7 @@
  */
 
 import { ModelInfo, Result } from "./types.js";
+import { filterBySize as _filterBySize, type SizeFilterOptions } from "./filter.js";
 
 /** Accepted image inputs for {@link Client.predict}. */
 export type ImageInput = string | Uint8Array | ArrayBuffer | Blob;
@@ -109,6 +110,11 @@ export class Client {
 
     const data = await this.request("POST", "/api/predict", form);
     return Result.fromJSON((data ?? {}) as Record<string, unknown>);
+  }
+
+  /** Filter detections/masks by bounding-box size. */
+  filterBySize(result: Result, opts: SizeFilterOptions): Result {
+    return _filterBySize(result, opts);
   }
 
   // ------------------------------------------------------------------ //

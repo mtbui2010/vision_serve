@@ -8,7 +8,14 @@ next to `manifest.yaml`.
 
 ## Download / export weights
 
-### Option A — download the public ONNX build (fastest, VERIFIED)
+### Option A — pull with VisionServe (recommended)
+
+```bash
+make pull MODEL=rf-detr        # downloads rf-detr-base.onnx from HuggingFace (Ollama-style)
+make pull MODEL=rf-detr-nano   # ~108 MB, 384×384 input, ~23 ms GPU
+```
+
+### Option B — download the public ONNX build manually
 
 The `rf-detr-base-coco.onnx` build (Apache-2.0, COCO) is available on Hugging Face.
 Requires `huggingface_hub`:
@@ -27,7 +34,7 @@ PY
 > That repo is exported straight from Roboflow's `rfdetr`, license Apache-2.0. (The
 > build used for the verification below is stored locally as `rf-detr-base-real.onnx`.)
 
-### Option B — export it yourself from the original checkpoint (official source)
+### Option C — export it yourself from the original checkpoint (official source)
 
 ```bash
 python -m pip install rfdetr        # Roboflow library, Apache-2.0
@@ -88,7 +95,7 @@ The model emits **91 logits/query** = the COCO "paper" index space (with gaps, i
   CORRECTLY. `manifest.yaml` now points to `labels: coco91.txt`.
 - With coco91: idx 17 → `cat`, idx 75 → `remote` — MATCHES the test image.
 
-> If you export with **Option B (the `rfdetr` package)**, re-CHECK whether `pred_logits`
+> If you export with **Option C (the `rfdetr` package)**, re-CHECK whether `pred_logits`
 > has 91 or 80 dimensions (some exports may remap to 80). Choose `labels` (coco91.txt
 > vs coco.txt) to match the dimension count — otherwise labels will be silently off.
 
@@ -138,6 +145,20 @@ fires `car` (~1.00) and `cat` (~0.82). Use it to verify the preprocess→ORT→p
 inverse-map flow, NOT for real inference.
 
 > Operational note: `manifest.yaml` points to `model_file: rf-detr-base.onnx`. When you
-> download the REAL weights (Option A/B above), **OVERWRITE** `rf-detr-base.onnx` with
+> download the REAL weights (Option A/B/C above), **OVERWRITE** `rf-detr-base.onnx` with
 > the real file and `./bin/visionserve run rf-detr <image>` works immediately — no
 > manifest change needed.
+
+## Performance
+
+Measured on NVIDIA RTX A6000 (48 GB VRAM), VisionServe Go HTTP server, 20 warm requests.
+
+| Metric | rf-detr (base) | rf-detr-nano |
+|--------|----------------|--------------|
+| p50 latency (end-to-end HTTP) | 78 ms | 57 ms |
+| p95 latency | 105 ms | 90 ms |
+| Inference only (srv p50) | 55 ms | 37 ms |
+| Throughput | 12.6 RPS | 16.9 RPS |
+| VRAM (GPU) | 804 MB | 548 MB |
+| ONNX size | 103 MB | 103 MB |
+| Cold-start | 4.9 s | 4.6 s |

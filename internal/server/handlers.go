@@ -8,6 +8,7 @@ import (
 	"image"
 	"io"
 	"net/http"
+	"strconv"
 
 	// register decoders for common image formats
 	_ "image/jpeg"
@@ -86,7 +87,7 @@ func (s *Server) handleUnload(w http.ResponseWriter, r *http.Request) {
 //   - multipart: model=<name>, image=<file>
 //   - or JSON: { "model": "...", "image_base64": "..." }
 func (s *Server) handlePredict(w http.ResponseWriter, r *http.Request) {
-	model, img, prompt, err := s.parsePredictRequest(r)
+	model, img, prompt, minSize, maxSize, err := s.parsePredictRequest(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -96,56 +97,62 @@ func (s *Server) handlePredict(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if minSize > 0 || maxSize > 0 {
+		res = api.FilterBySize(res, minSize, maxSize)
+	}
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, models.Prompt, error) {
+func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, models.Prompt, float64, float64, error) {
 	ct := r.Header.Get("Content-Type")
 
 	// JSON branch (image_base64 + optional prompt fields)
 	if len(ct) >= 16 && ct[:16] == "application/json" {
 		var req api.PredictJSONRequest
 		if err := json.NewDecoder(io.LimitReader(r.Body, maxImageBytes)).Decode(&req); err != nil {
-			return "", nil, models.Prompt{}, fmt.Errorf("invalid JSON body: %w", err)
+			return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("invalid JSON body: %w", err)
 		}
 		if req.Model == "" || req.ImageBase64 == "" {
-			return "", nil, models.Prompt{}, fmt.Errorf("both 'model' and 'image_base64' are required")
+			return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("both 'model' and 'image_base64' are required")
 		}
 		raw, err := base64.StdEncoding.DecodeString(req.ImageBase64)
 		if err != nil {
-			return "", nil, models.Prompt{}, fmt.Errorf("invalid image_base64: %w", err)
+			return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("invalid image_base64: %w", err)
 		}
 		img, _, err := image.Decode(bytes.NewReader(raw))
 		if err != nil {
-			return "", nil, models.Prompt{}, fmt.Errorf("failed to decode image: %w", err)
+			return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("failed to decode image: %w", err)
 		}
 		prompt, err := models.ParsePrompt(req.Prompt, req.Box, req.Point)
 		if err != nil {
-			return "", nil, models.Prompt{}, err
+			return "", nil, models.Prompt{}, 0, 0, err
 		}
-		return req.Model, img, prompt, nil
+		return req.Model, img, prompt, req.MinSize, req.MaxSize, nil
 	}
 
-	// Multipart branch (form fields: model, image, optional prompt/box/point)
+	// Multipart branch (form fields: model, image, optional prompt/box/point/min_size/max_size)
 	if err := r.ParseMultipartForm(maxImageBytes); err != nil {
-		return "", nil, models.Prompt{}, fmt.Errorf("failed to parse multipart form: %w", err)
+		return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("failed to parse multipart form: %w", err)
 	}
 	model := r.FormValue("model")
 	if model == "" {
-		return "", nil, models.Prompt{}, fmt.Errorf("missing 'model' field")
+		return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("missing 'model' field")
 	}
 	file, _, err := r.FormFile("image")
 	if err != nil {
-		return "", nil, models.Prompt{}, fmt.Errorf("missing 'image' file: %w", err)
+		return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("missing 'image' file: %w", err)
 	}
 	defer file.Close()
 	img, _, err := image.Decode(io.LimitReader(file, maxImageBytes))
 	if err != nil {
-		return "", nil, models.Prompt{}, fmt.Errorf("failed to decode image: %w", err)
+		return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("failed to decode image: %w", err)
 	}
 	prompt, err := models.ParsePrompt(r.FormValue("prompt"), r.FormValue("box"), r.FormValue("point"))
 	if err != nil {
-		return "", nil, models.Prompt{}, err
+		return "", nil, models.Prompt{}, 0, 0, err
 	}
-	return model, img, prompt, nil
+	// parse size filters; ignore parse errors (default 0 = no limit)
+	minSize, _ := strconv.ParseFloat(r.FormValue("min_size"), 64)
+	maxSize, _ := strconv.ParseFloat(r.FormValue("max_size"), 64)
+	return model, img, prompt, minSize, maxSize, nil
 }

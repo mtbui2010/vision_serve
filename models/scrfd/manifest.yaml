@@ -1,0 +1,23 @@
+name: scrfd
+model_file: det_10g.onnx
+architecture: scrfd
+task: detection
+license: MIT
+
+input:
+  width: 640
+  height: 640
+  layout: NCHW
+  letterbox: true
+  normalize:
+    mean: [127.5, 127.5, 127.5]
+    std: [128.0, 128.0, 128.0]
+
+postprocess:
+  type: scrfd
+  conf_threshold: 0.5
+  max_detections: 1000
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

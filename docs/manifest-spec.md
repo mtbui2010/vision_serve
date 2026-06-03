@@ -7,7 +7,7 @@ Each model is a subdirectory in the registry (`./models/<name>/`) containing a
 
 ```yaml
 name: rf-detr                 # required — model identifier in the registry
-task: detection               # required — detection | segmentation | open_vocab
+task: detection               # required — detection | segmentation | open_vocab | depth | classification | embed
 license: Apache-2.0           # required — permissive ONLY (Apache-2.0/MIT/BSD); AGPL forbidden
 architecture: rf-detr         # optional — factory key (default = name)
 model_file: rf-detr-base.onnx # required (when no `files:`) — relative path to the .onnx

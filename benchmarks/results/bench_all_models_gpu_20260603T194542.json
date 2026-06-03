@@ -1,0 +1,42 @@
+{
+  "hardware": {
+    "gpu": "GPU 0: NVIDIA RTX A6000 (UUID: GPU-eae6cdda-91ef-d5fd-309d-6ef857dd3abf)",
+    "cpu_cores": 48,
+    "ram_gb": 251
+  },
+  "device": "gpu",
+  "timestamp": "20260603T194542",
+  "n_runs": 20,
+  "results": [
+    {
+      "model": "efficientnet-b0",
+      "device": "gpu",
+      "model_size_mb": 20.2,
+      "cold_ms": 2985.9,
+      "p50": 40.2,
+      "p95": 57.5,
+      "p99": 57.5,
+      "mean": 41.3,
+      "rps": 24.22,
+      "n": 20,
+      "srv_p50": 11.0,
+      "rss_mb": 737,
+      "vram_mb": 356
+    },
+    {
+      "model": "mobilenet-v3",
+      "device": "gpu",
+      "model_size_mb": 9.7,
+      "cold_ms": 2884.8,
+      "p50": 38.2,
+      "p95": 56.2,
+      "p99": 56.2,
+      "mean": 38.4,
+      "rps": 26.05,
+      "n": 20,
+      "srv_p50": 8.5,
+      "rss_mb": 746,
+      "vram_mb": 308
+    }
+  ]
+}

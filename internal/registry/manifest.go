@@ -22,9 +22,12 @@ var licenseAllowlist = map[string]bool{
 }
 
 var validTasks = map[api.Task]bool{
-	api.TaskDetection:    true,
-	api.TaskSegmentation: true,
-	api.TaskOpenVocab:    true,
+	api.TaskDetection:      true,
+	api.TaskSegmentation:   true,
+	api.TaskOpenVocab:      true,
+	api.TaskDepth:          true,
+	api.TaskClassification: true,
+	api.TaskEmbed:          true,
 }
 
 // Manifest is the "Modelfile for CV" — specified in docs/manifest-spec.md.

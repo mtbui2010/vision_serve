@@ -1,0 +1,122 @@
+{
+  "hardware": {
+    "gpu": "GPU 0: NVIDIA RTX A6000 (UUID: GPU-eae6cdda-91ef-d5fd-309d-6ef857dd3abf)",
+    "cpu_cores": 48,
+    "ram_gb": 251
+  },
+  "device": "gpu",
+  "timestamp": "20260603T175440",
+  "n_runs": 20,
+  "results": [
+    {
+      "model": "rf-detr",
+      "device": "gpu",
+      "model_size_mb": 102.9,
+      "cold_ms": 4054.1,
+      "p50": 69.0,
+      "p95": 106.3,
+      "p99": 106.3,
+      "mean": 70.8,
+      "rps": 14.12,
+      "n": 20,
+      "srv_p50": 51.7,
+      "rss_mb": 826,
+      "vram_mb": 804
+    },
+    {
+      "model": "rf-detr-nano",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "rt-detr",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "scrfd",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "mobile-sam",
+      "device": "gpu",
+      "model_size_mb": 58.3,
+      "cold_ms": 6526.2,
+      "p50": 124.4,
+      "p95": 151.1,
+      "p99": 151.1,
+      "mean": 121.6,
+      "rps": 8.22,
+      "n": 20,
+      "srv_p50": 108.5,
+      "rss_mb": 964,
+      "vram_mb": 966
+    },
+    {
+      "model": "efficient-sam",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "sam2",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "nano-sam",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "grounding-dino",
+      "device": "gpu",
+      "model_size_mb": 685.5,
+      "cold_ms": 11638.0,
+      "p50": 558.6,
+      "p95": 643.7,
+      "p99": 643.7,
+      "mean": 553.1,
+      "rps": 1.81,
+      "n": 20,
+      "srv_p50": 541.1,
+      "rss_mb": 1551,
+      "vram_mb": 4392
+    },
+    {
+      "model": "grounded-sam",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "depth-anything-v2",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "midas",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "efficientnet-b0",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "mobilenet-v3",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "clip",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "paddle-ocr",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    }
+  ]
+}

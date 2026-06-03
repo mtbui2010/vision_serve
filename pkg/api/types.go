@@ -7,18 +7,32 @@ package api
 type Task string
 
 const (
-	TaskDetection    Task = "detection"
-	TaskSegmentation Task = "segmentation"
-	TaskOpenVocab    Task = "open_vocab" // open-vocab feature (Grounding DINO)
+	TaskDetection      Task = "detection"
+	TaskSegmentation   Task = "segmentation"
+	TaskOpenVocab      Task = "open_vocab"      // open-vocab feature (Grounding DINO)
+	TaskDepth          Task = "depth"            // monocular depth estimation
+	TaskClassification Task = "classification"   // image classification
+	TaskEmbed          Task = "embed"            // image/text embedding (CLIP, ArcFace)
 )
 
 // Result is the normalized output — a unified schema across tasks.
 type Result struct {
-	Task       Task        `json:"task"`
-	Model      string      `json:"model"`
-	Detections []Detection `json:"detections,omitempty"`
-	Masks      []Mask      `json:"masks,omitempty"`
-	DurationMs float64     `json:"duration_ms"`
+	Task            Task             `json:"task"`
+	Model           string           `json:"model"`
+	Detections      []Detection      `json:"detections,omitempty"`
+	Masks           []Mask           `json:"masks,omitempty"`
+	Classifications []Classification `json:"classifications,omitempty"` // top-K class predictions
+	Embeddings      [][]float32      `json:"embeddings,omitempty"`       // one embedding vector per image/input
+	DepthMap        []float32        `json:"depth_map,omitempty"`        // row-major HxW relative depth
+	DepthWidth      int              `json:"depth_width,omitempty"`
+	DepthHeight     int              `json:"depth_height,omitempty"`
+	DurationMs      float64          `json:"duration_ms"`
+}
+
+// Classification is a single class prediction for TaskClassification.
+type Classification struct {
+	Class string  `json:"class"`
+	Conf  float64 `json:"conf"`
 }
 
 // Detection is a bbox with class + confidence.
@@ -49,11 +63,13 @@ type ModelInfo struct {
 // PredictJSONRequest is the JSON body alternative to multipart when calling /api/predict.
 // Prompt/Box/Point are optional, for models that need a prompt (SAM box, GroundingDINO text).
 type PredictJSONRequest struct {
-	Model       string `json:"model"`
-	ImageBase64 string `json:"image_base64"`
-	Prompt      string `json:"prompt,omitempty"` // text: "cat. remote."
-	Box         string `json:"box,omitempty"`    // "x,y,w,h" (multiple boxes: separated by ';')
-	Point       string `json:"point,omitempty"`  // "x,y[,label]" (multiple: separated by ';')
+	Model       string  `json:"model"`
+	ImageBase64 string  `json:"image_base64"`
+	Prompt      string  `json:"prompt,omitempty"`   // text: "cat. remote."
+	Box         string  `json:"box,omitempty"`      // "x,y,w,h" (multiple boxes: separated by ';')
+	Point       string  `json:"point,omitempty"`    // "x,y[,label]" (multiple: separated by ';')
+	MinSize     float64 `json:"min_size,omitempty"` // minimum bbox area in px² (0 = no limit)
+	MaxSize     float64 `json:"max_size,omitempty"` // maximum bbox area in px² (0 = no limit)
 }
 
 // LoadRequest / UnloadRequest are used by /api/load and /api/unload.

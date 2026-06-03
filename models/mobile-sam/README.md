@@ -31,6 +31,14 @@ the model package only does pre/postprocessing and prompt encoding.
 
 ## Get the two ONNX files
 
+### Option A — pull with VisionServe (recommended)
+
+```bash
+make pull MODEL=mobile-sam    # downloads both ONNX files from HuggingFace (Ollama-style)
+```
+
+### Option B — export from the original checkpoint
+
 The two graphs follow the `samexporter` convention. MobileSAM weights are Apache-2.0;
 `samexporter` is MIT.
 
@@ -121,3 +129,19 @@ Via the HTTP server, `POST /api/predict` with a `box` field (and `model: mobile-
 ```
 
 Running without any prompt is an error — MobileSAM has nothing to segment around.
+
+## Performance
+
+Measured on NVIDIA RTX A6000 (48 GB VRAM), VisionServe Go HTTP server, 20 warm requests.
+
+| Metric | Value |
+|--------|-------|
+| p50 latency (end-to-end HTTP) | 161 ms |
+| p95 latency | 185 ms |
+| Inference only (srv p50) | 136 ms |
+| Throughput | 6.4 RPS |
+| VRAM (GPU) | 966 MB |
+| ONNX size | 58 MB |
+| Cold-start | 7.3 s |
+
+Encoder runs once per image; decoder runs once per box/point prompt. The p50 above is for a single box prompt.

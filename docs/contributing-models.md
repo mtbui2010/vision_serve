@@ -25,15 +25,19 @@ Pick the interface that matches your architecture (`internal/models/model.go`):
 
 - **Plain `Model`** — a single ONNX graph driven by the engine as `pre → infer → post`.
   The model implements `Preprocess` / `Postprocess` only; it does **not** call the
-  session itself. Example: RF-DETR.
+  session itself. Examples: RF-DETR, RT-DETR, Depth Anything V2, MiDaS,
+  EfficientNet-B0, MobileNetV3, SCRFD.
 - **`PipelineModel`** — a **prompted** and/or **multi-session** model that drives its
   own inference. It implements `Roles()` (session keys) + `Infer(img, prompt, Runner)`,
   and its manifest declares a `files:` map (role → ONNX path). Lifecycle loads and owns
   the sessions; the model orchestrates them via the `Runner`. Examples: MobileSAM
-  (encoder + decoder), GroundingDINO (text-prompted), Grounded-SAM (GroundingDINO → MobileSAM).
+  (encoder + decoder), EfficientSAM (encoder + decoder), SAM2 (multi-scale
+  encoder + decoder), GroundingDINO (text-prompted), Grounded-SAM
+  (GroundingDINO → MobileSAM), CLIP (image + text encoders).
 
-Both produce the same unified `Result` (`Detections` and/or `Masks`, masks as
-column-major RLE). Never invent a per-model schema.
+All produce the same unified `Result` (`Detections`, `Masks`, `Classifications`,
+`DepthMap`, or `Embeddings` depending on the task; masks as column-major RLE).
+Never invent a per-model schema.
 
 ## Steps
 

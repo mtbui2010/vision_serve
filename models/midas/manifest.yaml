@@ -1,0 +1,21 @@
+name: midas
+model_file: midas_v21_small_256.onnx
+architecture: midas
+task: depth
+license: MIT
+
+input:
+  width: 256
+  height: 256
+  layout: NCHW
+  letterbox: false
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std:  [0.229, 0.224, 0.225]
+
+postprocess:
+  type: depth
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

@@ -14,10 +14,13 @@ VisionServe is **fully free and open-source**, built for the community under
 **Apache-2.0**. Every feature here is in scope and free to use, including for
 commercial, edge, and closed deployments.
 
-> **Status:** detection (RF-DETR), segmentation (MobileSAM), open-vocabulary detection
-> (GroundingDINO), and **Grounded-SAM** (text → boxes → masks) all run end-to-end,
-> GPU-accelerated. **Python** and **JavaScript/TypeScript** clients, a Docker server
-> image, and Ollama-style `pull` from HuggingFace are included.
+> **Status:** detection (RF-DETR, RT-DETR), segmentation (MobileSAM, EfficientSAM,
+> SAM2-Tiny), open-vocabulary detection (GroundingDINO), Grounded-SAM (text → boxes
+> → masks), depth estimation (Depth Anything V2, MiDaS), classification
+> (EfficientNet-B0, MobileNetV3), image embeddings (CLIP), face detection (SCRFD), and
+> OCR (PaddleOCR) all run end-to-end, GPU-accelerated. NanoSAM requires manual ONNX
+> download (no HuggingFace source). **Python** and **JavaScript/TypeScript** clients, a
+> Docker server image, and Ollama-style `pull` from HuggingFace are included.
 
 ---
 
@@ -30,9 +33,12 @@ flowchart TD
     Server --> Lifecycle[Lifecycle Manager<br/>lazy load / auto-unload]
     Lifecycle --> Pipeline[Inference Pipeline<br/>pre → infer → post]
     Pipeline --> ModelIf[Model interface]
-    ModelIf --> RFDETR[RF-DETR<br/>detection]
-    ModelIf --> SAM[MobileSAM<br/>segmentation]
+    ModelIf --> RFDETR[RF-DETR / RT-DETR<br/>detection]
+    ModelIf --> SAM[MobileSAM / EfficientSAM / SAM2<br/>segmentation]
     ModelIf --> GDINO[GroundingDINO<br/>open-vocab]
+    ModelIf --> GSAM[Grounded-SAM<br/>text → boxes → masks]
+    ModelIf --> DEPTH[Depth Anything V2 / MiDaS<br/>depth estimation]
+    ModelIf --> CLS[EfficientNet-B0 / MobileNetV3<br/>classification]
     Pipeline --> ORT[ONNX Runtime<br/>TensorRT/CUDA/CoreML/DirectML/OpenVINO/CPU]
 ```
 
@@ -104,28 +110,51 @@ On edge devices (Jetson) use an ORT build with the **TensorRT/CUDA EP**.
 # Detection
 make run MODEL=rf-detr IMAGE=image.jpg                        # → detection JSON
 make run MODEL=rf-detr IMAGE=image.jpg OUT=out.png           # + draw bboxes, save out.png
+make run MODEL=rt-detr IMAGE=image.jpg                        # RT-DETR (640×640, NMS-free)
 
-# Segmentation — MobileSAM needs a box or point prompt (original-image coords)
+# Segmentation — needs a box or point prompt (original-image coords)
 make run MODEL=mobile-sam IMAGE=img.jpg BOX=34,58,120,240 OUT=mask.png
 make run MODEL=mobile-sam IMAGE=img.jpg POINT=95,180,1 OUT=mask.png   # label 1=fg 0=bg
+make run MODEL=efficient-sam IMAGE=img.jpg BOX=34,58,120,240 OUT=mask.png
+make run MODEL=sam2 IMAGE=img.jpg BOX=34,58,120,240 OUT=mask.png
 
 # Open-vocabulary detection — text prompt (lowercased, dot-separated)
 make run MODEL=grounding-dino IMAGE=img.jpg PROMPT="cat. remote." OUT=boxes.png
 
 # Grounded-SAM — text → boxes → masks
 make run MODEL=grounded-sam IMAGE=img.jpg PROMPT="cat. remote." OUT=masks.png
+
+# Depth estimation
+make run MODEL=depth-anything-v2 IMAGE=img.jpg                # → depth JSON
+make run MODEL=midas IMAGE=img.jpg                            # lightweight depth (256×256)
+
+# Classification
+make run MODEL=efficientnet-b0 IMAGE=img.jpg                  # → top-5 ImageNet classes
+make run MODEL=mobilenet-v3 IMAGE=img.jpg                     # lightweight classifier
+
+# Face detection + OCR + image embeddings
+make run MODEL=scrfd IMAGE=photo.jpg OUT=faces.png            # face boxes with keypoints
+make run MODEL=paddle-ocr IMAGE=doc.jpg                       # text detection + recognition
+make run MODEL=clip IMAGE=img.jpg                             # 512-d embedding vector
+
+# Size filtering — drop objects smaller or larger than a threshold (bbox area in px²)
+make run MODEL=rf-detr IMAGE=img.jpg MIN_SIZE=1000            # ignore small objects < 1000 px²
+make run MODEL=rf-detr IMAGE=img.jpg MAX_SIZE=50000           # ignore very large objects
+make run MODEL=mobile-sam IMAGE=img.jpg BOX=10,10,200,200 MIN_SIZE=5000 MAX_SIZE=200000
 ```
 
 **`make run` variables:**
 
 | Variable | For | Example |
 |----------|-----|---------|
-| `MODEL` | which model | `rf-detr`, `mobile-sam`, `grounding-dino`, `grounded-sam` |
+| `MODEL` | which model | `rf-detr`, `rt-detr`, `mobile-sam`, `efficient-sam`, `sam2`, `nano-sam`, `grounding-dino`, `grounded-sam`, `depth-anything-v2`, `midas`, `efficientnet-b0`, `mobilenet-v3`, `clip`, `scrfd`, `paddle-ocr` |
 | `IMAGE` | input image path | `IMAGE=cats.jpg` |
-| `OUT` | save image with drawn bboxes/masks | `OUT=out.png` |
+| `OUT` | save annotated image (all tasks: boxes, masks, top-K text, depth colormap) | `OUT=out.png` |
 | `PROMPT` | open-vocab text | `PROMPT="cat. remote."` |
 | `BOX` | SAM box prompt | `BOX=34,58,120,240` (multiple via `;`) |
 | `POINT` | SAM point prompt | `POINT=95,180,1` (label 1=fg 0=bg) |
+| `MIN_SIZE` | min bbox area in px² — filter out objects smaller than this | `MIN_SIZE=1000` |
+| `MAX_SIZE` | max bbox area in px² — filter out objects larger than this | `MAX_SIZE=100000` |
 | `GPU` | `1` (default) or `0` to force CPU | `GPU=0` |
 | `MODELS` | registry directory | `MODELS=./models` |
 
@@ -181,6 +210,8 @@ curl -s -H 'Content-Type: application/json' \
 | `prompt` | open-vocab text | `"cat. remote."` |
 | `box` | SAM box | `"x,y,w,h"` (multiple separated by `;`) |
 | `point` | SAM point | `"x,y[,label]"` (multiple separated by `;`) |
+| `min_size` | filter small objects (bbox area px²) | `"1000"` |
+| `max_size` | filter large objects (bbox area px²) | `"100000"` |
 
 ### 6. Infer from Python
 
@@ -188,7 +219,7 @@ A small client library lives in [`clients/python/`](clients/python/). It accepts
 path, a `PIL.Image`, a `numpy.ndarray`, or raw `bytes`, and parses the unified `Result`.
 
 ```bash
-pip install visionserve               # once published to PyPI
+pip install visionserve               # from PyPI
 # or from source:
 pip install -e clients/python         # optional extras: 'clients/python[images]'
 make serve                            # start the server (another terminal)
@@ -207,14 +238,46 @@ res = client.predict("rf-detr", "image.jpg")
 for d in res.detections:
     print(d.cls, round(d.conf, 3), d.bbox)   # bbox = [x, y, w, h] in original pixels
 
+# RT-DETR (640×640, COCO-80)
+res = client.predict("rt-detr", "image.jpg")
+for d in res.detections:
+    print(d.cls, round(d.conf, 3), d.bbox)
+
 # Segmentation — pass a box; works with a numpy ndarray input too
 import numpy as np
 res = client.predict("mobile-sam", "image.jpg", box=[34, 58, 120, 240])
 mask = res.masks[0].to_ndarray(width=640, height=480)   # bool (H, W) numpy array
 
+# EfficientSAM or SAM2 — same prompt interface as MobileSAM
+res = client.predict("efficient-sam", "image.jpg", box=[34, 58, 120, 240])
+res = client.predict("sam2", "image.jpg", box=[34, 58, 120, 240])
+
 # Open-vocab segmentation — text prompt → boxes + masks
 res = client.predict("grounded-sam", "image.jpg", prompt="cat. remote.")
 print([d.cls for d in res.detections], "→", len(res.masks), "masks")
+
+# Depth estimation
+res = client.predict("depth-anything-v2", "image.jpg")
+import numpy as np
+depth = np.array(res.depth_map).reshape(res.depth_height, res.depth_width)
+
+# Classification — returns top-K ImageNet predictions
+res = client.predict("efficientnet-b0", "image.jpg")
+for c in res.classifications:
+    print(c.cls, round(c.conf, 3))
+
+# Size filtering — keep only objects in [min_size, max_size] px² (relative or absolute)
+res = client.predict("rf-detr", "image.jpg")
+small_only = res.filter_by_size(max_size=2000)          # absolute px²
+big_only   = res.filter_by_size(min_size=0.02,          # relative: > 2% of image area
+                                 image_width=1280, image_height=720)
+
+# Visualization — annotate + save image (requires Pillow)
+from visionserve import draw
+annotated = draw(res, "image.jpg")   # PIL.Image: boxes/masks/labels/colormap per task
+annotated.save("out.jpg")
+# or via the result directly:
+res.visualize("image.jpg").save("out.jpg")
 ```
 
 ### 6b. Infer from JavaScript / TypeScript
@@ -225,7 +288,7 @@ runs on **Node >= 18** and in the browser. Image input accepts a file path (Node
 bytes (`Uint8Array`/`ArrayBuffer`), or a `Blob`.
 
 ```bash
-npm install visionserve               # once published to npm
+npm install visionserve               # from npm
 # or from source:
 cd clients/js && npm install && npm run build
 make serve                            # start the server (another terminal)
@@ -240,13 +303,40 @@ const client = new Client("http://localhost:11435");
 const det = await client.predict("rf-detr", "image.jpg");
 for (const d of det.detections) console.log(d.cls, d.conf.toFixed(3), d.bbox);
 
+// RT-DETR (640×640, COCO-80)
+const det2 = await client.predict("rt-detr", "image.jpg");
+for (const d of det2.detections) console.log(d.cls, d.conf.toFixed(3), d.bbox);
+
 // Segmentation — box prompt; decode the column-major RLE mask
 const seg = await client.predict("mobile-sam", "image.jpg", { box: [34, 58, 120, 240] });
 const mask = seg.masks[0]?.toMask(640, 480); // row-major Uint8Array, 1 = inside mask
 
+// EfficientSAM or SAM2 — same prompt interface
+const seg2 = await client.predict("efficient-sam", "image.jpg", { box: [34, 58, 120, 240] });
+
 // Open-vocab segmentation — text prompt → boxes + masks
 const gs = await client.predict("grounded-sam", "image.jpg", { prompt: "cat. remote." });
 console.log(gs.detections.map((d) => d.cls), "→", gs.masks.length, "masks");
+
+// Depth estimation
+const dep = await client.predict("depth-anything-v2", "image.jpg");
+// dep.depthMap is a Float32Array of length dep.depthWidth * dep.depthHeight
+
+// Classification
+const cls = await client.predict("efficientnet-b0", "image.jpg");
+for (const c of cls.classifications) console.log(c.cls, c.conf.toFixed(3));
+
+// Size filtering — keep only objects in [minSize, maxSize] px² (absolute or relative)
+import { filterBySize, toSVG } from "visionserve";
+
+const det = await client.predict("rf-detr", "image.jpg");
+const filtered = filterBySize(det, { minSize: 0.01, maxSize: 0.5,
+                                      imageWidth: 1280, imageHeight: 720 }); // relative
+const filtered2 = filterBySize(det, { minSize: 500 }); // absolute px²
+
+// Visualization — SVG annotation overlay (zero deps, works in browser + Node)
+const svgString = toSVG(det, 1280, 720); // boxes + labels as <svg> string
+// In HTML: <img src="image.jpg"><svg style="position:absolute" innerHTML={svgString}>
 ```
 
 ### 7. Run with Docker (self-contained, no host setup)
@@ -297,19 +387,104 @@ Segmentation results come back under `masks` (each with a column-major RLE-encod
 }
 ```
 
+Classification results come back under `classifications` (top-K ranked predictions):
+
+```json
+{
+  "task": "classification",
+  "model": "efficientnet-b0",
+  "classifications": [
+    { "class": "tabby cat", "conf": 0.72 },
+    { "class": "tiger cat", "conf": 0.14 }
+  ],
+  "duration_ms": 8.2
+}
+```
+
+Depth estimation results come back in `depth_map` (flat row-major float32, relative values):
+
+```json
+{
+  "task": "depth",
+  "model": "depth-anything-v2",
+  "depth_map": [0.32, 0.41, ...],
+  "depth_width": 518,
+  "depth_height": 518,
+  "duration_ms": 31.5
+}
+```
+
 ---
 
 ## Supported models
 
-| Task | Model | License | Status |
-|------|-------|---------|--------|
-| Detection | RF-DETR | Apache-2.0 | working (end-to-end) |
-| Segmentation | MobileSAM | Apache-2.0 | working — needs a box/point prompt |
-| Open-vocab | GroundingDINO | Apache-2.0 | text → boxes |
-| Open-vocab segmentation | Grounded-SAM | Apache-2.0 | text → boxes → masks (GroundingDINO → MobileSAM) |
+| Task | Model | License | Source | Architecture key | Input | Status |
+|------|-------|---------|--------|-----------------|-------|--------|
+| Detection | RF-DETR | Apache-2.0 | [PierreMarieCurie/rf-detr-onnx](https://huggingface.co/PierreMarieCurie/rf-detr-onnx) | `rf-detr` | 560×560 | working |
+| Detection | RT-DETR | Apache-2.0 | [onnx-community/RT-DETR-l-hf](https://huggingface.co/onnx-community/RT-DETR-l-hf) | `rt-detr` | 640×640 | working — NMS-free, COCO-80 |
+| Segmentation | MobileSAM | Apache-2.0 | [Acly/MobileSAM](https://huggingface.co/Acly/MobileSAM) | `mobile-sam` | 1024×1024 | working — box/point prompt |
+| Segmentation | EfficientSAM | Apache-2.0 | [yunyangx/EfficientSAM](https://huggingface.co/yunyangx/EfficientSAM) | `efficient-sam` | 1024×1024 | working — box/point prompt |
+| Segmentation | SAM2-Tiny | Apache-2.0 | [SharpAI/sam2-hiera-tiny-onnx](https://huggingface.co/SharpAI/sam2-hiera-tiny-onnx) | `sam2` | 1024×1024 | working — multi-scale encoder |
+| Segmentation | NanoSAM | Apache-2.0 | [NVIDIA-AI-IOT/nanosam](https://github.com/NVIDIA-AI-IOT/nanosam) (manual) | `nano-sam` | 1024×1024 | implemented — manual download |
+| Open-vocab detection | GroundingDINO | Apache-2.0 | [onnx-community/grounding-dino-tiny-ONNX](https://huggingface.co/onnx-community/grounding-dino-tiny-ONNX) | `grounding-dino` | 800×… | working — text → boxes |
+| Open-vocab segmentation | Grounded-SAM | Apache-2.0 | composite: GroundingDINO + MobileSAM | `grounded-sam` | — | working — text → boxes → masks |
+| Depth estimation | Depth Anything V2 | Apache-2.0 | [onnx-community/depth-anything-v2-small-hf](https://huggingface.co/onnx-community/depth-anything-v2-small-hf) | `depth-anything-v2` | 518×518 | working |
+| Depth estimation | MiDaS | MIT | [Heliosoph/midas-small-onnx](https://huggingface.co/Heliosoph/midas-small-onnx) | `midas` | 256×256 | working |
+| Classification | EfficientNet-B0 | Apache-2.0 | [onnxmodelzoo/efficientnet_b0_Opset17](https://huggingface.co/onnxmodelzoo/efficientnet_b0_Opset17) | `efficientnet` | 224×224 | working — top-K ImageNet |
+| Classification | MobileNetV3-Small | Apache-2.0 | [onnxmodelzoo/mobilenet_v3_small_Opset17](https://huggingface.co/onnxmodelzoo/mobilenet_v3_small_Opset17) | `mobilenet-v3` | 224×224 | working — top-K ImageNet |
+| Image embedding | CLIP | MIT | [khasinski/clip-ViT-B-32-onnx](https://huggingface.co/khasinski/clip-ViT-B-32-onnx) | `clip` | 224×224 | working — 512-d embeddings |
+| Face detection | SCRFD | MIT | [cromsc/scrfd-10g](https://huggingface.co/cromsc/scrfd-10g) | `scrfd` | 640×640 | working |
+| OCR | PaddleOCR | Apache-2.0 | [webnn/PP-OCRv4-ONNX](https://huggingface.co/webnn/PP-OCRv4-ONNX) | `paddle-ocr` | variable | working — text det + rec |
+| Pose estimation | RTMPose | Apache-2.0 | planned | `rtmpose` | 256×192 | **planned** — 17 COCO keypoints |
 
-**All models are permissive-licensed (Apache-2.0).** This is a deliberate, load-bearing
-constraint — not a limitation we work around. See [Licensing discipline](#licensing-discipline).
+**All models are permissive-licensed (Apache-2.0 / MIT).** This is a deliberate,
+load-bearing constraint — not a limitation we work around. See [Licensing discipline](#licensing-discipline).
+
+---
+
+## Model selection guide
+
+Quick reference for choosing the right model. All models are free (Apache-2.0 / MIT).
+
+### Object detection
+
+| Scenario | Model | Why |
+|----------|-------|-----|
+| Max speed — edge / real-time | `rf-detr-nano` | ~23 ms GPU, near YOLO speed, 384×384 |
+| Best COCO accuracy | `rf-detr` | 53.4 AP, NMS-free, 560×560 |
+| Balanced accuracy + speed | `rt-detr` | 53.0 AP, NMS-free, COCO-80, 640×640 |
+| No fixed class list (text query) | `grounding-dino` | zero-shot: `"cat. remote."` → boxes |
+| Face detection | `scrfd` | WiderFace-tuned, returns 5 keypoints |
+
+### Segmentation (all need a box or point prompt)
+
+| Scenario | Model | Why |
+|----------|-------|-----|
+| Fastest SAM on CPU/GPU | `mobile-sam` | TinyViT encoder, good latency vs quality |
+| Lightweight SAM alternative | `efficient-sam` | ViT-Tiny SAMI, similar quality |
+| Best mask quality | `sam2` | Multi-scale encoder, Meta AI SAM2-Tiny |
+| NVIDIA Jetson / TensorRT | `nano-sam` | ResNet-18 encoder, optimized for TRT |
+| Text → masks (zero-shot) | `grounded-sam` | GroundingDINO + MobileSAM chained |
+
+### Depth estimation
+
+| Scenario | Model | Why |
+|----------|-------|-----|
+| Speed-first | `midas` | 256×256, lightweight, MIT |
+| Accuracy-first | `depth-anything-v2` | 518×518, state-of-the-art |
+
+### Classification and embeddings
+
+| Scenario | Model | Why |
+|----------|-------|-----|
+| ImageNet top-K, standard | `efficientnet-b0` | 77.1% top-1, solid baseline |
+| Ultra-lightweight (edge) | `mobilenet-v3` | 67.4% top-1, ~8 MB ONNX, very fast |
+| Zero-shot / visual search / retrieval | `clip` | 512-d L2 embeddings, cosine similarity |
+| OCR — Chinese + English | `paddle-ocr` | PP-OCRv4 DBNet++ det + SVTR-tiny rec |
+
+> **Size filtering tip:** add `--min-size N` / `--max-size N` (px²) to any detection or
+> segmentation run to drop noise detections or objects that are too large. Works for
+> every model — server-side, no extra overhead.
 
 ---
 
@@ -345,41 +520,43 @@ Latency = median of 30 warm requests via the HTTP server (model already loaded).
 Cold-start = wall-clock time from server launch to first response (includes model load +
 ONNX session creation + first inference). Scripts live in [`benchmarks/`](benchmarks/).
 
-### Latency — VisionServe Go vs Python baselines
+### Latency — all models (VisionServe Go HTTP, GPU)
 
-| Model | Baseline | Device | p50 ms | p95 ms | RPS | Cold start | RSS MB | VRAM MB |
-|---|---|---|---:|---:|---:|---:|---:|---:|
-| **RF-DETR** | VisionServe (Go HTTP) | GPU | **70.5** | — | **14.3** | 2 502 | 835 | 804 |
-| RF-DETR | VisionServe (Go HTTP) | CPU | 267 | — | 3.8 | 1 562 | 508 | — |
-| RF-DETR | Python raw ORT (no HTTP) | CPU¹ | 217 | 260 | 4.5 | — | — | — |
-| RF-DETR | Python FastAPI + ORT | CPU¹ | 230 | — | ~4.3 | — | — | — |
-| **GroundingDINO** | VisionServe (Go HTTP) | GPU | **340** | — | **2.9** | 8 903 | 1 532 | 4 392 |
-| GroundingDINO | VisionServe (Go HTTP) | CPU | 2 549 | — | 0.39 | 9 804 | 3 473 | — |
-| GroundingDINO | Python raw ORT (no HTTP) | CPU¹ | 2 478 | — | 0.40 | — | — | — |
-| **Grounded-SAM** | VisionServe (Go HTTP) | GPU | **450** | 498 | **2.2** | ~16 000² | — | ~5 000 |
+Measured on **NVIDIA RTX A6000 (48 GB)**, 20 warm requests via the HTTP server (model already loaded). `srv p50` = server-side inference only; the gap to `p50` is Go preprocess + HTTP overhead.
 
-> ¹ The `onnxruntime` Python package is **CPU-only** (no CUDA EP) — `CUDAExecutionProvider`
-> is not available without installing `onnxruntime-gpu`. This is the default `pip install
-> onnxruntime` experience, which is what most Python users have.
->
-> ² Grounded-SAM cold-start includes loading GroundingDINO (719 MB) + two SAM sessions.
+| Model | Task | Size MB | p50 ms | p95 ms | RPS | srv p50 | VRAM MB | Cold |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| **clip** | embed | 335 | **33** | 69 | 27.9 | 12 | 810 | 5.8 s |
+| **mobilenet-v3** | classification | 10 | **38** | 56 | 26.1 | 9 | 308 | 2.9 s |
+| **efficientnet-b0** | classification | 20 | **40** | 58 | 24.2 | 11 | 356 | 3.0 s |
+| **scrfd** | face detection | 16 | **45** | 69 | 22.4 | 23 | 420 | 3.9 s |
+| **paddle-ocr** | OCR | 15 | **54** | 78 | 17.3 | 34 | 462 | 4.7 s |
+| **rf-detr-nano** | detection | 103 | **57** | 90 | 16.9 | 37 | 548 | 4.6 s |
+| **midas** | depth | 63 | **65** | 98 | 14.6 | 13 | 420 | 4.1 s |
+| **rf-detr** | detection | 103 | **78** | 105 | 12.6 | 55 | 804 | 4.9 s |
+| **mobile-sam** | segmentation | 58 | **161** | 185 | 6.4 | 136 | 966 | 7.3 s |
+| **efficient-sam** | segmentation | 39 | **181** | 247 | 5.5 | 158 | 1628 | 5.8 s |
+| **sam2** | segmentation | 148 | **242** | 544 | 3.9 | 222 | 2508 | 5.3 s |
+| **grounding-dino** | open_vocab | 686 | **570** | 647 | 1.8 | 550 | 4392 | 12.3 s |
+
+> rt-detr, depth-anything-v2, nano-sam, grounded-sam not yet measured — see [Reproducing](#reproducing) to run `bench_all_models.py`.
 
 ### Comparison with YOLO
 
 ```
 YOLOv8n  GPU (PyTorch):       ~18 ms   CNN, 6 MB, AGPL-3.0 ✗
-RF-DETR-nano  GPU (VisionServe): ~23 ms   transformer, 108 MB, Apache-2.0 ✓
-RF-DETR-base  GPU (VisionServe): ~41 ms   transformer, 103 MB, Apache-2.0 ✓
+RF-DETR-nano  GPU (VisionServe): 57 ms    transformer, 103 MB, Apache-2.0 ✓  (srv-only: 37 ms)
+RF-DETR-base  GPU (VisionServe): 78 ms    transformer, 103 MB, Apache-2.0 ✓  (srv-only: 55 ms)
 YOLOv8m  GPU (PyTorch):       ~45 ms   CNN, 52 MB, AGPL-3.0 ✗
 GroundingDINO GPU (VisionServe): ~325 ms  open-vocab (text query), 719 MB, Apache-2.0 ✓
 ```
 
-RF-DETR-nano at 23 ms is **competitive with YOLOv8n**. The gap for RF-DETR-base comes from:
+RF-DETR-nano at 57 ms (srv-only 37 ms) is **competitive with YOLOv8n** at the server level. The gap for RF-DETR-base comes from:
 1. **DETR transformer architecture** — global cross-attention on 300 queries is more expensive
    than YOLO's local grid predictions, but NMS-free and more accurate on dense/occluded scenes.
 2. **CUDA EP vs TensorRT** — we're on CUDA EP (ONNX Runtime). TensorRT would add another
    2–4× speedup; it requires `libnvinfer.so.10` which isn't installed on this host.
-3. **Go preprocess + HTTP** — adds ~29 ms, not the bottleneck.
+3. **Go preprocess + HTTP** — adds ~20 ms overhead on top of inference.
 
 **YOLO (Ultralytics) is forbidden** in VisionServe by design — it is AGPL-3.0 copyleft,
 which would virally relicense the entire project and every downstream user. RF-DETR and
@@ -387,31 +564,58 @@ GroundingDINO are both Apache-2.0 and can be used freely in commercial and close
 
 To get RF-DETR-nano pull it from the catalog:
 ```bash
-make pull MODEL=rf-detr-nano        # ~108 MB, 384×384 input, ~23 ms GPU
+make pull MODEL=rf-detr-nano        # ~103 MB, 384×384 input, 57 ms GPU (srv-only 37 ms)
 ```
 
 ### Key takeaways
 
-- **Use `rf-detr-nano`** if latency matters — 23 ms GPU, near YOLO-speed, Apache-2.0.
-- **GPU is essential for GroundingDINO / Grounded-SAM** — 7.5× faster (340 ms vs 2 549 ms).
-  VisionServe auto-selects GPU via `scripts/gpu-env.sh` (default `GPU=1`).
-- **Go HTTP overhead is only 14–29 ms** — the bottleneck is always ORT inference, not the server.
-- **Python `onnxruntime` is CPU-only by default** — VisionServe properly wires the CUDA EP,
-  giving 3–7× speedup over a typical Python onnxruntime setup.
-- **Cold-start** (~2–16 s depending on model size) is the main cost for one-shot `run` —
-  use `make serve` for production; once warm, latency drops 5–20×.
-- **TensorRT EP** (needs `libnvinfer.so.10`) would give another 2–4× speedup.
-  Planned but not yet wired.
+- **Fastest models (GPU):** CLIP (33 ms), MobileNetV3 (38 ms), EfficientNet-B0 (40 ms) — lightweight tasks.
+- **Face detection:** SCRFD at 45 ms, only 16 MB ONNX, 420 MB VRAM — very efficient.
+- **Detection:** RF-DETR-nano at 57 ms (srv 37 ms), RF-DETR at 78 ms (srv 55 ms). Add `--min-size`/`--max-size` to filter noise.
+- **Depth:** MiDaS at 65 ms (srv 13 ms) — Go preprocess dominates (52 ms overhead). Depth Anything V2 not yet measured.
+- **Segmentation:** MobileSAM (161 ms) < EfficientSAM (181 ms) < SAM2 (242 ms). SAM2 p95 is 544 ms — multi-scale encoder is VRAM-heavy (2.5 GB).
+- **OCR:** PaddleOCR at 54 ms total, 34 ms inference.
+- **Open-vocab:** GroundingDINO at 570 ms GPU (srv 550 ms) — heavy transformer (686 MB, 4.4 GB VRAM). CPU would be ~7× slower.
+- **Go HTTP overhead:** typically 10–55 ms on top of pure inference. Bottleneck is always ORT, not the server.
+- **Cold-start** ranges from 2.9 s (MobileNetV3) to 12.3 s (GroundingDINO). Use `make serve` for production.
+- **TensorRT EP** (needs `libnvinfer.so.10`) gives 2–4× additional speedup — all models have `tensorrt` first in their `runtime.prefer` chain.
+
+### Accuracy reference (from papers / official repos)
+
+> Numbers from original papers / official repos. Measured on standard public benchmarks —
+> **not** by VisionServe. Actual values may vary slightly depending on the ONNX export
+> and preprocessing pipeline. All models are permissive-licensed.
+
+| Task | Model | Metric | Score | Benchmark |
+|------|-------|--------|------:|-----------|
+| Detection | RF-DETR | AP | 53.4 | COCO val2017 |
+| Detection | RF-DETR-nano | AP | 48.0 | COCO val2017 |
+| Detection | RT-DETR-l | AP | 53.0 | COCO val2017 |
+| Face detection | SCRFD-10GF | AP Easy | 95.2 % | WiderFace val |
+| Segmentation | MobileSAM | mIoU | 75.7 | SA-23B (zero-shot) |
+| Segmentation | EfficientSAM-Ti | mIoU | 74.0 | SA-23B (zero-shot) |
+| Segmentation | SAM2-Tiny | J&F | 75.0 | DAVIS 2017 video |
+| Open-vocab det | GroundingDINO-T | AP | 48.4 | COCO zero-shot |
+| Depth | Depth Anything V2-S | AbsRel | 0.076 | NYUv2 |
+| Depth | MiDaS v2.1-small | AbsRel | ≈0.083 | NYUv2 (approx) |
+| Classification | EfficientNet-B0 | Top-1 | 77.1 % | ImageNet-1k |
+| Classification | MobileNetV3-Small | Top-1 | 67.4 % | ImageNet-1k |
+| Image embedding | CLIP ViT-B/32 | Zero-shot Top-1 | 63.4 % | ImageNet |
+| OCR | PP-OCRv4 | Rec Acc | 79.0 % | Chinese OCR benchmark |
 
 ### Reproducing
 
 ```bash
-# run all benchmarks (writes benchmarks/results/all_benchmarks.json)
+# Run all baselines (rf-detr + grounding-dino, GPU + CPU)
 python3 benchmarks/bench.py
 
-# GPU benchmark only
+# Run all 16 models in parallel background processes
+python3 benchmarks/bench_all_models.py --device gpu
+python3 benchmarks/bench_all_models.py --device cpu --workers 4
+
+# GPU benchmark only, specific models
 source scripts/gpu-env.sh
-python3 benchmarks/bench.py
+python3 benchmarks/bench_all_models.py --device gpu --models rf-detr mobile-sam grounding-dino
 ```
 
 ---
@@ -444,9 +648,21 @@ Guide: [docs/contributing-models.md](docs/contributing-models.md).
 
 1. **Core** — serve + run, RF-DETR detection end-to-end, normalized JSON. *(done)*
 2. **Prompted models** — MobileSAM segmentation, GroundingDINO open-vocab, and
-   Grounded-SAM (text → box → mask) on the unified `PipelineModel` path.
+   Grounded-SAM (text → box → mask) on the unified `PipelineModel` path. *(done)*
 3. **Community growth** — more permissive models, a remote model registry (`pull`),
-   and contributor guides — all free and in-scope.
+   Python + JS clients, Docker images, contributor guides — all free and in-scope. *(done)*
+4. **Expanded model coverage** — RT-DETR, EfficientSAM, SAM2-Tiny, Depth Anything V2,
+   MiDaS, EfficientNet-B0, MobileNetV3 added with new `depth` and `classification`
+   task types. *(done)*
+5. **Complete** — CLIP (512-d image embeddings), SCRFD (face detection + keypoints),
+   PaddleOCR (Chinese+English OCR), NanoSAM (Jetson-optimized SAM, manual download — no
+   HuggingFace source). All catalog entries verified against real ONNX tensors.
+   See [docs/model-roadmap-complex.md](docs/model-roadmap-complex.md).
+6. **Planned** — **RTMPose** (2D pose estimation, 17 COCO keypoints): `PipelineModel`
+   bundling a person detector (RF-DETR/RT-DETR) + RTMPose crops, Apache-2.0
+   (OpenMMLab). Requires a new `Result.Poses` schema field (`TaskPose`, `PersonPose`,
+   `Keypoint`). Output tensor format (SimCC vs heatmap) must be verified against real
+   ONNX before implementation. See [docs/model-roadmap-medium.md](docs/model-roadmap-medium.md).
 
 ---
 

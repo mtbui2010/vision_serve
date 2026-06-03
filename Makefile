@@ -51,10 +51,11 @@ install: ## Install the binary into GOBIN/GOPATH bin (use `visionserve` globally
 # to auto-detect a CUDA-enabled ORT lib + the cuDNN/CUDA libs, and fall back to the
 # auto-detected CPU ORT lib if none is found. Add GPU=0 to force CPU.
 
-run: build ## Run on 1 image: make run MODEL=rf-detr IMAGE=path.jpg [OUT=r.png] [BOX=x,y,w,h] [PROMPT="cat."] [POINT=x,y] [GPU=0]
+run: build ## Run on 1 image: make run MODEL=rf-detr IMAGE=path.jpg [OUT=r.png] [BOX=x,y,w,h] [PROMPT="cat."] [POINT=x,y] [MIN_SIZE=px²] [MAX_SIZE=px²] [GPU=0]
 	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; else export ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)"; fi; \
 		"$(BIN_DIR)/$(BINARY)" run --models "$(MODELS)" $(MODEL) "$(IMAGE)" \
-		$(if $(OUT),--out "$(OUT)") $(if $(BOX),--box "$(BOX)") $(if $(PROMPT),--prompt "$(PROMPT)") $(if $(POINT),--point "$(POINT)")'
+		$(if $(OUT),--out "$(OUT)") $(if $(BOX),--box "$(BOX)") $(if $(PROMPT),--prompt "$(PROMPT)") $(if $(POINT),--point "$(POINT)") \
+		$(if $(MIN_SIZE),--min-size "$(MIN_SIZE)") $(if $(MAX_SIZE),--max-size "$(MAX_SIZE)")'
 
 serve: build ## Start the HTTP server: make serve [ADDR=:11435] [GPU=0]
 	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; else export ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)"; fi; \

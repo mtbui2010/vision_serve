@@ -73,19 +73,52 @@ After the volume has the weights, start the server normally.
 
 ---
 
-## GPU (x86_64, CUDA / TensorRT EP)
+## GPU (x86_64, CUDA + TensorRT EP)
 
-Builds on `nvidia/cuda` and bundles the ONNX Runtime **GPU** build (CUDA + TensorRT
-execution providers). Requires the host to have an NVIDIA driver and
-[`nvidia-container-toolkit`](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/).
+The GPU image includes everything for maximum performance:
+
+| Layer | What it provides |
+|---|---|
+| `nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04` | CUDA 12.4 runtime + cuDNN 9 |
+| NVIDIA apt repo → `libnvinfer10` | **TensorRT 10** (libnvinfer.so.10) |
+| ORT GPU tgz | `libonnxruntime_providers_tensorrt.so` + CUDA EP |
+
+With TensorRT EP the manifest's `runtime.prefer: [tensorrt, cuda, cpu]` chain actually
+reaches TRT, giving **2–4× speedup** over the plain CUDA EP:
+
+| Model | CUDA EP | TensorRT EP (expected) |
+|---|---|---|
+| RF-DETR-nano | ~23 ms | ~5–10 ms |
+| RF-DETR-base | ~41 ms | ~10–20 ms |
+| GroundingDINO | ~325 ms | ~80–150 ms |
+
+> TensorRT JIT-compiles an optimized engine on **first load** — this can take 1–5 minutes
+> depending on the model. Subsequent loads reuse the cached engine (in the `/models`
+> volume). Set `VISIONSERVE_TRACE=1` to confirm the TRT EP loaded.
 
 ```bash
+# Build (~3–5 GB, downloads CUDA base + TRT apt packages + ORT GPU tgz)
+make docker ORT_VARIANT=gpu
+# or directly:
 docker build -f deploy/Dockerfile --build-arg ORT_VARIANT=gpu -t visionserve:gpu .
-docker run --rm --gpus all -p 11435:11435 -v "$PWD/models:/models" visionserve:gpu
 
-# compose (profile "gpu"):
+# Run — requires nvidia-container-toolkit on the host
+docker run --rm --gpus all -p 11435:11435 \
+  -v "$PWD/models:/models" \
+  -e VISIONSERVE_TRACE=1 \
+  visionserve:gpu
+
+# Confirm TensorRT EP loaded (look for "[trace]" lines mentioning "tensorrt")
+docker logs <container> 2>&1 | grep -i 'trace\|tensorrt'
+
+# Compose (profile "gpu"):
 docker compose -f deploy/docker-compose.yml --profile gpu up --build visionserve-gpu
 ```
+
+> **Prerequisites on the host:**
+> - NVIDIA driver ≥ 550 (matches CUDA 12.4)
+> - [`nvidia-container-toolkit`](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
+> - The GPU image does NOT need TensorRT on the host — TRT libraries are inside the image.
 
 ---
 

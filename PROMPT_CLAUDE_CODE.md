@@ -52,9 +52,16 @@ people can plug in their own integrations without modifying core.
 | Task | Model | License | Role |
 |------|-------|---------|------|
 | Detection | **RF-DETR** | Apache-2.0 | Core detector, edge-GPU first (Jetson) |
+| Detection | **RT-DETR** | Apache-2.0 | Real-time NMS-free detector, 640×640 |
 | Segmentation | **MobileSAM** | Apache-2.0 | Lightweight box/point-prompted segmentation |
+| Segmentation | **EfficientSAM** | Apache-2.0 | ViT-Tiny encoder, lighter alternative to MobileSAM |
+| Segmentation | **SAM2-Tiny** | Apache-2.0 | Multi-scale encoder, Meta AI SAM2 family |
 | Open-vocab detection | **GroundingDINO** | Apache-2.0 | Text-prompted zero-shot detection — a free feature |
 | Grounded segmentation | **Grounded-SAM** | Apache-2.0 | GroundingDINO boxes → MobileSAM masks (text → masks) |
+| Depth estimation | **Depth Anything V2** | Apache-2.0 | Monocular depth, 518×518 |
+| Depth estimation | **MiDaS** | MIT | Lightweight monocular depth, 256×256 |
+| Classification | **EfficientNet-B0** | Apache-2.0 | ImageNet-1k, 224×224 |
+| Classification | **MobileNetV3-Small** | Apache-2.0 | Lightweight ImageNet-1k, 224×224 |
 
 **License discipline is the reason the project stays free and reusable, not a limitation of
 it.** The project is Apache-2.0 *permissive* precisely so the whole community — including
@@ -161,12 +168,32 @@ visionserve/
 │   │   │   ├── rfdetr.go
 │   │   │   ├── preprocess.go    # resize, normalize, letterbox
 │   │   │   └── postprocess.go   # decode RF-DETR output (NMS-free!)
+│   │   ├── rtdetr/              # detection (plain Model, 640×640, COCO-80)
+│   │   │   └── rtdetr.go
 │   │   ├── mobilesam/           # segmentation (PipelineModel: encoder+decoder)
 │   │   │   ├── mobilesam.go
 │   │   │   ├── preprocess.go
 │   │   │   └── postprocess.go   # decode mask
-│   │   └── groundingdino/       # open-vocab detection (PipelineModel: text prompt)
-│   │       └── groundingdino.go
+│   │   ├── efficientsam/        # segmentation (PipelineModel: encoder+decoder)
+│   │   │   └── efficientsam.go
+│   │   ├── sam2/                # segmentation (PipelineModel: multi-scale encoder+decoder)
+│   │   │   └── sam2.go
+│   │   ├── nanosam/             # segmentation (reuses mobile-sam path, Jetson-optimized)
+│   │   │   └── nanosam.go
+│   │   ├── groundingdino/       # open-vocab detection (PipelineModel: text prompt)
+│   │   │   └── groundingdino.go
+│   │   ├── groundedsam/         # grounded segmentation (PipelineModel: DINO → SAM)
+│   │   │   └── groundedsam.go
+│   │   ├── depth/               # depth estimation (plain Model: Depth Anything V2 + MiDaS)
+│   │   │   └── depth.go
+│   │   ├── classification/      # image classification (plain Model: EfficientNet + MobileNet)
+│   │   │   └── classification.go
+│   │   ├── clip/                # image embedding (PipelineModel: image + text encoder)
+│   │   │   └── clip.go
+│   │   ├── scrfd/               # face detection (plain Model, anchor-based)
+│   │   │   └── scrfd.go
+│   │   └── paddleocr/           # OCR (PipelineModel: det + rec sessions)
+│   │       └── paddleocr.go
 │   │
 │   ├── imageproc/               # shared pure-Go image utilities
 │   │   ├── resize.go
@@ -184,10 +211,40 @@ visionserve/
 │   ├── rf-detr/
 │   │   ├── manifest.yaml
 │   │   └── README.md            # how to fetch ONNX weights (do NOT commit large files)
+│   ├── rt-detr/
+│   │   ├── manifest.yaml
+│   │   └── README.md
 │   ├── mobile-sam/
+│   │   ├── manifest.yaml
+│   │   └── README.md
+│   ├── efficient-sam/
+│   │   ├── manifest.yaml
+│   │   └── README.md
+│   ├── sam2/
+│   │   ├── manifest.yaml
+│   │   └── README.md
+│   ├── nano-sam/
+│   │   └── manifest.yaml        # reuses mobile-sam architecture
+│   ├── grounding-dino/
+│   │   ├── manifest.yaml
+│   │   └── README.md
+│   ├── grounded-sam/
+│   │   ├── manifest.yaml
+│   │   └── README.md
+│   ├── depth-anything-v2/
 │   │   └── manifest.yaml
-│   └── grounding-dino/
-│       └── README.md
+│   ├── midas/
+│   │   └── manifest.yaml
+│   ├── efficientnet-b0/
+│   │   └── manifest.yaml
+│   ├── mobilenet-v3/
+│   │   └── manifest.yaml
+│   ├── clip/
+│   │   └── manifest.yaml
+│   ├── scrfd/
+│   │   └── manifest.yaml
+│   └── paddle-ocr/
+│       └── manifest.yaml
 │
 ├── docs/
 │   ├── architecture.md          # detailed diagrams
@@ -232,9 +289,12 @@ import (
 type Task string
 
 const (
-    TaskDetection    Task = "detection"
-    TaskSegmentation Task = "segmentation"
-    TaskOpenVocab    Task = "open_vocab" // GroundingDINO / Grounded-SAM
+    TaskDetection      Task = "detection"
+    TaskSegmentation   Task = "segmentation"
+    TaskOpenVocab      Task = "open_vocab"      // GroundingDINO / Grounded-SAM
+    TaskDepth          Task = "depth"            // Depth Anything V2, MiDaS
+    TaskClassification Task = "classification"   // EfficientNet-B0, MobileNetV3
+    // TaskEmbed ("embed") is in progress for CLIP
 )
 
 // Base is the minimal interface every model satisfies. Lifecycle type-asserts to the
@@ -291,11 +351,15 @@ type PreprocessMeta struct {
 
 // Result is the unified output schema — ONE schema across all tasks.
 type Result struct {
-    Task       Task        `json:"task"`
-    Model      string      `json:"model"`
-    Detections []Detection `json:"detections,omitempty"`
-    Masks      []Mask      `json:"masks,omitempty"`
-    DurationMs float64     `json:"duration_ms"`
+    Task            Task             `json:"task"`
+    Model           string           `json:"model"`
+    Detections      []Detection      `json:"detections,omitempty"`
+    Masks           []Mask           `json:"masks,omitempty"`
+    Classifications []Classification `json:"classifications,omitempty"` // top-K class predictions
+    DepthMap        []float32        `json:"depth_map,omitempty"`        // row-major H×W relative depth
+    DepthWidth      int              `json:"depth_width,omitempty"`
+    DepthHeight     int              `json:"depth_height,omitempty"`
+    DurationMs      float64          `json:"duration_ms"`
 }
 
 type Detection struct {
@@ -308,6 +372,11 @@ type Mask struct {
     RLE  string     `json:"rle,omitempty"`  // column-major RLE
     BBox [4]float64 `json:"bbox,omitempty"`
     Conf float64    `json:"conf"`
+}
+
+type Classification struct {
+    Class string  `json:"class"`
+    Conf  float64 `json:"conf"`
 }
 ```
 
@@ -376,7 +445,7 @@ visionserve serve                          # start the HTTP server (port 11435)
 visionserve run <model> <image>            # load model + predict + print JSON to stdout
 visionserve list                           # list models in the registry + state
 visionserve ps                             # which models are loaded in memory
-visionserve pull <model>                   # (later) fetch a model from a registry
+visionserve pull <model>                   # fetch a model from HuggingFace (Ollama-style)
 visionserve rm <model>                     # unload a model from memory
 visionserve version
 ```

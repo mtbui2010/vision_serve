@@ -1,0 +1,26 @@
+# SAM2-Tiny — segmentation, Apache-2.0. Prompted, two-session model (PipelineModel).
+# Source: https://github.com/facebookresearch/segment-anything-2 (Apache-2.0, Meta AI)
+# ONNX export: community export — see README.md for download instructions.
+# Needs a PROMPT (box/point): `visionserve run sam2 img.jpg --box x,y,w,h`.
+name: sam2
+architecture: sam2
+task: segmentation
+license: Apache-2.0
+
+# Two ONNX graphs (roles). The encoder outputs THREE tensors (multi-scale features).
+# TODO: verify file names match your ONNX export.
+files:
+  encoder: sam2_tiny_encoder.onnx
+  decoder: sam2_tiny_decoder.onnx
+
+input:
+  width: 1024
+  height: 1024
+  layout: NHWC
+
+postprocess:
+  type: sam     # mask threshold = logit > 0; mask encoded as column-major RLE
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

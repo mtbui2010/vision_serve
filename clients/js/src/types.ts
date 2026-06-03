@@ -7,7 +7,7 @@
  */
 
 /** Task kind reported by the server. Open-ended on purpose (new tasks may appear). */
-export type Task = "detection" | "segmentation" | "open_vocab" | (string & {});
+export type Task = "detection" | "segmentation" | "open_vocab" | "classification" | "depth" | "embed" | (string & {});
 
 /** Lifecycle state of a model in the registry. */
 export type ModelState = "not_downloaded" | "available" | "loaded" | (string & {});
@@ -112,30 +112,83 @@ export class Mask {
   }
 }
 
+/** A single image classification prediction. */
+export class Classification {
+  /** Class label string. */
+  readonly cls: string;
+  /** Confidence in `[0, 1]`. */
+  readonly conf: number;
+
+  constructor(cls: string, conf: number) {
+    this.cls = cls;
+    this.conf = conf;
+  }
+
+  static fromJSON(d: Record<string, unknown>): Classification {
+    // wire field is "class"
+    return new Classification(String(d["class"] ?? ""), Number(d.conf ?? 0));
+  }
+}
+
 /** Unified prediction result returned by `POST /api/predict`. */
 export class Result {
   readonly task: Task;
   readonly model: string;
   readonly detections: Detection[];
   readonly masks: Mask[];
+  readonly classifications: Classification[];
+  /** Flat row-major float array for depth maps. */
+  readonly depthMap: number[];
+  readonly depthWidth: number;
+  readonly depthHeight: number;
+  /** One embedding vector per image. */
+  readonly embeddings: number[][];
   readonly durationMs: number;
 
-  constructor(task: Task, model: string, detections: Detection[], masks: Mask[], durationMs: number) {
+  constructor(
+    task: Task,
+    model: string,
+    detections: Detection[],
+    masks: Mask[],
+    classifications: Classification[],
+    depthMap: number[],
+    depthWidth: number,
+    depthHeight: number,
+    embeddings: number[][],
+    durationMs: number,
+  ) {
     this.task = task;
     this.model = model;
     this.detections = detections;
     this.masks = masks;
+    this.classifications = classifications;
+    this.depthMap = depthMap;
+    this.depthWidth = depthWidth;
+    this.depthHeight = depthHeight;
+    this.embeddings = embeddings;
     this.durationMs = durationMs;
   }
 
   static fromJSON(d: Record<string, unknown>): Result {
     const dets = Array.isArray(d.detections) ? d.detections : [];
     const masks = Array.isArray(d.masks) ? d.masks : [];
+    const clsArr = Array.isArray(d.classifications) ? d.classifications : [];
+    const depthMap = Array.isArray(d.depth_map) ? (d.depth_map as unknown[]).map(Number) : [];
+    const embeddings = Array.isArray(d.embeddings)
+      ? (d.embeddings as unknown[]).map((row) =>
+          Array.isArray(row) ? (row as unknown[]).map(Number) : [],
+        )
+      : [];
     return new Result(
       String(d.task ?? ""),
       String(d.model ?? ""),
       dets.map((x) => Detection.fromJSON(x as Record<string, unknown>)),
       masks.map((x) => Mask.fromJSON(x as Record<string, unknown>)),
+      clsArr.map((x) => Classification.fromJSON(x as Record<string, unknown>)),
+      depthMap,
+      Number(d.depth_width ?? 0),
+      Number(d.depth_height ?? 0),
+      embeddings,
       Number(d.duration_ms ?? 0),
     );
   }

@@ -1,0 +1,152 @@
+{
+  "hardware": {
+    "gpu": "GPU 0: NVIDIA RTX A6000 (UUID: GPU-eae6cdda-91ef-d5fd-309d-6ef857dd3abf)",
+    "cpu_cores": 48,
+    "ram_gb": 251
+  },
+  "device": "gpu",
+  "timestamp": "20260603T182318",
+  "n_runs": 20,
+  "results": [
+    {
+      "model": "rf-detr",
+      "device": "gpu",
+      "model_size_mb": 102.9,
+      "cold_ms": 4327.3,
+      "p50": 69.0,
+      "p95": 114.2,
+      "p99": 114.2,
+      "mean": 70.8,
+      "rps": 14.11,
+      "n": 20,
+      "srv_p50": 54.2,
+      "rss_mb": 809,
+      "vram_mb": 804
+    },
+    {
+      "model": "rf-detr-nano",
+      "device": "gpu",
+      "model_size_mb": 102.8,
+      "cold_ms": 4703.8,
+      "p50": 62.0,
+      "p95": 92.4,
+      "p99": 92.4,
+      "mean": 61.8,
+      "rps": 16.18,
+      "n": 20,
+      "srv_p50": 37.0,
+      "rss_mb": 807,
+      "vram_mb": 548
+    },
+    {
+      "model": "scrfd",
+      "device": "gpu",
+      "model_size_mb": 16.1,
+      "error": "cold start failed: HTTP Error 500: Internal Server Error"
+    },
+    {
+      "model": "mobile-sam",
+      "device": "gpu",
+      "model_size_mb": 58.3,
+      "cold_ms": 7029.6,
+      "p50": 142.4,
+      "p95": 187.0,
+      "p99": 187.0,
+      "mean": 143.4,
+      "rps": 6.97,
+      "n": 20,
+      "srv_p50": 115.3,
+      "rss_mb": 978,
+      "vram_mb": 966
+    },
+    {
+      "model": "efficient-sam",
+      "device": "gpu",
+      "model_size_mb": 39.4,
+      "cold_ms": 5627.3,
+      "p50": 173.5,
+      "p95": 211.9,
+      "p99": 211.9,
+      "mean": 172.4,
+      "rps": 5.8,
+      "n": 20,
+      "srv_p50": 154.2,
+      "rss_mb": 874,
+      "vram_mb": 1628
+    },
+    {
+      "model": "sam2",
+      "device": "gpu",
+      "model_size_mb": 147.7,
+      "cold_ms": 5466.8,
+      "p50": 218.7,
+      "p95": 241.6,
+      "p99": 241.6,
+      "mean": 209.5,
+      "rps": 4.77,
+      "n": 20,
+      "srv_p50": 194.1,
+      "rss_mb": 1096,
+      "vram_mb": 2508
+    },
+    {
+      "model": "grounding-dino",
+      "device": "gpu",
+      "model_size_mb": 685.5,
+      "cold_ms": 10568.1,
+      "p50": 567.8,
+      "p95": 646.9,
+      "p99": 646.9,
+      "mean": 555.3,
+      "rps": 1.8,
+      "n": 20,
+      "srv_p50": 554.2,
+      "rss_mb": 1548,
+      "vram_mb": 4392
+    },
+    {
+      "model": "grounded-sam",
+      "device": "gpu",
+      "skipped": "no ONNX files"
+    },
+    {
+      "model": "midas",
+      "device": "gpu",
+      "model_size_mb": 63.3,
+      "error": "cold start failed: HTTP Error 500: Internal Server Error"
+    },
+    {
+      "model": "efficientnet-b0",
+      "device": "gpu",
+      "model_size_mb": 20.2,
+      "error": "cold start failed: HTTP Error 500: Internal Server Error"
+    },
+    {
+      "model": "mobilenet-v3",
+      "device": "gpu",
+      "model_size_mb": 9.7,
+      "error": "cold start failed: HTTP Error 500: Internal Server Error"
+    },
+    {
+      "model": "clip",
+      "device": "gpu",
+      "model_size_mb": 335.2,
+      "error": "cold start failed: HTTP Error 500: Internal Server Error"
+    },
+    {
+      "model": "paddle-ocr",
+      "device": "gpu",
+      "model_size_mb": 14.8,
+      "cold_ms": 4420.7,
+      "p50": 53.0,
+      "p95": 82.1,
+      "p99": 82.1,
+      "mean": 53.4,
+      "rps": 18.72,
+      "n": 20,
+      "srv_p50": 33.0,
+      "rss_mb": 934,
+      "vram_mb": 472
+    }
+  ]
+}

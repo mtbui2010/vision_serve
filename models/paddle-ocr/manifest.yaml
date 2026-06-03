@@ -1,0 +1,26 @@
+name: paddle-ocr
+architecture: paddle-ocr
+task: detection
+license: Apache-2.0
+
+# Two ONNX graphs (roles). The character set file ppocr_keys_v1.txt must also be
+# present in this directory (loaded at startup for CTC decoding).
+files:
+  det: det_model.onnx
+  rec: rec_model.onnx
+
+input:
+  # Reference dimensions for the det model. The longer side is scaled to ≤ width,
+  # then both dimensions are padded to multiples of 32 before inference.
+  width: 960
+  height: 960
+  layout: NCHW
+  letterbox: false
+
+postprocess:
+  type: paddle-ocr
+  conf_threshold: 0.3   # DBNet++ probability map threshold (text region detection)
+
+runtime:
+  prefer: [cuda, cpu]
+  idle_unload_seconds: 300

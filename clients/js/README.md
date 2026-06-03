@@ -11,7 +11,7 @@ to `predict()` uses `node:fs` and is Node-only; in the browser pass bytes or a `
 ## Install
 
 ```bash
-npm install visionserve          # once published to npm
+npm install visionserve          # from npm
 # or from source:
 cd clients/js && npm install && npm run build
 ```
@@ -29,19 +29,29 @@ import { Client } from "visionserve";
 
 const client = new Client("http://localhost:11435");
 
-// Detection
+// Detection — RF-DETR or RT-DETR
 const det = await client.predict("rf-detr", "image.jpg");
 for (const d of det.detections) {
   console.log(d.cls, d.conf.toFixed(3), d.bbox); // bbox = [x, y, w, h] in original pixels
 }
 
-// Segmentation — MobileSAM with a box prompt (original-image coords)
+// Segmentation — MobileSAM / EfficientSAM / SAM2 with a box prompt (original-image coords)
 const seg = await client.predict("mobile-sam", "image.jpg", { box: [34, 58, 120, 240] });
 const flat = seg.masks[0]?.toMask(640, 480); // row-major Uint8Array, 1 = inside mask
 
 // Open-vocab segmentation — Grounded-SAM (text → boxes → masks)
 const gs = await client.predict("grounded-sam", "image.jpg", { prompt: "cat. remote." });
 console.log(gs.detections.map((d) => d.cls), "→", gs.masks.length, "masks");
+
+// Depth estimation
+const dep = await client.predict("depth-anything-v2", "image.jpg");
+// dep.depthMap is a Float32Array of length dep.depthWidth * dep.depthHeight
+
+// Classification — top-K ImageNet predictions
+const cls = await client.predict("efficientnet-b0", "image.jpg");
+for (const c of cls.classifications) {
+  console.log(c.cls, c.conf.toFixed(3));
+}
 ```
 
 ### Image inputs
@@ -71,10 +81,16 @@ Every task returns the same unified `Result`:
 
 ```ts
 class Result {
-  task: string;            // "detection" | "segmentation" | "open_vocab" | ...
+  task: string;                  // "detection" | "segmentation" | "open_vocab" |
+                                 // "depth" | "classification" | "embed" | ...
   model: string;
-  detections: Detection[]; // { bbox: [x,y,w,h], cls: string, conf: number }
-  masks: Mask[];           // { rle, bbox, conf } — column-major RLE
+  detections: Detection[];       // { bbox: [x,y,w,h], cls: string, conf: number }
+  masks: Mask[];                 // { rle, bbox, conf } — column-major RLE
+  classifications: Classification[]; // { cls: string, conf: number } — top-K
+  depthMap: number[];            // flat row-major float array, size depthWidth×depthHeight
+  depthWidth: number;
+  depthHeight: number;
+  embeddings: number[][];        // one embedding vector per image
   durationMs: number;
 }
 ```
@@ -82,6 +98,60 @@ class Result {
 `Mask.toMask(width, height)` decodes the column-major RLE into a row-major `Uint8Array`
 (`1` = inside the mask); `Mask.toMask2D(width, height)` returns a `boolean[][]`. Pass the
 **original** image width/height the mask was produced against.
+
+## Size filtering
+
+Keep only objects whose bbox area is within a range. Available as a standalone function
+or as a method on `Client` (both are equivalent).
+
+```ts
+import { filterBySize } from "visionserve";
+
+const res = await client.predict("rf-detr", "image.jpg");
+
+// Absolute mode — area in pixels²
+const big = filterBySize(res, { minSize: 5000 });
+const mid = filterBySize(res, { minSize: 500, maxSize: 50000 });
+
+// Relative mode — fraction of image area (0.0–1.0), supply imageWidth + imageHeight
+const rel = filterBySize(res, {
+  minSize: 0.01,     // at least 1% of image area
+  maxSize: 0.5,      // at most 50% of image area
+  imageWidth: 1280,
+  imageHeight: 720,
+});
+
+// Via Client method:
+const filtered = client.filterBySize(res, { minSize: 500 });
+```
+
+## Visualization
+
+`toSVG` returns a ready-to-embed SVG string with annotation overlays. Zero runtime
+dependencies — works in the browser and in Node.
+
+```ts
+import { toSVG } from "visionserve";
+
+const res = await client.predict("rf-detr", "image.jpg");
+const svg = toSVG(res, 1280, 720);  // width, height of the original image
+
+// In HTML — position the SVG over the <img>:
+// <div style="position:relative; display:inline-block">
+//   <img src="image.jpg" width="1280" height="720">
+//   <svg style="position:absolute;top:0;left:0;pointer-events:none"
+//        [innerHTML]="svg"></svg>
+// </div>
+```
+
+What `toSVG` draws per task:
+
+| Task | SVG content |
+|------|-------------|
+| `detection` / `open_vocab` | Colored `<rect>` boxes + `<text>` `"class conf%"` labels |
+| `segmentation` | Colored `<rect>` bbox outlines + `<text>` confidence labels |
+| `classification` | Stacked `<text>` lines with top-K `"class conf%"` |
+| `depth` / `embed` | Empty `<svg>` (no meaningful pixel annotation) |
 
 ## Other API
 

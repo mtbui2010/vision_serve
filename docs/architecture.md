@@ -15,9 +15,12 @@ flowchart TD
     Server --> Lifecycle[Lifecycle Manager<br/>lazy load / auto-unload]
     Lifecycle --> Pipeline[Inference Pipeline<br/>pre → infer → post]
     Pipeline --> ModelIf[Model interface]
-    ModelIf --> RFDETR[RF-DETR<br/>detection]
-    ModelIf --> SAM[MobileSAM<br/>segmentation]
+    ModelIf --> RFDETR[RF-DETR / RT-DETR<br/>detection]
+    ModelIf --> SAM[MobileSAM / EfficientSAM / SAM2<br/>segmentation]
     ModelIf --> GDINO[GroundingDINO<br/>open-vocab]
+    ModelIf --> GSAM[Grounded-SAM<br/>text → boxes → masks]
+    ModelIf --> DEPTH[Depth Anything V2 / MiDaS<br/>depth estimation]
+    ModelIf --> CLS[EfficientNet-B0 / MobileNetV3<br/>classification]
     Pipeline --> ORT[ONNX Runtime<br/>TensorRT/CUDA/CoreML/DirectML/OpenVINO/CPU]
 ```
 
@@ -111,8 +114,13 @@ ROCm, so AMD discrete GPUs are reachable only via DirectML on Windows).
 Every task returns the same `api.Result`. There is **no per-model schema**:
 
 - `Detections` — each `{ bbox [x,y,w,h], class, conf }`, bbox in **original-image** coords.
+  Used by detection (RF-DETR, RT-DETR, SCRFD) and open-vocab detection (GroundingDINO).
 - `Masks` — each `{ rle, bbox, conf }`, the mask encoded as **column-major RLE**
-  (COCO-style). Used by segmentation (MobileSAM) and Grounded-SAM.
+  (COCO-style). Used by segmentation (MobileSAM, EfficientSAM, SAM2) and Grounded-SAM.
+- `Classifications` — each `{ class, conf }`, ranked top-K predictions.
+  Used by classification (EfficientNet-B0, MobileNetV3).
+- `DepthMap` / `DepthWidth` / `DepthHeight` — flat row-major `[]float32` relative depth
+  values. Used by depth estimation (Depth Anything V2, MiDaS).
 
 Open-vocab detection populates `Detections` (text → boxes); Grounded-SAM populates
 `Masks` (text → boxes → masks).
@@ -138,8 +146,9 @@ Open-vocab detection populates `Detections` (text → boxes); Grounded-SAM popul
 - `Detection.BBox` is **always in ORIGINAL image coords** (mapped back via `PreprocessMeta`).
 - Prompts (box/point/text) are in **original-image** coordinates and flow through
   `PredictPrompt`; an empty prompt is valid for models that need none.
-- The `Result` schema is shared across all tasks (`Detections` + `Masks`, masks as
-  column-major RLE). Never invent a per-model schema.
+- The `Result` schema is shared across all tasks (`Detections`, `Masks`,
+  `Classifications`, `DepthMap`/`DepthWidth`/`DepthHeight`; masks as column-major RLE).
+  Never invent a per-model schema.
 - Adding a model **does not touch core**: just add a package under
   `internal/models/<name>/` + `Register()` + one blank import line in
   `cmd/visionserve/main.go`.

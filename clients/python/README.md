@@ -16,9 +16,9 @@ needed for:
 
 ## Install
 
-From the repository root:
-
 ```bash
+pip install visionserve               # from PyPI (recommended)
+# or from source:
 pip install -e clients/python
 # optional extras for ndarray/PIL image inputs and mask decoding:
 pip install -e 'clients/python[images]'
@@ -64,7 +64,9 @@ print([m.name for m in c.ps()])    # currently loaded models
 | `load(model)` | `POST /api/load` | `{"model", "state"}` |
 | `unload(model)` | `POST /api/unload` | `{"model", "state"}` |
 | `ps()` | `GET /api/models` (filtered) | loaded `list[ModelInfo]` |
-| `predict(model, image, *, prompt=None, box=None, point=None)` | `POST /api/predict` | `Result` |
+| `predict(model, image, *, prompt=None, box=None, point=None, min_size=0, max_size=0)` | `POST /api/predict` | `Result` |
+
+`min_size` / `max_size` pass bbox-area px² thresholds to the server — objects outside the range are removed before the response is sent. Pass `0` for no limit.
 
 `predict()` `image` accepts:
 - `str` / `os.PathLike` — a path to an image file,
@@ -81,9 +83,18 @@ Prompts (serialized to the server's string format):
 ### Result types
 
 ```python
-Detection(bbox: list[float], cls: str, conf: float)   # bbox = [x, y, w, h], original px
+Detection(bbox: list[float], cls: str, conf: float)       # bbox = [x, y, w, h], original px
 Mask(rle: str, bbox: list[float], conf: float)
-Result(task, model, detections: list[Detection], masks: list[Mask], duration_ms)
+Classification(cls: str, conf: float)                      # top-K prediction
+Result(
+    task, model, duration_ms,
+    detections: list[Detection],
+    masks: list[Mask],
+    classifications: list[Classification],                 # task="classification"
+    depth_map: list[float] | None,                         # task="depth", row-major H×W
+    depth_width: int | None,
+    depth_height: int | None,
+)
 ```
 
 `Mask.to_ndarray(width, height) -> np.ndarray` decodes the COCO-style **column-major**
@@ -97,17 +108,92 @@ w, h = Image.open("img.jpg").size
 mask = res.masks[0].to_ndarray(width=w, height=h)   # bool (h, w)
 ```
 
+For depth maps, reshape `depth_map` using `depth_width` / `depth_height`:
+
+```python
+import numpy as np
+res = c.predict("depth-anything-v2", "img.jpg")
+depth = np.array(res.depth_map).reshape(res.depth_height, res.depth_width)
+```
+
+For classification, iterate `classifications` (already sorted by confidence descending):
+
+```python
+res = c.predict("efficientnet-b0", "img.jpg")
+for cls_pred in res.classifications:
+    print(cls_pred.cls, round(cls_pred.conf, 3))
+```
+
+### Size filtering — `Result.filter_by_size()`
+
+Remove detections/masks whose bounding-box area is outside a range.
+
+```python
+# Absolute mode — area in pixels²
+big = res.filter_by_size(min_size=5000)           # keep objects ≥ 5000 px²
+small = res.filter_by_size(max_size=2000)          # keep objects ≤ 2000 px²
+mid = res.filter_by_size(min_size=500, max_size=50000)
+
+# Relative mode — fraction of image area (0.0–1.0), requires image dimensions
+res_rel = res.filter_by_size(
+    min_size=0.01,   # at least 1% of image area
+    max_size=0.5,    # at most 50% of image area
+    image_width=1280, image_height=720,
+)
+```
+
+The method returns a **new** `Result`; the original is not modified.
+
+### Visualization — `draw()` / `result.visualize()`
+
+Requires **Pillow** (`pip install pillow` or `pip install 'visionserve[images]'`).
+
+```python
+from visionserve import draw   # or: from visionserve.visualize import draw
+
+# Works with any task — detection, segmentation, classification, depth
+res = c.predict("rf-detr", "photo.jpg")
+annotated = draw(res, "photo.jpg")   # → PIL.Image
+annotated.save("out.jpg")
+
+# Convenience method on Result:
+res.visualize("photo.jpg").save("out.jpg")
+
+# Control mask overlay opacity:
+annotated = draw(res, "photo.jpg", alpha=0.6)
+```
+
+What gets drawn per task:
+
+| Task | Output |
+|------|--------|
+| `detection` / `open_vocab` | Colored bbox rectangles + `"class conf%"` labels |
+| `segmentation` | Semi-transparent mask overlays + bbox outlines + confidence |
+| `classification` | Top-K `"class conf%"` text lines in top-left corner |
+| `depth` | Turbo colormap image (blue=near → red=far) — replaces original |
+
 ## Examples
 
 ```bash
-# RF-DETR detection (optionally draw boxes):
+# RF-DETR / RT-DETR detection (optionally draw boxes):
 python clients/python/examples/detect.py cat.jpg --model rf-detr --save out.png
+python clients/python/examples/detect.py cat.jpg --model rt-detr --save out.png
 
-# MobileSAM with a box prompt -> mask ndarray:
-python clients/python/examples/segment.py img.jpg --box 50,40,120,90 --save mask.png
+# MobileSAM / EfficientSAM / SAM2 with a box prompt -> mask ndarray:
+python clients/python/examples/segment.py img.jpg --model mobile-sam --box 50,40,120,90 --save mask.png
+python clients/python/examples/segment.py img.jpg --model efficient-sam --box 50,40,120,90 --save mask.png
+python clients/python/examples/segment.py img.jpg --model sam2 --box 50,40,120,90 --save mask.png
 
 # Open-vocab (text prompt) — model must be available on the server:
 python clients/python/examples/grounded.py img.jpg --prompt "cat. remote."
+
+# Depth estimation:
+python clients/python/examples/depth.py img.jpg --model depth-anything-v2 --save depth.png
+python clients/python/examples/depth.py img.jpg --model midas --save depth.png
+
+# Image classification:
+python clients/python/examples/classify.py img.jpg --model efficientnet-b0
+python clients/python/examples/classify.py img.jpg --model mobilenet-v3
 ```
 
 ## Tests
@@ -118,8 +204,8 @@ server is required.
 
 ```bash
 # with pytest:
-/home/trung/miniconda3/envs/label/bin/python3 -m pytest clients/python/tests -v
+python -m pytest clients/python/tests -v
 
 # or as a dependency-free self-test:
-/home/trung/miniconda3/envs/label/bin/python3 clients/python/tests/test_client.py
+python clients/python/tests/test_client.py
 ```

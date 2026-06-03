@@ -18,16 +18,20 @@ import (
 // The types below are aliases to the public schema in pkg/api, so model
 // implementations can use short names while keeping a SINGLE unified schema.
 type (
-	Task      = api.Task
-	Result    = api.Result
-	Detection = api.Detection
-	Mask      = api.Mask
+	Task           = api.Task
+	Result         = api.Result
+	Detection      = api.Detection
+	Mask           = api.Mask
+	Classification = api.Classification
 )
 
 const (
-	TaskDetection    = api.TaskDetection
-	TaskSegmentation = api.TaskSegmentation
-	TaskOpenVocab    = api.TaskOpenVocab
+	TaskDetection      = api.TaskDetection
+	TaskSegmentation   = api.TaskSegmentation
+	TaskOpenVocab      = api.TaskOpenVocab
+	TaskDepth          = api.TaskDepth
+	TaskClassification = api.TaskClassification
+	TaskEmbed          = api.TaskEmbed
 )
 
 // Model is the interface every model must implement.

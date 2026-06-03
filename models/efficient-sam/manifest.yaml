@@ -1,0 +1,29 @@
+# EfficientSAM — promptable segmentation, Apache-2.0. Two-session PipelineModel.
+# Needs a PROMPT (box/point): `visionserve run efficient-sam img.jpg --box x,y,w,h`.
+# Weights are NOT committed — see README.md to download the ONNX files.
+name: efficient-sam
+task: segmentation
+license: Apache-2.0
+architecture: efficient-sam
+
+# Two ONNX sessions (roles): encoder → decoder.
+# TODO: verify the actual file names on onnx-community/EfficientSAM (HuggingFace).
+# The names below follow the standard HF Optimum export convention; adjust if different.
+files:
+  encoder: efficient_sam_encoder.onnx
+  decoder: efficient_sam_decoder.onnx
+
+input:
+  # The encoder resizes the long side to 1024 in Go (preprocess.go).
+  # Layout is NCHW (unlike MobileSAM which uses HWC/NHWC).
+  width: 1024
+  height: 1024
+  layout: NCHW
+  letterbox: false
+
+postprocess:
+  type: sam        # mask threshold = logit > 0; mask encoded as column-major RLE
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

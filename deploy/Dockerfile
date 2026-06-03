@@ -1,43 +1,42 @@
 # deploy/Dockerfile — self-contained VisionServe SERVER image (x86_64 / linux-amd64).
 #
-# Goal: `docker run -p 11435:11435 visionserve serve` just works — the Go binary and
-# ONNX Runtime are bundled, no host setup. ONNX Runtime is downloaded (pinned) at build
-# time and loaded at runtime via dlopen through ORT_DYLIB_PATH.
+# Two variants (--build-arg ORT_VARIANT):
+#   cpu (default): slim Debian + ONNX Runtime CPU build.            ~141 MB
+#   gpu           : CUDA 12.4 + cuDNN 9 + TensorRT 10 + ORT GPU.   ~3-5 GB
 #
-# Two variants are selectable with --build-arg ORT_VARIANT:
-#   - cpu (default): slim Debian runtime + ONNX Runtime CPU build.
-#   - gpu          : nvidia/cuda runtime + ONNX Runtime GPU build (CUDA/TensorRT EP).
+# The GPU variant includes libnvinfer.so.10 so the TensorRT EP is usable
+# (TRT is the fastest ORT EP: ~2-4× over the plain CUDA EP).
 #
-# Examples:
-#   docker build -f deploy/Dockerfile -t visionserve .
-#   docker build -f deploy/Dockerfile --build-arg ORT_VARIANT=gpu -t visionserve:gpu .
+# Usage:
+#   # CPU image (default):
+#   make docker
+#   docker run --rm -p 11435:11435 -v "$PWD/models:/models" visionserve:latest
 #
-# Model weights are NOT baked into the image (large, not committed to git). They live in
-# the /models VOLUME — see deploy/README.md for how to populate it.
+#   # GPU image (TensorRT EP):
+#   make docker ORT_VARIANT=gpu
+#   docker run --rm --gpus all -p 11435:11435 -v "$PWD/models:/models" visionserve:gpu
+#
+# Model weights are NOT baked in — mount them via the /models VOLUME.
+# See deploy/README.md.
 
-# Pinned ONNX Runtime version. v1.20.1 is a real, stable release with both
-# linux-x64 (CPU) and linux-x64-gpu assets on the official GitHub releases page.
+# ── pinned versions ──────────────────────────────────────────────────────────
+# ORT 1.20.1: compatible with TensorRT 10.x (libnvinfer.so.10) and CUDA 12.
 ARG ORT_VERSION=1.20.1
-# Build variant: "cpu" (default) or "gpu".
+# TensorRT 10.6 GA — last GA release with libnvinfer.so.10, CUDA 12 compatible.
+ARG TRT_VERSION=10.6.0
+# Build variant: "cpu" or "gpu".
 ARG ORT_VARIANT=cpu
 
 ############################
 # Stage 1 — build the Go binary
 ############################
-# The yalue/onnxruntime_go binding links against the ONNX Runtime C API via cgo, so
-# CGO_ENABLED=1 is required (CGO_ENABLED=0 fails with "build constraints exclude all Go
-# files"). The golang image already ships gcc. libonnxruntime.so is only needed at
-# RUNTIME (dlopen), not at build time, so we do not fetch it here.
+# yalue/onnxruntime_go requires CGO_ENABLED=1 (it uses the ORT C API via cgo).
+# libonnxruntime.so is only needed at RUNTIME (dlopen), not at build time.
 FROM golang:1.22-bookworm AS build
 WORKDIR /src
-
-# Cache module downloads first for faster rebuilds.
 COPY go.mod go.sum* ./
 RUN go mod download
-
 COPY . .
-
-# Keep ldflags aligned with the Makefile (strip + inject version).
 ARG VERSION=docker
 RUN CGO_ENABLED=1 go build \
         -ldflags "-s -w -X visionserve/internal/cli.Version=${VERSION}" \
@@ -51,34 +50,33 @@ ARG ORT_VERSION=1.20.1
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
-# CPU build asset: onnxruntime-linux-x64-<ver>.tgz
 RUN set -eux; \
     url="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"; \
     curl -fSL "$url" -o /tmp/ort.tgz; \
     mkdir -p /opt/ort; \
     tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1; \
-    rm /tmp/ort.tgz; \
-    ls -l /opt/ort/lib/libonnxruntime.so*
+    rm /tmp/ort.tgz
 
 ############################
-# Stage 2b — fetch ONNX Runtime (GPU)
+# Stage 2b — fetch ONNX Runtime (GPU, includes TensorRT + CUDA EP providers)
 ############################
 FROM debian:bookworm-slim AS ort-gpu
 ARG ORT_VERSION=1.20.1
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
     rm -rf /var/lib/apt/lists/*
-# GPU build asset: onnxruntime-linux-x64-gpu-<ver>.tgz (CUDA + TensorRT execution providers).
+# The GPU tgz ships libonnxruntime_providers_cuda.so + libonnxruntime_providers_tensorrt.so
+# alongside libonnxruntime.so — all go into /opt/ort/lib/.
 RUN set -eux; \
     url="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-gpu-${ORT_VERSION}.tgz"; \
     curl -fSL "$url" -o /tmp/ort.tgz; \
     mkdir -p /opt/ort; \
     tar -xzf /tmp/ort.tgz -C /opt/ort --strip-components=1; \
     rm /tmp/ort.tgz; \
-    ls -l /opt/ort/lib/libonnxruntime.so*
+    ls /opt/ort/lib/
 
 ############################
-# Stage 3a — CPU runtime (slim Debian)
+# Stage 3a — CPU runtime (minimal Debian)
 ############################
 FROM debian:bookworm-slim AS runtime-cpu
 RUN apt-get update && \
@@ -86,39 +84,61 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 ############################
-# Stage 3b — GPU runtime (CUDA)
+# Stage 3b — GPU runtime: CUDA 12.4 + cuDNN 9 + TensorRT 10
 ############################
-# nvidia/cuda runtime provides the CUDA/cuDNN libraries the ORT GPU build links against.
-# Requires nvidia-container-toolkit on the host and `docker run --gpus all`.
+# Base provides CUDA runtime + cuDNN (needed by the ORT CUDA EP).
+# We then install TensorRT 10.x from NVIDIA's package repo so that
+# libnvinfer.so.10 is present for the ORT TensorRT EP.
+#
+# TensorRT 10 on CUDA 12: apt package tensorrt (meta) pulls in:
+#   libnvinfer10, libnvinfer-plugin10, libnvonnxparsers10, libnvparsers10
+# which are exactly what ORT's libonnxruntime_providers_tensorrt.so dlopen()s.
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime-gpu
+ARG TRT_VERSION=10.6.0
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+# Add NVIDIA TensorRT package repository (same key/repo used by TensorRT DEB installer).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wget gnupg2 && \
+    wget -qO /tmp/cuda-keyring.deb \
+        "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb" && \
+    dpkg -i /tmp/cuda-keyring.deb && rm /tmp/cuda-keyring.deb && \
+    rm -rf /var/lib/apt/lists/*
+# Install TensorRT libraries only (no Python bindings — keeps image leaner).
+# libnvinfer-bin + libnvinfer-dev are not needed at runtime; only the shared libs.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libnvinfer10 \
+        libnvinfer-plugin10 \
+        libnvonnxparsers10 && \
+    rm -rf /var/lib/apt/lists/*
 
 ############################
-# Final — pick runtime + ORT by variant
+# Final — select runtime + ORT by variant, wire everything together
 ############################
-# ARG expands in FROM but NOT in `COPY --from=<stage>` (BuildKit limitation). So we
-# alias the chosen ORT download stage via a FROM, then COPY from that literal alias.
-# BuildKit only builds the stages actually referenced, so the unused variant never runs.
+# ARG expands in FROM but NOT in COPY --from= (BuildKit limitation).
+# Workaround: alias the chosen stage via FROM, then COPY from the literal alias.
 FROM ort-${ORT_VARIANT} AS ort-selected
-
-# `runtime-${ORT_VARIANT}` resolves to runtime-cpu or runtime-gpu.
 FROM runtime-${ORT_VARIANT} AS final
 
-# Bundle the matching ONNX Runtime shared libraries from the aliased stage.
-COPY --from=ort-selected /opt/ort/lib/libonnxruntime.so* /usr/local/lib/
+# ORT shared libraries (cpu: libonnxruntime.so only;
+#                       gpu: + libonnxruntime_providers_cuda.so
+#                             + libonnxruntime_providers_tensorrt.so
+#                             + libonnxruntime_providers_shared.so)
+COPY --from=ort-selected /opt/ort/lib/libonnxruntime*.so* /usr/local/lib/
 
 # Server binary.
 COPY --from=build /out/visionserve /usr/local/bin/visionserve
 
-# The binding dlopen()s this exact path at startup.
+# ORT finds the core library at this path (dlopen by the binding).
 ENV ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
+# ORT provider plugins + TensorRT/CUDA libs must be on LD_LIBRARY_PATH.
 ENV LD_LIBRARY_PATH=/usr/local/lib
 
 RUN ldconfig
 
-# Model weights + manifests are mounted here at runtime (not baked into the image).
+# Model weights + manifests are mounted at runtime (not baked in — weights are large).
 VOLUME ["/models"]
 
 EXPOSE 11435
