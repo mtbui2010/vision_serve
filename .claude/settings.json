@@ -10,7 +10,14 @@
       "Bash(command -v *)",
       "Bash(ldd *)",
       "Bash(curl -s http://localhost:11435/api/health)",
-      "Bash(curl -s http://localhost:11435/api/models)"
+      "Bash(curl -s http://localhost:11435/api/models)",
+      "Bash(go vet *)",
+      "Bash(./bin/visionserve list)",
+      "Bash(./bin/visionserve list *)",
+      "Bash(bin/visionserve list)",
+      "Bash(bin/visionserve list *)",
+      "Bash(./bin/visionserve ps)",
+      "Bash(bin/visionserve ps)"
     ]
   }
 }

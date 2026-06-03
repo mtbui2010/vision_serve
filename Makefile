@@ -117,6 +117,28 @@ docker-edge: ## Build the edge image (arm64/Jetson)
 	cp deploy/.dockerignore .dockerignore
 	docker buildx build --platform linux/arm64 -f deploy/Dockerfile.edge -t visionserve:$(VERSION)-edge .
 
+DOCKER_HUB_USER ?= mtbui2010
+# PUSH_VERSION is the tag of the already-built local image (e.g. v0.1.0).
+# Override at the command line if needed: make push-docker PUSH_VERSION=v0.2.0
+PUSH_VERSION    ?= v0.1.0
+
+push-docker: ## Tag and push CPU + GPU images to Docker Hub (DOCKER_HUB_USER=mtbui2010)
+	@echo "=== Tagging images for Docker Hub ($(DOCKER_HUB_USER)) ==="
+	docker tag visionserve:$(PUSH_VERSION)-cpu   $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-cpu
+	docker tag visionserve:$(PUSH_VERSION)-cpu   $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)
+	docker tag visionserve:$(PUSH_VERSION)-cpu   $(DOCKER_HUB_USER)/visionserve:latest
+	docker tag visionserve:$(PUSH_VERSION)-gpu   $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-gpu
+	@echo "=== Pushing to Docker Hub ==="
+	docker push $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-cpu
+	docker push $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)
+	docker push $(DOCKER_HUB_USER)/visionserve:latest
+	docker push $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-gpu
+	@echo "=== Done. Images pushed: ==="
+	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)"
+	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-cpu"
+	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-gpu"
+	@echo "  $(DOCKER_HUB_USER)/visionserve:latest"
+
 ## --- Python client (PyPI) ---
 
 pypi: ## Build + validate the Python client package (clients/python -> dist/). Publish via CI.
