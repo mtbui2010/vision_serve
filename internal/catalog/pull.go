@@ -42,8 +42,12 @@ func Pull(name string, opts PullOptions) error {
 		return fmt.Errorf("create model dir: %w", err)
 	}
 
-	fmt.Fprintf(out, "pulling %s (%s, %s) from huggingface.co/%s\n",
-		entry.Name, entry.Task, entry.License, entry.HFRepo)
+	source := "huggingface.co/" + entry.HFRepo
+	if entry.HFRepo == "" {
+		source = "external sources (Google Drive / direct URL)"
+	}
+	fmt.Fprintf(out, "pulling %s (%s, %s) from %s\n",
+		entry.Name, entry.Task, entry.License, source)
 
 	for _, file := range entry.Files {
 		destPath := filepath.Join(dstDir, file.LocalFilename)
@@ -56,10 +60,20 @@ func Pull(name string, opts PullOptions) error {
 			}
 		}
 
-		fmt.Fprintf(out, "  downloading %s <- %s\n", file.LocalFilename, file.HFFilename)
-		n, err := DownloadFile(entry.HFRepo, file.HFFilename, destPath, out)
-		if err != nil {
-			return fmt.Errorf("pull %s: %w", entry.Name, err)
+		var n int64
+		var dlErr error
+		if gdriveID, ok := ParseGDriveURL(file.DirectURL); ok {
+			fmt.Fprintf(out, "  downloading %s <- Google Drive\n", file.LocalFilename)
+			n, dlErr = DownloadGDrive(gdriveID, destPath, out)
+		} else if file.DirectURL != "" {
+			fmt.Fprintf(out, "  downloading %s <- %s\n", file.LocalFilename, file.DirectURL)
+			n, dlErr = DownloadDirect(file.DirectURL, destPath, out)
+		} else {
+			fmt.Fprintf(out, "  downloading %s <- %s\n", file.LocalFilename, file.HFFilename)
+			n, dlErr = DownloadFile(entry.HFRepo, file.HFFilename, destPath, out)
+		}
+		if dlErr != nil {
+			return fmt.Errorf("pull %s: %w", entry.Name, dlErr)
 		}
 		if err := verifyFile(destPath, n); err != nil {
 			_ = os.Remove(destPath)

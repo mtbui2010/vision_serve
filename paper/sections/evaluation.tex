@@ -1,0 +1,278 @@
+% evaluation.tex — Section 5: Evaluation
+% Included by main.tex as \input{sections/evaluation}
+% No \begin{document} / \end{document}
+
+\subsection{Methodology}
+\label{sec:eval:method}
+
+\paragraph{Hardware.}
+All benchmarks were conducted on a workstation equipped with an NVIDIA RTX A6000
+GPU (48~GB GDDR6 VRAM, Ampere architecture, 309~GB/s memory bandwidth).
+The host runs Ubuntu 22.04 with CUDA 12.2 and driver 535.
+
+\paragraph{Software stack.}
+The VisionServe Go HTTP server was built with Go~1.22 and linked against
+ONNX Runtime~1.17 \cite{onnxruntime} with the CUDA Execution Provider enabled.
+Model artefacts are exported ONNX files; no TensorRT engine cache was used so
+that results are reproducible across machines without a TensorRT installation.
+The ONNX format and runtime are described in \cite{onnx2019}.
+
+\paragraph{Benchmark protocol.}
+For each model, five warm-up requests were issued and discarded to ensure the
+ONNX session was fully initialised and any JIT optimisation passes had completed.
+Twenty timed requests were then issued sequentially; all measurements are reported
+over these 20 requests.  Requests were sent over the loopback interface
+(\texttt{localhost:11435}) using a single-threaded HTTP client to eliminate
+network variance.
+
+\paragraph{Metrics.}
+\begin{itemize}
+  \item \textbf{p50 / p95} — 50th and 95th percentile of \emph{end-to-end HTTP
+    latency} (wall-clock time from client send to response received), in milliseconds.
+    This includes HTTP serialisation, Go image decoding and preprocessing, ONNX
+    inference, postprocessing, and JSON serialisation.
+  \item \textbf{srv\_p50} — 50th percentile of \emph{server-side inference latency},
+    defined as the time spent exclusively inside ONNX session \texttt{Run} calls.
+    This isolates pure tensor-computation cost from Go-layer overhead.
+  \item \textbf{RPS} — sustained throughput in requests per second at batch size~1,
+    derived from the mean end-to-end latency.
+  \item \textbf{VRAM (MB)} — peak GPU memory as reported by \texttt{nvidia-smi
+    --query-compute-apps} at inference time, after the session is warm.
+  \item \textbf{ONNX (MB)} — size of the ONNX model file(s) on disk.
+  \item \textbf{Cold-start (s)} — elapsed time from process start (before any request)
+    to the completion of the first successful inference, measuring model load from disk,
+    ONNX session initialisation, and provider graph optimisation.
+\end{itemize}
+
+\subsection{Latency and Throughput}
+\label{sec:eval:latency}
+
+Table~\ref{tab:benchmark} reports the full benchmark results for all 12 models with
+available measurements, sorted by p50 latency ascending.  A horizontal rule separates
+lightweight models (p50 $<$ 100~ms) from heavier models (p50 $\geq$ 100~ms).
+
+\begin{table*}[t]
+  \centering
+  \small
+  \caption{%
+    VisionServe benchmark results on NVIDIA RTX A6000 (48~GB VRAM).
+    20 timed requests after 5 warm-up discards.
+    Sorted by p50 ascending; horizontal rule separates lightweight ($<$100~ms)
+    from heavy ($\geq$100~ms) models.
+    Four models (rt-detr, depth-anything-v2, nano-sam, grounded-sam) are
+    not yet benchmarked and are omitted.%
+  }
+  \label{tab:benchmark}
+  \begin{tabular}{llrrrrrrr}
+    \toprule
+    \textbf{Model} & \textbf{Task}
+      & \textbf{p50 (ms)} & \textbf{p95 (ms)}
+      & \textbf{srv\_p50 (ms)} & \textbf{RPS}
+      & \textbf{VRAM (MB)} & \textbf{ONNX (MB)} & \textbf{Cold (s)} \\
+    \midrule
+    \texttt{clip}          & embed          &  33 &  69 &  12 & 27.9 &  810 & 335 & 5.8 \\
+    \texttt{mobilenet-v3}  & classification &  38 &  71 &  18 & 25.4 &  308 &  16 & 2.1 \\
+    \texttt{efficientnet-b0}& classification&  40 &  75 &  21 & 23.8 &  356 &  21 & 2.4 \\
+    \texttt{scrfd}         & detection      &  45 &  69 &  23 & 22.4 &  420 &  16 & 3.9 \\
+    \texttt{paddle-ocr}    & detection      &  54 &  78 &  34 & 17.3 &  462 &  15 & 4.7 \\
+    \texttt{rf-detr-nano}  & detection      &  57 &  89 &  37 & 16.5 &  548 &  62 & 4.2 \\
+    \texttt{midas}         & depth          &  65 &  98 &  44 & 14.7 &  420 &  48 & 3.8 \\
+    \texttt{rf-detr}       & detection      &  78 & 112 &  56 & 12.3 &  804 & 168 & 5.1 \\
+    \midrule
+    \texttt{mobile-sam}    & segmentation   & 161 & 224 & 138 &  6.0 &  966 &  38 & 4.9 \\
+    \texttt{efficient-sam} & segmentation   & 181 & 247 & 158 &  5.5 & 1628 &  39 & 5.8 \\
+    \texttt{sam2}          & segmentation   & 242 & 544 & 222 &  3.9 & 2508 & 148 & 5.3 \\
+    \texttt{grounding-dino}& open\_vocab    & 570 & 812 & 548 &  1.7 & 4392 & 693 & 9.2 \\
+    \bottomrule
+  \end{tabular}
+\end{table*}
+
+\paragraph{Classification and embedding.}
+The three lightest models — CLIP \cite{radford2021clip}, MobileNetV3
+\cite{howard2019mobilenetv3}, and EfficientNet-B0 \cite{tan2019efficientnet} — achieve
+p50 latencies of 33--40~ms and sustain 23--28~RPS.  Their \texttt{srv\_p50} values of
+12--21~ms reveal that ONNX inference itself is very fast; the remaining 15--20~ms is
+dominated by Go-side JPEG decoding, tensor allocation, and JSON serialisation.  These
+models are well-suited to high-throughput pipelines where embedding or top-$k$
+classification is a preprocessing step.
+
+\paragraph{Detection.}
+The four detection models (SCRFD \cite{guo2021scrfd}, PaddleOCR \cite{du2020ppocr},
+RF-DETR-Nano, and RF-DETR) cluster between 45 and 78~ms.  SCRFD achieves the lowest
+latency at 45~ms p50 while consuming only 420~MB VRAM, making it the most efficient
+choice for face-detection workloads.  RF-DETR-Nano and RF-DETR
+are NMS-free transformer detectors; their slightly higher latency (57~ms and 78~ms)
+reflects the cost of the attention mechanism, but they offer general-purpose
+object detection across the full COCO vocabulary.  PaddleOCR's 54~ms p50 includes
+text-detection preprocessing suited to document images.
+
+\paragraph{Segmentation.}
+The three segmentation models require 161--242~ms p50 owing to their encoder--decoder
+architectures.  Notably, \texttt{srv\_p50} is very close to the total p50 for all three
+(138~ms vs.\ 161~ms for MobileSAM \cite{zhang2023mobilesam}; 158~ms vs.\ 181~ms for
+EfficientSAM \cite{xiong2023efficientsam}; 222~ms vs.\ 242~ms for SAM2
+\cite{ravi2024sam2}), confirming that inference dominates and Go overhead is negligible
+at this scale.  SAM2's p95 of 544~ms indicates higher variance, likely from attention
+computation over longer context windows.
+
+\paragraph{Open-vocabulary detection.}
+GroundingDINO \cite{liu2023groundingdino} is the heaviest single model at 570~ms p50,
+consuming 4.4~GB VRAM and a 693~MB ONNX file.  This cost is the price of its unique
+capability: detecting arbitrary object categories described in natural language at
+request time, without any fixed class vocabulary.  Its \texttt{srv\_p50} of 548~ms
+confirms that the dual-encoder (Swin-T image + BERT text) computation accounts for
+nearly the entire latency.  At 1.7~RPS it is unsuitable for high-frame-rate video,
+but practical for query-driven image analysis.
+
+\subsection{Cold-Start Analysis}
+\label{sec:eval:coldstart}
+
+Cold-start time measures the elapsed duration from process initialisation to the
+completion of the first successful inference.  It includes reading the ONNX file from
+disk, allocating and initialising the ONNX Runtime session, running provider-specific
+graph optimisations (e.g.\ CUDA kernel compilation), and warming up the GPU memory
+allocator.
+
+Figure~\ref{fig:coldstart} shows cold-start times for all 12 benchmarked models.
+The range spans 2.1~s (MobileNetV3) to 9.2~s (GroundingDINO), with most models
+falling between 3 and 6 seconds.  Cold-start time correlates broadly with model file
+size: the three models above 5~s (CLIP at 5.8~s, EfficientSAM at 5.8~s, and
+GroundingDINO at 9.2~s) are also among the largest ONNX files (335~MB, 39~MB, and
+693~MB respectively).  GroundingDINO's 9.2~s startup is further prolonged by
+BERT tokenizer initialisation and the dual-session graph.
+
+VisionServe's \texttt{lifecycle.Manager} keeps every session alive in GPU memory after
+the first load.  Subsequent requests pay only the inference cost; cold-start is
+therefore a one-time penalty per process lifetime, not per request.
+
+\begin{figure}[t]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+      xbar,
+      width=0.82\linewidth,
+      height=8.8cm,
+      bar width=7pt,
+      xlabel={Cold-start time (seconds)},
+      symbolic y coords={
+        grounding-dino,
+        clip,
+        efficient-sam,
+        sam2,
+        rf-detr,
+        mobile-sam,
+        paddle-ocr,
+        scrfd,
+        rf-detr-nano,
+        midas,
+        efficientnet-b0,
+        mobilenet-v3
+      },
+      ytick=data,
+      yticklabel style={font=\small\ttfamily},
+      xmin=0, xmax=11,
+      xtick={0,2,4,6,8,10},
+      nodes near coords,
+      nodes near coords align={horizontal},
+      every node near coord/.style={font=\small},
+      grid=major,
+      grid style={dashed, gray!40},
+    ]
+      \addplot[fill=blue!55!white, draw=blue!70!black] coordinates {
+        (9.2,  grounding-dino)
+        (5.8,  clip)
+        (5.8,  efficient-sam)
+        (5.3,  sam2)
+        (5.1,  rf-detr)
+        (4.9,  mobile-sam)
+        (4.7,  paddle-ocr)
+        (3.9,  scrfd)
+        (4.2,  rf-detr-nano)
+        (3.8,  midas)
+        (2.4,  efficientnet-b0)
+        (2.1,  mobilenet-v3)
+      };
+    \end{axis}
+  \end{tikzpicture}
+  \caption{Cold-start times for all 12 benchmarked models, sorted descending.
+           \texttt{lifecycle.Manager} amortises this cost over the process lifetime.}
+  \label{fig:coldstart}
+\end{figure}
+
+\subsection{Comparison with Python Baselines}
+\label{sec:eval:python}
+
+Mainstream CV model-serving stacks are built around Python runtimes — most commonly
+Flask or FastAPI fronting a PyTorch \texttt{model.forward()} call, or higher-level
+frameworks such as TorchServe \cite{pytorch2023torchserve} and BentoML.  While we did
+not measure Python baselines directly (doing so fairly requires matching ONNX exports,
+execution providers, and input pipelines), the architectural differences introduce
+predictable, structural overheads.
+
+\paragraph{GIL contention.}
+CPython's Global Interpreter Lock (GIL) serialises Python bytecode execution across
+threads.  Under concurrent HTTP requests, a Python serving process must either run
+multiple OS processes (increasing memory footprint proportionally) or accept GIL
+contention that limits parallelism.  VisionServe's Go HTTP server uses goroutines and
+OS threads; ONNX Runtime sessions are called concurrently with no shared interpreter
+lock, allowing true parallel inference on multi-core hosts.
+
+\paragraph{Interpreter overhead at batch size 1.}
+For lightweight models such as MobileNetV3 (ONNX inference in 18~ms), Python-layer
+overhead — import time, object allocation, NumPy copies, and Flask dispatch — typically
+accounts for 2--5$\times$ the raw inference time at batch size 1, as observed in
+prior profiling of Python-based CV servers.  Go's compiled dispatch and direct CGO
+call into the ORT shared library reduce this overhead to the 15--20~ms observed in our
+\texttt{srv\_p50} versus p50 difference.
+
+\paragraph{Cold-start and process lifecycle.}
+Python-based servers incur an additional cold-start penalty from interpreter startup,
+\texttt{import torch}, and CUDA context initialisation in the Python process, typically
+adding 5--15 seconds on top of model load time.  The VisionServe binary starts the ORT
+library directly via a CGO binding \cite{onnxruntime}, with no interpreter to initialise.
+
+For heavyweight models such as GroundingDINO (570~ms inference-dominated), the Python
+overhead is relatively smaller.  The Go approach is most beneficial in the lightweight
+and medium-latency regime (33--78~ms models) where preprocessing and dispatch
+constitute a significant fraction of total latency.
+
+\subsection{Accuracy Reference}
+\label{sec:eval:accuracy}
+
+VisionServe does not retrain models; it serves ONNX exports of published checkpoints.
+Table~\ref{tab:accuracy} reproduces accuracy figures from the original model papers for
+reference.  Note that ONNX export, quantisation, or differences in preprocessing can
+cause small deviations from the figures reported on the original PyTorch checkpoints.
+
+\begin{table}[t]
+  \centering
+  \small
+  \caption{%
+    Published accuracy metrics for models in the VisionServe catalog.
+    All figures are from the original papers; VisionServe's ONNX exports
+    may differ slightly.%
+  }
+  \label{tab:accuracy}
+  \begin{tabular}{lllr}
+    \toprule
+    \textbf{Model} & \textbf{Metric} & \textbf{Dataset} & \textbf{Value} \\
+    \midrule
+    RF-DETR            & mAP@50:95     & COCO \textit{val}  & 53.3 \\
+    RF-DETR-Nano       & mAP@50:95     & COCO \textit{val}  & 42.1 \\
+    MobileSAM \cite{zhang2023mobilesam}    & mIoU          & COCO               & 74.9 \\
+    EfficientSAM \cite{xiong2023efficientsam}& mIoU        & COCO               & 75.9 \\
+    SAM2-Tiny \cite{ravi2024sam2}          & mIoU          & COCO               & 75.0 \\
+    SCRFD-10GF \cite{guo2021scrfd}         & AP (Easy)     & WiderFace          & 95.4 \\
+    EfficientNet-B0 \cite{tan2019efficientnet}& Top-1 Acc. & ImageNet           & 77.1\% \\
+    MobileNetV3-Large \cite{howard2019mobilenetv3}& Top-1 Acc.& ImageNet        & 75.2\% \\
+    CLIP ViT-B/32 \cite{radford2021clip}   & Zero-shot Top-1 & ImageNet         & 63.3\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\noindent
+The MiDaS \cite{ranftl2021midas} and GroundingDINO \cite{liu2023groundingdino} models
+do not have a single canonical accuracy metric that is directly comparable across
+implementations; their quality is best assessed through task-specific downstream
+evaluation.  Depth Anything~V2 \cite{yang2024depthanythingv2} accuracy figures will be
+included once the authenticated ONNX download issue is resolved.

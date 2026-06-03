@@ -1,0 +1,180 @@
+% catalog.tex — Section 4: Model Catalog
+% Included by main.tex as \input{sections/catalog}
+% No \begin{document} / \end{document}
+
+\subsection{Task Types}
+\label{sec:catalog:tasks}
+
+VisionServe organises its model portfolio around six computer-vision task types.
+Table~\ref{tab:task-types} defines each type, states the expected input and output
+contract, and names representative models currently registered in the system.
+
+\begin{table}[t]
+  \centering
+  \small
+  \caption{Task types supported by VisionServe.}
+  \label{tab:task-types}
+  \begin{tabular}{llp{6.2cm}l}
+    \toprule
+    \textbf{Task} & \textbf{I/O Contract} & \textbf{Description} & \textbf{Example Models} \\
+    \midrule
+    \texttt{detection}     & image $\to$ boxes     &
+      Localise and classify objects in an image.
+      Returns axis-aligned bounding boxes in original-image coordinates
+      together with class labels and confidence scores.
+      &
+      RF-DETR, SCRFD, PaddleOCR \\[4pt]
+
+    \texttt{segmentation}  & image + prompt $\to$ masks &
+      Produce per-pixel binary masks, optionally conditioned on a box or
+      point prompt.  Masks are encoded as column-major run-length encoding
+      (RLE) in the unified \texttt{Result} schema.
+      &
+      MobileSAM, EfficientSAM, SAM2 \\[4pt]
+
+    \texttt{open\_vocab}   & image + text $\to$ boxes &
+      Detect objects whose categories are specified as free-form natural-language
+      queries at request time, without any fixed class vocabulary.
+      &
+      GroundingDINO \\[4pt]
+
+    \texttt{classification}& image $\to$ label + score &
+      Assign a single top-\(k\) label from a closed-set vocabulary
+      (e.g.\ ImageNet-1k) to the entire image.
+      &
+      EfficientNet-B0, MobileNetV3 \\[4pt]
+
+    \texttt{depth}         & image $\to$ depth map &
+      Estimate a per-pixel relative or metric depth map.  Output is a
+      single-channel float32 tensor aligned to the input resolution.
+      &
+      MiDaS, Depth Anything V2 \\[4pt]
+
+    \texttt{embed}         & image $\to$ vector &
+      Extract a compact, semantically rich embedding vector suitable for
+      retrieval, zero-shot classification, or downstream ML pipelines.
+      &
+      CLIP ViT-B/32 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Model Inventory}
+\label{sec:catalog:inventory}
+
+Table~\ref{tab:model-inventory} enumerates all 16 models in the current VisionServe
+registry.  Each model is distributed as one or more ONNX files; multi-session models
+(MobileSAM, EfficientSAM, SAM2, Grounded-SAM) use the \texttt{PipelineModel} interface
+and declare a \texttt{files:} role map in their manifest.
+
+\begin{table}[t]
+  \centering
+  \small
+  \caption{%
+    VisionServe model inventory.
+    Architecture notes describe the primary network family.
+    Models marked $\dagger$ are pending benchmark runs (see text).%
+  }
+  \label{tab:model-inventory}
+  \begin{tabular}{llll}
+    \toprule
+    \textbf{Model} & \textbf{Task} & \textbf{License} & \textbf{Architecture} \\
+    \midrule
+    \texttt{rf-detr}          & detection     & Apache-2.0 & ResNet-50 backbone + DETR head (NMS-free) \\
+    \texttt{rf-detr-nano}     & detection     & Apache-2.0 & Lightweight DETR variant \\
+    \texttt{rt-detr}$^\dagger$& detection     & Apache-2.0 & Hybrid CNN/Transformer real-time DETR \\
+    \texttt{scrfd}            & detection     & MIT        & Sample- \& computation-redistributed face detector \\
+    \texttt{paddle-ocr}       & detection     & Apache-2.0 & PP-OCRv4 text detection backbone \\
+    \texttt{grounding-dino}   & open\_vocab   & Apache-2.0 & Swin-T image encoder + BERT text encoder \\
+    \texttt{mobile-sam}       & segmentation  & Apache-2.0 & Tiny ViT encoder + SAM decoder \\
+    \texttt{efficient-sam}    & segmentation  & Apache-2.0 & ViT-S/16 encoder with masked-image pretraining \\
+    \texttt{sam2}             & segmentation  & Apache-2.0 & Hiera-Tiny image/video encoder + SAM2 decoder \\
+    \texttt{nano-sam}$^\dagger$& segmentation & Apache-2.0 & ResNet-18 distilled SAM encoder \\
+    \texttt{grounded-sam}$^\dagger$ & segmentation & Apache-2.0 & GroundingDINO boxes $\to$ MobileSAM masks (composite) \\
+    \texttt{midas}            & depth         & MIT        & DPT-Hybrid (ViT-H + dense prediction transformer) \\
+    \texttt{depth-anything-v2}$^\dagger$ & depth & Apache-2.0 & ViT-S teacher-student depth foundation model \\
+    \texttt{efficientnet-b0}  & classification& Apache-2.0 & EfficientNet-B0 compound-scaled CNN \\
+    \texttt{mobilenet-v3}     & classification& Apache-2.0 & MobileNetV3-Large depthwise-separable CNN \\
+    \texttt{clip}             & embed         & MIT        & CLIP ViT-B/32 vision encoder (image side only) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\noindent
+Four models are currently pending benchmark runs: \texttt{rt-detr} and
+\texttt{depth-anything-v2} require authenticated HuggingFace downloads;
+\texttt{nano-sam} requires a manual ONNX export; and \texttt{grounded-sam} is a
+composite pipeline whose end-to-end latency depends on the individual
+GroundingDINO and MobileSAM sessions.  Benchmark results for these models
+will be added in a future revision.
+
+\subsection{License Safety}
+\label{sec:catalog:license}
+
+Open-source computer-vision models carry heterogeneous licenses, and the distinction
+between permissive and copyleft licenses has material consequences for downstream
+deployments.  The most prominent example is the Ultralytics YOLO family
+\cite{ultralytics2023yolo}, which is released under the \emph{GNU Affero General
+Public License v3.0} (AGPL-3.0) \cite{agpllicense}.  AGPL-3.0 extends the GPL copyleft
+to networked services: any software that \emph{uses} AGPL code and provides access to
+users over a network must release its \emph{entire} source under AGPL-3.0.  As a result,
+integrating a single AGPL model into an inference server would virally relicense the
+server — and every product built on it — under AGPL-3.0.  This is incompatible with
+closed-source, proprietary, or commercial deployments; the only escape is a separate
+commercial license negotiated with the copyright holder.
+
+VisionServe enforces an allowlist of permissive licenses
+(\texttt{Apache-2.0}, \texttt{MIT}, \texttt{BSD-2-Clause}, \texttt{BSD-3-Clause})
+in the registry parser at process startup \cite{apachelicense}.  Any model manifest
+that declares a \texttt{license} field outside this allowlist causes the server to
+abort with a clear error message, preventing accidental integration of copyleft models.
+Critically, this check is implemented in code, not merely documented: the manifest
+\texttt{license} field is a required string, and the parser rejects absent or
+non-allowlisted values before any ONNX session is initialised.  This design choice is
+deliberate: because VisionServe is itself Apache-2.0 and targets edge deployments in
+commercial and closed-source products, its permissive character must be preserved by
+every model it ships.
+
+\subsection{Manifest Specification}
+\label{sec:catalog:manifest}
+
+Each model is described by a YAML \emph{manifest} file that the registry loads at
+startup.  The manifest declares all information needed to validate the license,
+locate ONNX artefacts, configure the execution-provider fallback chain, and pass
+preprocessing parameters to the model's Go package without hard-coding them.
+
+For plain (single-session) models, the manifest provides a single \texttt{model\_file}
+path.  For \texttt{PipelineModel} instances that require multiple ONNX sessions
+(e.g.\ MobileSAM encoder/decoder, Grounded-SAM), the manifest uses a \texttt{files:}
+role map instead; each key is a logical role name that the model package uses to
+request the correct session from \texttt{lifecycle.Manager}.
+
+The following listing shows a representative manifest for \texttt{rf-detr-nano}:
+
+\begin{lstlisting}[language=yaml, caption={Sample manifest: \texttt{rf-detr-nano}.},
+                   label={lst:manifest}]
+name: rf-detr-nano
+task: detection
+license: Apache-2.0
+
+execution_providers:
+  - tensorrt
+  - cuda
+  - cpu
+
+model_file: models/rf_detr_nano.onnx
+
+preprocessing:
+  resize: [560, 560]
+  mean:   [0.485, 0.456, 0.406]
+  std:    [0.229, 0.224, 0.225]
+  input_format: NCHW
+\end{lstlisting}
+
+\noindent
+The \texttt{execution\_providers} list is tried in order; if the ORT build on the host
+does not include a listed provider, it is skipped silently and the next entry is
+attempted.  \texttt{cpu} is always appended last to guarantee a functional fallback on
+any hardware.  The \texttt{preprocessing} block is parsed into a \texttt{PreprocessMeta}
+struct and passed to the model's \texttt{Preprocess} method, ensuring that bounding-box
+coordinates are mapped back to original-image space before the result is serialised.

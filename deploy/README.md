@@ -92,6 +92,8 @@ reaches TRT, giving **2–4× speedup** over the plain CUDA EP:
 | RF-DETR-base | ~41 ms | ~10–20 ms |
 | GroundingDINO | ~325 ms | ~80–150 ms |
 
+> For measured latency across all 12 models (CLIP, SCRFD, RF-DETR, SAM variants, etc.), see the [Performance section in the main README](../README.md#performance).
+
 > TensorRT JIT-compiles an optimized engine on **first load** — this can take 1–5 minutes
 > depending on the model. Subsequent loads reuse the cached engine (in the `/models`
 > volume). Set `VISIONSERVE_TRACE=1` to confirm the TRT EP loaded.

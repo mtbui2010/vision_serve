@@ -1,0 +1,17 @@
+VisionServe provides a lean, license-safe path to local computer-vision inference.
+Three design choices underpin the system: a single Go binary with no Python runtime
+dependency, all inference routed exclusively through ONNX Runtime~\cite{onnxruntime}
+on a strict Apache-2.0/MIT/BSD license allowlist, and a unified \texttt{Result} schema
+shared across all task types. Together, these choices make deployment reproducible on
+hardware ranging from a Jetson Orin to an Apple Silicon laptop without operator
+intervention. Across 16 registered models covering six task types---object detection,
+instance segmentation, depth estimation, face detection, OCR, and open-vocabulary
+detection---measured end-to-end latencies range from 33\,ms to 570\,ms on an RTX A6000
+GPU, with sub-100\,ms achievable for the majority of models at typical input resolutions.
+
+VisionServe is released under the Apache-2.0 license and is publicly available at
+\url{https://github.com/mtbui2010/visionserve}. We invite community contributions: new models require
+only a single package under \texttt{internal/models/} implementing the \texttt{Model}
+or \texttt{PipelineModel} interface, with no changes to core server or engine code.
+Planned extensions include the CLIP~\cite{radford2021clip} text encoder, RTMPose,
+ArcFace, ROCm execution-provider support, and multi-image request batching.

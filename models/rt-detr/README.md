@@ -62,3 +62,7 @@ curl -s -F model=rt-detr -F image=@photo.jpg \
 RT-DETR is NMS-free (DETR-style set prediction). Do NOT apply post-hoc NMS — the
 postprocess in `internal/models/rtdetr/postprocess.go` intentionally omits it. Only
 confidence filtering + top-K sorting are applied.
+
+## Performance
+
+Benchmark not yet available — ONNX download requires HuggingFace authentication (`onnx-community/RT-DETR-l-hf`). Download manually and run `python3 benchmarks/bench_all_models.py --models rt-detr --device gpu`.

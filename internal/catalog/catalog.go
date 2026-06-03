@@ -26,6 +26,11 @@ import (
 //go:embed labels/coco91.txt
 var coco91 string
 
+// imagenet1k embeds the standard 1000-class ILSVRC2012 labels (PyTorch order).
+//
+//go:embed labels/imagenet1k.txt
+var imagenet1k string
+
 // File describes one downloadable artifact of a model.
 type File struct {
 	// Role is the logical role used by multi-session models (e.g. "encoder",
@@ -42,6 +47,12 @@ type File struct {
 	// but is not an ONNX graph). For single-file models, ManifestRole is empty
 	// and the file is wired via Manifest.ModelFile instead.
 	ManifestRole string
+	// DirectURL is used instead of HFRepo+HFFilename when the file is hosted
+	// outside HuggingFace. Supported schemes:
+	//   "gdrive://FILE_ID"  — Google Drive public file
+	//   "https://..."       — any direct HTTPS URL
+	// Leave empty for normal HF downloads.
+	DirectURL string
 }
 
 // Normalize is the optional mean/std normalization baked into the manifest.
@@ -345,10 +356,11 @@ var builtin = []Entry{
 		PostprocessType:   "classification",
 		MaxDetections:     5,
 		LabelsFile:        "imagenet1k.txt",
+		EmbeddedLabels:    imagenet1k,
 		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
 		IdleUnloadSeconds: 300,
 		Verified:          true,
-		Note:              "imagenet1k.txt labels file must be present in the model directory. Input 'x' [1,3,224,224], output logits [1,1000].",
+		Note:              "Input 'x' [1,3,224,224], output logits [1,1000]. imagenet1k.txt written by pull.",
 	},
 	{
 		Name:         "mobilenet-v3",
@@ -368,10 +380,11 @@ var builtin = []Entry{
 		PostprocessType:   "classification",
 		MaxDetections:     5,
 		LabelsFile:        "imagenet1k.txt",
+		EmbeddedLabels:    imagenet1k,
 		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
 		IdleUnloadSeconds: 300,
 		Verified:          true,
-		Note:              "imagenet1k.txt labels file must be present in the model directory. Input 'x' [1,3,224,224], output logits [1,1000].",
+		Note:              "Input 'x' [1,3,224,224], output logits [1,1000]. imagenet1k.txt written by pull.",
 	},
 	{
 		Name:         "clip",
@@ -400,16 +413,22 @@ var builtin = []Entry{
 		License:      "Apache-2.0",
 		Architecture: "nano-sam",
 		Description:  "NanoSAM — NVIDIA edge-optimized SAM (ResNet-18 encoder), Apache-2.0.",
-		// NanoSAM ONNX files are NOT on HuggingFace; they must be downloaded from
-		// Google Drive links in the NVIDIA-AI-IOT/nanosam README:
-		//   resnet18_image_encoder.onnx  — encoder
-		//   mobile_sam_mask_decoder.onnx — decoder
-		// HFRepo is intentionally empty; `pull` will show the Note directing users
-		// to the manual download instructions.
+		// Weights are hosted on Google Drive (not HuggingFace) by NVIDIA.
+		// DirectURL uses the "gdrive://FILE_ID" scheme; pull handles the download.
 		HFRepo: "",
 		Files: []File{
-			{Role: "encoder", HFFilename: "resnet18_image_encoder.onnx", LocalFilename: "resnet18_image_encoder.onnx", ManifestRole: "encoder"},
-			{Role: "decoder", HFFilename: "mobile_sam_mask_decoder.onnx", LocalFilename: "mobile_sam_mask_decoder.onnx", ManifestRole: "decoder"},
+			{
+				Role:          "encoder",
+				DirectURL:     "gdrive://14-SsvoaTl-esC3JOzomHDnI9OGgdO2OR",
+				LocalFilename: "resnet18_image_encoder.onnx",
+				ManifestRole:  "encoder",
+			},
+			{
+				Role:          "decoder",
+				DirectURL:     "gdrive://1jYNvnseTL49SNRx9PDcbkZ9DwsY8up7n",
+				LocalFilename: "mobile_sam_mask_decoder.onnx",
+				ManifestRole:  "decoder",
+			},
 		},
 		InputWidth:        1024,
 		InputHeight:       1024,
@@ -417,17 +436,12 @@ var builtin = []Entry{
 		PostprocessType:   "sam",
 		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
 		IdleUnloadSeconds: 300,
-		Verified:          false,
-		Note: "NanoSAM ONNX files are NOT on HuggingFace — download manually from the " +
-			"Google Drive links in the NVIDIA-AI-IOT/nanosam README " +
-			"(github.com/NVIDIA-AI-IOT/nanosam). " +
-			"Encoder: resnet18_image_encoder.onnx (input 'image' [1,3,1024,1024] NCHW ImageNet-norm, " +
+		Verified:          true,
+		Note: "Encoder: resnet18_image_encoder.onnx (input 'image' [1,3,1024,1024] NCHW ImageNet-norm, " +
 			"output 'image_embeddings' [1,256,64,64]). " +
 			"Decoder: mobile_sam_mask_decoder.onnx (inputs: image_embeddings, point_coords, " +
 			"point_labels, mask_input, has_mask_input; NO orig_im_size input; " +
-			"outputs: iou_predictions [1,M], low_res_masks [1,M,256,256]). " +
-			"License: Apache-2.0 (confirmed from github.com/NVIDIA-AI-IOT/nanosam). " +
-			"Place both files in the model directory and register manually.",
+			"outputs: iou_predictions [1,M], low_res_masks [1,M,256,256]).",
 	},
 	{
 		Name:         "scrfd",

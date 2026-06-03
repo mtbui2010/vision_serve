@@ -1,0 +1,96 @@
+\documentclass{article}
+
+% NeurIPS 2024 style — download neurips_2024.sty from:
+%   https://neurips.cc/Conferences/2024/PaperInformation/StyleFiles
+% or compile on Overleaf (the package is pre-installed there).
+\usepackage[preprint]{neurips_2024}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit, backgrounds}
+\usepackage{pgfplots}
+\pgfplotset{compat=1.18}
+\usepackage{multirow}
+\usepackage{array}
+
+% Code listing style
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!8},
+}
+
+% -----------------------------------------------------------------------
+\title{VisionServe: A Lean, License-Safe Inference Server\\for Computer Vision}
+
+\author{
+  Trung Minh Bui \\
+  Korea Electronics Technology Institute (KETI) \\
+  \texttt{bmtrungvp@gmail.com}
+}
+
+\begin{document}
+\maketitle
+
+% -----------------------------------------------------------------------
+\begin{abstract}
+\input{sections/abstract}
+\end{abstract}
+
+% -----------------------------------------------------------------------
+\section{Introduction}
+\label{sec:intro}
+\input{sections/introduction}
+
+% -----------------------------------------------------------------------
+\section{Related Work}
+\label{sec:related}
+\input{sections/related}
+
+% -----------------------------------------------------------------------
+\section{System Design}
+\label{sec:design}
+\input{sections/design}
+
+% -----------------------------------------------------------------------
+\section{Model Catalog}
+\label{sec:catalog}
+\input{sections/catalog}
+
+% -----------------------------------------------------------------------
+\section{Evaluation}
+\label{sec:eval}
+\input{sections/evaluation}
+
+% -----------------------------------------------------------------------
+\section{Applications}
+\label{sec:applications}
+\input{sections/applications}
+
+% -----------------------------------------------------------------------
+\section{Limitations and Future Work}
+\label{sec:limitations}
+\input{sections/limitations}
+
+% -----------------------------------------------------------------------
+\section{Conclusion}
+\label{sec:conclusion}
+\input{sections/conclusion}
+
+% -----------------------------------------------------------------------
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

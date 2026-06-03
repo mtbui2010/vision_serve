@@ -59,3 +59,41 @@ export function filterBySize(result: Result, opts: SizeFilterOptions): Result {
     result.durationMs,
   );
 }
+
+export function getDepthAtDetection(
+  depthResult: Result,
+  detResult: Result,
+  mode: "median" | "mean" | "min" | "max" = "median",
+): Array<number | null> {
+  const { depthMap, depthWidth, depthHeight } = depthResult;
+
+  const aggregate = (pixels: number[]): number | null => {
+    const valid = pixels.filter((v) => v !== 0);
+    if (valid.length === 0) return null;
+    if (mode === "min") return Math.min(...valid);
+    if (mode === "max") return Math.max(...valid);
+    if (mode === "mean") return valid.reduce((s, v) => s + v, 0) / valid.length;
+    const sorted = valid.slice().sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+  };
+
+  const bboxes =
+    detResult.detections.length > 0
+      ? detResult.detections.map((d) => d.bbox)
+      : detResult.masks.map((m) => m.bbox);
+
+  return bboxes.map((bbox) => {
+    const x0 = Math.max(0, Math.floor(bbox[0]));
+    const y0 = Math.max(0, Math.floor(bbox[1]));
+    const x1 = Math.min(depthWidth, Math.ceil(bbox[0] + bbox[2]));
+    const y1 = Math.min(depthHeight, Math.ceil(bbox[1] + bbox[3]));
+    const pixels: number[] = [];
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        pixels.push(depthMap[y * depthWidth + x]);
+      }
+    }
+    return aggregate(pixels);
+  });
+}

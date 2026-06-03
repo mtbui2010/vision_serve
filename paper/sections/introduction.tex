@@ -1,0 +1,74 @@
+Computer vision models have moved rapidly from research prototypes into production pipelines
+and edge deployments, powering applications from autonomous inspection robots to real-time
+video analytics at the network edge.
+
+\paragraph{Problem.}
+General-purpose model-serving systems such as NVIDIA Triton Inference Server~\cite{nvidia2023triton}
+and TorchServe~\cite{pytorch2023torchserve} are architected for cloud data centers: they
+require Kubernetes or Docker orchestration, expose complex gRPC configuration surfaces, and
+carry Python or JVM runtimes that can exceed several gigabytes of disk and memory overhead.
+At the other extreme, deploying a model by running a bare PyTorch script provides neither
+a stable REST API, nor lifecycle management (loading, unloading, VRAM accounting), nor the
+ability to serve multiple models through a single endpoint.
+Compounding the infrastructure problem is a license minefield: the most widely used
+detection models---the YOLO series---are released under the GNU Affero General Public
+License v3.0 (AGPL-3.0)~\cite{ultralytics2023yolo,agpllicense}, which requires any software
+that incorporates or exposes YOLO as a network service to publish its entire source code
+under AGPL-3.0, foreclosing use in closed-source or commercial products without a
+paid commercial license.
+
+\paragraph{Gap.}
+Despite the wide variety of available tools, no existing solution simultaneously provides
+(a)~a complete CV serving stack---covering detection, segmentation, open-vocabulary
+detection, classification, depth estimation, and embedding---in a single deployable unit;
+(b)~a guarantee that every included model is permissively licensed (Apache-2.0, MIT, or
+BSD) so that downstream products can use it without license encumbrance; and
+(c)~a single self-contained binary that runs on edge hardware without requiring a Python
+interpreter, GPU driver stack beyond what ONNX Runtime needs, or container runtime.
+
+\paragraph{VisionServe.}
+We present VisionServe, a lightweight inference server written in Go that is designed to be
+the ``Ollama for Computer Vision''~\cite{ollama2023}: one binary, pulled from a local model
+registry, serving any of 16 supported models over a REST API with no Python dependency.
+All inference is delegated to ONNX Runtime~\cite{onnxruntime} via a thin cgo binding,
+enabling automatic fallback across execution providers (TensorRT $\to$ CUDA $\to$ CoreML
+$\to$ DirectML $\to$ OpenVINO $\to$ CPU) without changes to model code.
+License safety is enforced structurally: the model registry parser validates each model's
+declared license against an Apache-2.0/MIT/BSD allowlist at server startup, refusing to
+load any model that does not pass.
+
+\paragraph{Contributions.}
+This paper makes the following contributions:
+
+\begin{itemize}
+  \item \textbf{Single-binary CV server.} A Go server that wraps ONNX Runtime to serve
+        16 computer vision models across 6 task types---object detection, instance
+        segmentation, open-vocabulary detection, image classification, monocular depth
+        estimation, and visual embedding---with no Python runtime dependency and a
+        footprint small enough for edge devices.
+
+  \item \textbf{Structural license-safety enforcement.} A registry parser that statically
+        enforces an Apache-2.0/MIT/BSD allowlist and rejects AGPL models at load time,
+        providing a machine-checkable guarantee against copyleft contamination for every
+        deployment.
+
+  \item \textbf{Unified result schema and client libraries.} A single result envelope
+        (\texttt{Detections}, \texttt{Masks}, \texttt{Classifications}, \texttt{DepthMap},
+        \texttt{Embeddings}) shared across all tasks, paired with Python and
+        JavaScript/TypeScript client libraries that expose post-processing utilities such as
+        \texttt{nms()}, \texttt{filter\_by\_conf()}, \texttt{group\_by\_class()}, and
+        \texttt{get\_depth\_at\_detection()}.
+
+  \item \textbf{Benchmark suite.} A reproducible evaluation of all 16 models on an NVIDIA
+        RTX~A6000, reporting p50/p95 latency, throughput, VRAM consumption, and cold-start
+        time, providing practitioners with data to make informed model-selection decisions
+        for their hardware budget.
+\end{itemize}
+
+\paragraph{Paper outline.}
+The remainder of this paper is organized as follows: Section~\ref{sec:related} surveys
+related work in model serving and CV tooling; Section~\ref{sec:design} describes the
+system architecture and key design decisions; Section~\ref{sec:catalog} presents the model
+catalog; Section~\ref{sec:eval} reports benchmark results; Section~\ref{sec:applications}
+illustrates representative use cases; and Sections~\ref{sec:limitations}
+and~\ref{sec:conclusion} discuss limitations, future directions, and conclusions.

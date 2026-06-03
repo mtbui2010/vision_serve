@@ -72,7 +72,7 @@ runtime:
 | Field | Meaning |
 |-------|---------|
 | `name` | required — registry identifier |
-| `task` | `detection` / `segmentation` / `open_vocab` |
+| `task` | `detection` / `segmentation` / `open_vocab` / `depth` / `classification` / `embed` |
 | `license` | required — must be in the permissive allowlist (below) |
 | `architecture` | optional — factory key (default = `name`) |
 | `model_file` | path to the .onnx — **optional when `files:` is present** |
@@ -93,7 +93,7 @@ runtime:
 |-------|------------|
 | `name` | required, non-empty |
 | `license` | must be ∈ {Apache-2.0, MIT, BSD-3-Clause, BSD-2-Clause}. **AGPL is strictly forbidden.** |
-| `task` | ∈ {detection, segmentation, open_vocab} |
+| `task` | ∈ {detection, segmentation, open_vocab, depth, classification, embed} |
 | `model_file` / `files` | at least one required — `model_file` OR a non-empty `files:` map |
 | `input.width/height` | > 0 |
 | `input.layout` | NCHW / NHWC (or empty) |

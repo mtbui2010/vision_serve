@@ -9,6 +9,6 @@ export { Client, VisionServeError } from "./client.js";
 export type { ImageInput, BoxInput, PointInput, PredictOptions, ClientOptions } from "./client.js";
 export { Result, Detection, Mask, ModelInfo, Classification } from "./types.js";
 export type { Task, ModelState } from "./types.js";
-export { filterBySize } from "./filter.js";
+export { filterBySize, getDepthAtDetection } from "./filter.js";
 export type { SizeFilterOptions } from "./filter.js";
 export { toSVG } from "./visualize.js";

@@ -1,0 +1,19 @@
+Deploying computer vision models locally remains fragmented: each model typically ships
+its own Python server, imposes heavy runtime dependencies, and often carries restrictive
+licenses---the popular YOLO series, for instance, is released under AGPL-3.0, which
+virally relicenses any software that links against it~\cite{ultralytics2023yolo,agpllicense}.
+There is no single lightweight server that covers the full CV stack, enforces permissive
+licensing, and ships as a self-contained binary with no Python runtime dependency.
+
+We present \textbf{VisionServe}, an open-source inference server written in Go that serves
+16 computer vision models across 6 task types---object detection, instance segmentation,
+open-vocabulary detection, image classification, monocular depth estimation, and visual
+embedding---using ONNX Runtime as its sole inference backend~\cite{onnxruntime}.
+VisionServe ships as a single statically-linked binary, requires no Python interpreter at
+runtime, and enforces an Apache-2.0/MIT/BSD license allowlist at model-load time,
+automatically rejecting AGPL models.
+On an NVIDIA RTX~A6000, end-to-end inference latency ranges from 33\,ms (CLIP embedding,
+p50) to 570\,ms (GroundingDINO, p50), with VRAM footprints between 308\,MB and 4\,392\,MB
+and cold-start times under 6\,s for all models.
+VisionServe is released under the Apache-2.0 license and is available at
+\url{https://github.com/}{[repository]}.

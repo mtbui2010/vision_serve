@@ -1,0 +1,44 @@
+VisionServe is functional across all six task types with 16 registered models, but
+several known limitations remain.
+
+\begin{itemize}
+
+    \item \textbf{Pending model exports.}
+          The RT-DETR and Depth-Anything-V2 ONNX exports hosted by
+          \texttt{onnx-community} on Hugging Face currently return HTTP 401 and require
+          gated authentication; end-to-end benchmarks for these models are therefore not
+          yet available. NanoSAM~\cite{zhang2023mobilesam} requires a manual ONNX export
+          from the NVIDIA-AI-IOT/nanosam repository via Google Drive, which cannot be
+          automated in the existing manifest-based download pipeline.
+
+    \item \textbf{CLIP text encoder deferred.}
+          Only the CLIP~\cite{radford2021clip} image encoder is currently implemented.
+          Integrating the text encoder requires a byte-pair encoding (BPE) tokenizer,
+          which has been deferred to v2. As a result, zero-shot classification is
+          currently limited to scenarios where text embeddings are precomputed externally
+          and supplied as fixed vectors.
+
+    \item \textbf{No ROCm execution provider.}
+          The \texttt{yalue/onnxruntime\_go} binding does not yet expose the ROCm
+          execution provider. AMD GPU users must therefore fall back to CPU inference,
+          foregoing GPU acceleration on that platform.
+
+    \item \textbf{Segmentation requires an explicit prompt.}
+          MobileSAM~\cite{zhang2023mobilesam}, EfficientSAM~\cite{xiong2023efficientsam},
+          and SAM2~\cite{ravi2024sam2} all require a bounding-box or point prompt to
+          produce masks. Automatic mask generation (SAM's grid-of-points mode, which
+          densely samples the image without any prior prompt) is not implemented.
+
+    \item \textbf{Single-image batching only.}
+          The server currently processes one image per request (\texttt{batch\_size=1}).
+          Submitting multiple images in a single call is not supported, which limits
+          throughput in offline or batch-processing scenarios where GPU utilisation could
+          otherwise be improved through request batching~\cite{nvidia2023triton}.
+
+    \item \textbf{Windows support untested.}
+          The Go toolchain produces a valid Windows binary, and the DirectML execution
+          provider is listed in the EP allowlist, but end-to-end operation on Windows
+          has not been validated. Windows-specific path handling and ORT library loading
+          may require additional work.
+
+\end{itemize}

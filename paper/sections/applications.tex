@@ -1,0 +1,85 @@
+\subsection{Edge Deployment}
+\label{subsec:edge-deployment}
+
+VisionServe targets resource-constrained edge scenarios without compromising inference
+performance. The execution-provider fallback chain---TensorRT $\to$ CUDA $\to$ CoreML
+$\to$ DirectML $\to$ OpenVINO $\to$ CPU---allows the same binary to exploit the best
+available accelerator on each platform: NVIDIA Jetson modules via the TensorRT EP,
+Raspberry Pi-class ARM boards via the CPU EP, and Apple Silicon Macs via the CoreML EP.
+Because the server is a single statically-linked Go binary with no Python runtime
+dependency, it eliminates the roughly 200\,MB overhead that PyTorch or TensorFlow
+deployments impose even before any model weights are loaded. This footprint reduction
+is significant on boards with 4--8\,GB of unified memory.
+
+As a concrete example, rf-detr-nano running on a Jetson Orin with the TensorRT EP
+achieves a median end-to-end latency of 57\,ms per frame at 640$\times$480 input
+resolution, including HTTP overhead. The same model falls back gracefully to the CUDA EP
+on a workstation GPU, and to the CPU EP on a plain ARM board, with no configuration
+change required from the operator.
+
+\subsection{Text-Prompted Segmentation via Grounded-SAM}
+\label{subsec:grounded-sam}
+
+Grounded-SAM~\cite{liu2023groundingdino,zhang2023mobilesam} combines open-vocabulary
+detection with prompted segmentation in a single HTTP request. The client submits a
+natural-language prompt (e.g., ``red traffic cone'') together with the image; internally,
+the \texttt{PipelineModel} implementation routes the request through two ONNX sessions
+managed by the \texttt{lifecycle.Manager}: GroundingDINO~\cite{liu2023groundingdino}
+first localises every object matching the text query and returns bounding boxes, which
+are then passed as box prompts to MobileSAM~\cite{zhang2023mobilesam}, whose decoder
+produces a binary mask for each detection. The two chained calls are invisible to the
+caller---the server returns a single unified \texttt{Result} containing both the
+detection bounding boxes and the corresponding RLE-encoded masks.
+
+A minimal invocation illustrates the simplicity of the client interface:
+
+\begin{verbatim}
+curl -X POST http://localhost:11435/infer \
+  -F "model=grounded-sam" \
+  -F "prompt=red traffic cone" \
+  -F "image=@scene.jpg"
+\end{verbatim}
+
+The response carries a \texttt{detections} array with bounding boxes in original image
+coordinates and a \texttt{masks} array encoded as column-major RLE, ready for
+downstream use without any client-side chaining logic.
+
+\subsection{Depth-Aware Detection}
+\label{subsec:depth-aware}
+
+VisionServe's Python client exposes a \texttt{get\_depth\_at\_detection()} utility that
+fuses monocular depth estimation with object detection in two independent server calls,
+enabling spatial reasoning without a stereo camera or LiDAR sensor.
+
+\begin{enumerate}
+    \item Send the image to the MiDaS~\cite{ranftl2021midas} model endpoint to obtain a
+          per-pixel relative depth map (\texttt{DepthResult}).
+    \item Send the same image to an object detector (e.g., rf-detr) to obtain bounding
+          boxes (\texttt{DetectionResult}).
+    \item Call
+          \texttt{depths = get\_depth\_at\_detection(depth\_result, det\_result)},
+          which samples the depth map at the centroid of each bounding box and returns a
+          per-detection depth value aligned with the detection list.
+\end{enumerate}
+
+The JavaScript/TypeScript client provides an equivalent \texttt{getDepthAtDetection()}
+function with the same semantics. Practical applications include warehouse robotics
+(estimating pick distance), autonomous navigation (obstacle ranging), and augmented
+reality scene understanding (anchoring virtual objects at physically plausible depths).
+
+\subsection{Open-Vocabulary and Domain-Specific Lightweight Models}
+\label{subsec:open-vocab-domain}
+
+Beyond general-purpose detection and segmentation, VisionServe supports
+domain-specific lightweight models that conform to the same unified schema. PaddleOCR
+\cite{du2020ppocr} implements a two-stage text detection and recognition pipeline
+entirely within the \texttt{PipelineModel} interface: a detection stage localises text
+regions as bounding boxes, and a recognition stage transcribes each region; the results
+are returned as a standard \texttt{Result} with no schema changes required on the client.
+
+SCRFD~\cite{guo2021scrfd} provides high-speed face detection at 45\,ms median latency
+and approximately 420\,MB VRAM. Because it implements the plain \texttt{Model}
+interface, adding face detection to an application requires only selecting the
+\texttt{scrfd} model identifier---no task-specific client code is needed. Both examples
+demonstrate that the architecture accommodates heterogeneous model families while
+maintaining a single, predictable API surface.

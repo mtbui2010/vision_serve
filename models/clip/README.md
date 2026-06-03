@@ -70,3 +70,19 @@ how CLIP was originally trained.
 The text encoder is not yet implemented. Encoding text requires a BPE (Byte-Pair Encoding)
 tokenizer, which is planned for v2. In the meantime, you can precompute text embeddings
 externally (e.g., using the Python `transformers` library) and store them for comparison.
+
+## Performance
+
+Measured on NVIDIA RTX A6000 (48 GB VRAM), VisionServe Go HTTP server, 20 warm requests.
+
+| Metric | Value |
+|--------|-------|
+| p50 latency (end-to-end HTTP) | 33 ms |
+| p95 latency | 69 ms |
+| Inference only (srv p50) | 12 ms |
+| Throughput | 27.9 RPS |
+| VRAM (GPU) | 810 MB |
+| ONNX size | 335 MB |
+| Cold-start | 5.8 s |
+
+Fastest end-to-end in the catalog. Inference is 12 ms; the 21 ms overhead is Go preprocess (resize+normalize+CHW).

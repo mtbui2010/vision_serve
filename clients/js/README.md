@@ -99,6 +99,51 @@ class Result {
 (`1` = inside the mask); `Mask.toMask2D(width, height)` returns a `boolean[][]`. Pass the
 **original** image width/height the mask was produced against.
 
+## Post-processing
+
+All methods return a **new** `Result`; the original is not modified.
+
+```typescript
+import { Client, getDepthAtDetection } from "visionserve";
+
+const client = new Client();
+let result = await client.predict("rf-detr", imageBytes);
+
+// Filter, sort, NMS
+result = result.filterByConf(0.5)
+               .nms(0.45)
+               .sortByConf();
+
+// Top-5
+const top5 = result.topK(5);
+
+// Group by class
+const byClass = result.groupByClass();
+for (const [cls, r] of Object.entries(byClass)) {
+  console.log(`${cls}: ${r.detections.length} detections`);
+}
+
+// Depth fusion
+const depth = await client.predict("midas", imageBytes);
+const depths = getDepthAtDetection(depth, result);
+result.detections.forEach((det, i) => {
+  console.log(`${det.cls}: depth=${depths[i]?.toFixed(2) ?? "N/A"}`);
+});
+```
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `filterByConf` | `(minConf, maxConf?)` | Keep predictions with conf in `[minConf, maxConf]` |
+| `sortByConf` | `(descending?)` | Sort predictions by confidence (default descending) |
+| `topK` | `(k)` | Retain top-k predictions by confidence |
+| `nms` | `(iouThreshold?)` | Greedy NMS on detections |
+| `groupByClass` | `()` | Returns `Record<string, Result>` keyed by class label |
+
+`getDepthAtDetection(depthResult, detResult, mode?)` (exported from the top-level
+`visionserve` package, implemented in `filter.ts`) returns `(number | null)[]` — one
+depth value per detection/mask, or `null` when the box falls outside the depth map.
+`mode` is `"median"` (default) or `"mean"`.
+
 ## Size filtering
 
 Keep only objects whose bbox area is within a range. Available as a standalone function

@@ -124,6 +124,52 @@ for cls_pred in res.classifications:
     print(cls_pred.cls, round(cls_pred.conf, 3))
 ```
 
+## Post-processing
+
+All methods return a **new** `Result`; the original is not modified. They work on
+`detections`, `masks`, and `classifications` as appropriate.
+
+```python
+from visionserve import Client, get_depth_at_detection
+
+client = Client()
+result = client.predict("rf-detr", "photo.jpg")
+
+# Keep only high-confidence detections
+result = result.filter_by_conf(min_conf=0.5)
+
+# NMS to remove overlapping boxes
+result = result.nms(iou_threshold=0.45)
+
+# Top-5 predictions
+result = result.top_k(5)
+
+# Sort and group by class
+result = result.sort_by_conf()
+by_class = result.group_by_class()
+for cls, r in by_class.items():
+    print(f"{cls}: {len(r.detections)} detections")
+
+# Combine depth model with detection
+depth = client.predict("midas", "photo.jpg")
+depths = get_depth_at_detection(depth, result)
+for det, d in zip(result.detections, depths):
+    print(f"{det.cls}: depth={d:.1f}" if d else f"{det.cls}: no depth")
+```
+
+| Method | Signature | Description |
+| --- | --- | --- |
+| `filter_by_conf` | `(min_conf=0.0, max_conf=1.0)` | Keep predictions with conf in `[min_conf, max_conf]` |
+| `sort_by_conf` | `(*, descending=True)` | Sort predictions by confidence |
+| `top_k` | `(k)` | Retain top-k predictions by confidence |
+| `nms` | `(iou_threshold=0.5)` | Greedy NMS on detections; no-op if no detections |
+| `group_by_class` | `()` | Returns `Dict[str, Result]` keyed by class label |
+
+`get_depth_at_detection(depth_result, det_result, *, mode="median")` (from
+`visionserve.postprocess` or the top-level `visionserve` package) returns
+`List[Optional[float]]` — one depth value per detection/mask, or `None` when
+the box falls outside the depth map. `mode` is `"median"` (default) or `"mean"`.
+
 ### Size filtering — `Result.filter_by_size()`
 
 Remove detections/masks whose bounding-box area is outside a range.

@@ -56,19 +56,11 @@ func (p *progressWriter) finish() {
 	fmt.Fprintln(p.out)
 }
 
-// DownloadFile streams an HF file to destPath. It downloads to a ".part" temp
-// file first and renames on success (so a partial/interrupted download never
-// looks complete). Large files (hundreds of MB) are streamed, never buffered
-// in memory. progressOut receives the human-readable progress line (e.g.
-// os.Stderr); pass nil to disable.
-func DownloadFile(repo, hfFilename, destPath string, progressOut io.Writer) (int64, error) {
-	url := ResolveURL(repo, hfFilename)
-
-	client := &http.Client{
-		// Generous timeout for very large files (e.g. 719MB grounding-dino) on
-		// slow links; 0 would mean no timeout but we keep a high ceiling.
-		Timeout: 2 * time.Hour,
-	}
+// downloadURL is the shared streaming implementation used by DownloadFile,
+// DownloadDirect, and DownloadGDrive. It streams url → destPath via a ".part"
+// temp file (atomic rename on success). Large files are never buffered in RAM.
+func downloadURL(url, destPath string, progressOut io.Writer) (int64, error) {
+	client := &http.Client{Timeout: 2 * time.Hour}
 	resp, err := client.Get(url)
 	if err != nil {
 		return 0, fmt.Errorf("download %s: %w", url, err)
@@ -121,6 +113,32 @@ func DownloadFile(repo, hfFilename, destPath string, progressOut io.Writer) (int
 	return n, nil
 }
 
+// DownloadFile streams an HF file to destPath. progressOut receives
+// human-readable progress (e.g. os.Stderr); pass nil to disable.
+func DownloadFile(repo, hfFilename, destPath string, progressOut io.Writer) (int64, error) {
+	return downloadURL(ResolveURL(repo, hfFilename), destPath, progressOut)
+}
+
+// DownloadDirect streams any HTTPS URL to destPath.
+// Use when File.DirectURL holds a full URL (not a gdrive:// URI).
+func DownloadDirect(rawURL, destPath string, progressOut io.Writer) (int64, error) {
+	return downloadURL(rawURL, destPath, progressOut)
+}
+
+// DownloadGDrive streams a public Google Drive file to destPath.
+// fileID is the alphanumeric Drive file identifier from the share URL.
+//
+// drive.usercontent.google.com with confirm=t bypasses the HTML virus-scan
+// confirmation page served by the older drive.google.com/uc endpoint for
+// files larger than ~100 MB.
+func DownloadGDrive(fileID, destPath string, progressOut io.Writer) (int64, error) {
+	url := fmt.Sprintf(
+		"https://drive.usercontent.google.com/download?id=%s&export=download&authuser=0&confirm=t",
+		fileID,
+	)
+	return downloadURL(url, destPath, progressOut)
+}
+
 // HeadSize issues a request and returns the Content-Length of an HF file
 // without downloading the body. Useful to confirm a URL resolves (e.g. for the
 // big grounding-dino model) before committing to a full download.
@@ -159,3 +177,13 @@ func looksLikeHTMLError(head []byte) bool {
 	s := strings.ToLower(strings.TrimSpace(string(head)))
 	return strings.HasPrefix(s, "<!doctype html") || strings.HasPrefix(s, "<html")
 }
+
+// ParseGDriveURL extracts the file ID from a "gdrive://FILE_ID" URI.
+// Returns ("", false) if s is not a gdrive URI.
+func ParseGDriveURL(s string) (string, bool) {
+	if strings.HasPrefix(s, "gdrive://") {
+		return strings.TrimPrefix(s, "gdrive://"), true
+	}
+	return "", false
+}
+

@@ -192,6 +192,135 @@ export class Result {
       Number(d.duration_ms ?? 0),
     );
   }
+
+  filterByConf(minConf = 0, maxConf = 1): Result {
+    const inRange = (conf: number) => conf >= minConf && conf <= maxConf;
+    return new Result(
+      this.task,
+      this.model,
+      this.detections.filter((d) => inRange(d.conf)),
+      this.masks.filter((m) => inRange(m.conf)),
+      this.classifications.filter((c) => inRange(c.conf)),
+      this.depthMap,
+      this.depthWidth,
+      this.depthHeight,
+      this.embeddings,
+      this.durationMs,
+    );
+  }
+
+  sortByConf(descending = true): Result {
+    const cmp = descending
+      ? (a: { conf: number }, b: { conf: number }) => b.conf - a.conf
+      : (a: { conf: number }, b: { conf: number }) => a.conf - b.conf;
+    return new Result(
+      this.task,
+      this.model,
+      this.detections.slice().sort(cmp),
+      this.masks.slice().sort(cmp),
+      this.classifications.slice().sort(cmp),
+      this.depthMap,
+      this.depthWidth,
+      this.depthHeight,
+      this.embeddings,
+      this.durationMs,
+    );
+  }
+
+  topK(k: number): Result {
+    const sorted = this.sortByConf(true);
+    return new Result(
+      this.task,
+      this.model,
+      sorted.detections.slice(0, k),
+      sorted.masks.slice(0, k),
+      sorted.classifications.slice(0, k),
+      this.depthMap,
+      this.depthWidth,
+      this.depthHeight,
+      this.embeddings,
+      this.durationMs,
+    );
+  }
+
+  nms(iouThreshold = 0.5): Result {
+    const toX1Y1X2Y2 = (bbox: number[]): [number, number, number, number] => [
+      bbox[0],
+      bbox[1],
+      bbox[0] + bbox[2],
+      bbox[1] + bbox[3],
+    ];
+
+    const iou = (a: number[], b: number[]): number => {
+      const [ax1, ay1, ax2, ay2] = toX1Y1X2Y2(a);
+      const [bx1, by1, bx2, by2] = toX1Y1X2Y2(b);
+      const ix1 = Math.max(ax1, bx1);
+      const iy1 = Math.max(ay1, by1);
+      const ix2 = Math.min(ax2, bx2);
+      const iy2 = Math.min(ay2, by2);
+      const interW = Math.max(0, ix2 - ix1);
+      const interH = Math.max(0, iy2 - iy1);
+      const inter = interW * interH;
+      if (inter === 0) return 0;
+      const areaA = (ax2 - ax1) * (ay2 - ay1);
+      const areaB = (bx2 - bx1) * (by2 - by1);
+      return inter / (areaA + areaB - inter);
+    };
+
+    const sorted = this.detections.slice().sort((a, b) => b.conf - a.conf);
+    const kept: Detection[] = [];
+    for (const det of sorted) {
+      if (kept.every((k) => iou(det.bbox, k.bbox) < iouThreshold)) {
+        kept.push(det);
+      }
+    }
+
+    return new Result(
+      this.task,
+      this.model,
+      kept,
+      this.masks,
+      this.classifications,
+      this.depthMap,
+      this.depthWidth,
+      this.depthHeight,
+      this.embeddings,
+      this.durationMs,
+    );
+  }
+
+  groupByClass(): Record<string, Result> {
+    const groups: Record<string, { detections: Detection[]; masks: Mask[] }> = {};
+
+    for (const det of this.detections) {
+      if (!groups[det.cls]) groups[det.cls] = { detections: [], masks: [] };
+      groups[det.cls].detections.push(det);
+    }
+    for (const mask of this.masks) {
+      const key = mask.bbox.join(",");
+      const matchingDet = this.detections.find((d) => d.bbox.join(",") === key);
+      const cls = matchingDet?.cls ?? "";
+      if (!groups[cls]) groups[cls] = { detections: [], masks: [] };
+      groups[cls].masks.push(mask);
+    }
+
+    const result: Record<string, Result> = {};
+    for (const [cls, group] of Object.entries(groups)) {
+      result[cls] = new Result(
+        this.task,
+        this.model,
+        group.detections,
+        group.masks,
+        this.classifications.filter((c) => c.cls === cls),
+        this.depthMap,
+        this.depthWidth,
+        this.depthHeight,
+        this.embeddings,
+        this.durationMs,
+      );
+    }
+    return result;
+  }
 }
 
 /** An entry from `GET /api/models`. */

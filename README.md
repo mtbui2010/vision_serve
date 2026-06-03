@@ -1,5 +1,7 @@
 # VisionServe
 
+[![arXiv](https://img.shields.io/badge/arXiv-XXXX.XXXXX-b31b1b.svg)](https://arxiv.org/abs/XXXX.XXXXX)
+
 > **"Ollama for Computer Vision"** — local-first, a single lean Go binary, edge-GPU first (Jetson), clean licensing (permissive models only).
 
 VisionServe serves computer-vision models (detection, segmentation, open-vocabulary)
@@ -339,6 +341,12 @@ const svgString = toSVG(det, 1280, 720); // boxes + labels as <svg> string
 // In HTML: <img src="image.jpg"><svg style="position:absolute" innerHTML={svgString}>
 ```
 
+Both clients also include **post-processing helpers** on `Result` — confidence
+filtering, NMS, top-k, sort, group-by-class, and `get_depth_at_detection` /
+`getDepthAtDetection` for fusing a depth result with detections. See
+[`clients/python/README.md`](clients/python/README.md#post-processing) and
+[`clients/js/README.md`](clients/js/README.md#post-processing).
+
 ### 7. Run with Docker (self-contained, no host setup)
 
 A multi-stage image bundles the Go binary **and** ONNX Runtime (~141 MB).
@@ -663,6 +671,25 @@ Guide: [docs/contributing-models.md](docs/contributing-models.md).
    (OpenMMLab). Requires a new `Result.Poses` schema field (`TaskPose`, `PersonPose`,
    `Keypoint`). Output tensor format (SimCC vs heatmap) must be verified against real
    ONNX before implementation. See [docs/model-roadmap-medium.md](docs/model-roadmap-medium.md).
+
+---
+
+## Citation
+
+If you use VisionServe in your research, please cite:
+
+```bibtex
+@misc{visionserve2026,
+  title={VisionServe: A Lean, License-Safe Inference Server for Computer Vision},
+  author={Bui, Trung Minh},
+  year={2026},
+  eprint={XXXX.XXXXX},
+  archivePrefix={arXiv},
+  primaryClass={cs.CV}
+}
+```
+
+> ArXiv ID will be updated after submission. See [`paper/`](paper/) for the full LaTeX source.
 
 ---
 
