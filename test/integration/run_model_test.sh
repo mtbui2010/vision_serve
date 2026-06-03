@@ -62,16 +62,24 @@ done
 
 # ── Pull model weights ─────────────────────────────────────────────────────
 log "pulling model weights..."
-if ! docker run --rm --user "$DOCKER_USER" -v "$MODELS_DIR:/models" "$IMAGE_TAG" pull "$MODEL" --models /models; then
-  # For pipeline models with no HF catalog entry (e.g. grounded-sam), fall back to
-  # the local manifest from the repo — weights come from EXTRA_PULLS.
-  LOCAL_MANIFEST="$REPO_ROOT/models/$MODEL/manifest.yaml"
-  if [[ -f "$LOCAL_MANIFEST" ]]; then
-    log "no catalog entry — copying local manifest (pipeline model)"
-    mkdir -p "$MODELS_DIR/$MODEL"
-    cp "$LOCAL_MANIFEST" "$MODELS_DIR/$MODEL/manifest.yaml"
+PULL_OUT=$(docker run --rm --user "$DOCKER_USER" -v "$MODELS_DIR:/models" \
+  "$IMAGE_TAG" pull "$MODEL" --models /models 2>&1) && PULL_OK=1 || PULL_OK=0
+echo "$PULL_OUT"
+if [[ $PULL_OK -eq 0 ]]; then
+  if echo "$PULL_OUT" | grep -q "unknown model"; then
+    # Model not in catalog: fall back to local manifest (e.g. grounded-sam reuses
+    # sibling weights pulled by EXTRA_PULLS).
+    LOCAL_MANIFEST="$REPO_ROOT/models/$MODEL/manifest.yaml"
+    if [[ -f "$LOCAL_MANIFEST" ]]; then
+      log "not in catalog — using local manifest (pipeline model)"
+      mkdir -p "$MODELS_DIR/$MODEL"
+      cp "$LOCAL_MANIFEST" "$MODELS_DIR/$MODEL/manifest.yaml"
+    else
+      log "SKIP: model not in catalog and no local manifest"
+      exit 2
+    fi
   else
-    log "SKIP: pull failed (no catalog entry or 401)"
+    log "SKIP: pull failed (network error / auth required)"
     exit 2
   fi
 fi
@@ -88,7 +96,8 @@ CLI_OUT=$(docker run --rm --user "$DOCKER_USER" \
   "$IMAGE_TAG" \
   "${CLI_ARGS[@]}")
 
-echo "$CLI_OUT" | head -3
+# Use bash substring to avoid SIGPIPE when JSON is large (e.g. depth maps)
+echo "${CLI_OUT:0:300}"
 # Verify JSON output has the task field
 echo "$CLI_OUT" | python3 -c "
 import sys, json

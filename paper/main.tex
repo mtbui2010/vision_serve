@@ -20,9 +20,18 @@
 \usepackage{tikz}
 \usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit, backgrounds}
 \usepackage{pgfplots}
-\pgfplotset{compat=1.18}
+\pgfplotsset{compat=1.18}
 \usepackage{multirow}
 \usepackage{array}
+
+% YAML is not a built-in listings language — define a minimal dialect.
+\lstdefinelanguage{yaml}{
+  keywords={true,false,null},
+  sensitive=true,
+  comment=[l]{\#},
+  morestring=[b]",
+  morestring=[b]',
+}
 
 % Code listing style
 \lstset{
