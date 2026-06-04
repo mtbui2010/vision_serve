@@ -5,6 +5,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 // Version is the binary version (overridden at build time via -ldflags).
@@ -22,7 +23,7 @@ Usage:
   visionserve version               print the version
 
 Common flags:
-  --models <dir>   model registry directory (default ./models, or $VISIONSERVE_MODELS)
+  --models <dir>   model registry directory (default ~/.visionserve/models, or $VISIONSERVE_MODELS)
   --addr <host:port>  server address (default :11435)
   --out <file>     (run) save the image with drawn bboxes/masks to a .png/.jpg file
   --prompt <text>  (run) text prompt for open-vocab models, e.g. "cat. remote."
@@ -62,7 +63,20 @@ func Execute(args []string) error {
 	}
 }
 
-// modelsDir returns the registry directory, resolved as --models flag > env > default ./models.
+// defaultModelsDir returns the default model registry path:
+// ~/.visionserve/models (resolved from $HOME at runtime).
+// In a Docker container running as root this is /root/.visionserve/models.
+func defaultModelsDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "/root/.visionserve/models"
+	}
+	return filepath.Join(home, ".visionserve", "models")
+}
+
+// modelsDir resolves the registry directory:
+//
+//	--models flag  >  $VISIONSERVE_MODELS env  >  ~/.visionserve/models
 func modelsDir(flagVal string) string {
 	if flagVal != "" {
 		return flagVal
@@ -70,5 +84,5 @@ func modelsDir(flagVal string) string {
 	if env := os.Getenv("VISIONSERVE_MODELS"); env != "" {
 		return env
 	}
-	return "./models"
+	return defaultModelsDir()
 }

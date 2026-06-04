@@ -347,134 +347,116 @@ filtering, NMS, top-k, sort, group-by-class, and `get_depth_at_detection` /
 [`clients/python/README.md`](clients/python/README.md#post-processing) and
 [`clients/js/README.md`](clients/js/README.md#post-processing).
 
-### 7. Run with Docker (self-contained, no host setup)
+### 7. Run with Docker
 
-Pre-built images are published on Docker Hub at
-[`mtbui2010/visionserve`](https://hub.docker.com/r/mtbui2010/visionserve).
-Two variants are available:
+Pre-built images on Docker Hub: [`mtbui2010/visionserve`](https://hub.docker.com/r/mtbui2010/visionserve)
 
 | Tag | Contents | Size |
 |-----|----------|------|
 | `latest`, `v0.1.0`, `v0.1.0-cpu` | Go binary + ONNX Runtime CPU | ~141 MB |
 | `v0.1.0-gpu` | + CUDA 12.4 + cuDNN 9 + TensorRT 10 | ~6.7 GB |
 
-#### Pull from Docker Hub
+#### Step 1 — Start the server
 
 ```bash
-# CPU image (no GPU required)
-docker pull mtbui2010/visionserve:latest
-
-# GPU image (NVIDIA CUDA/TensorRT, needs nvidia-container-toolkit)
-docker pull mtbui2010/visionserve:v0.1.0-gpu
+# CPU (no GPU required)
+docker run -d \
+  -v visionserve:/root/.visionserve \
+  -p 11435:11435 \
+  --name visionserve \
+  mtbui2010/visionserve:latest
 ```
 
-#### Download model weights inside the container
+```bash
+# GPU — NVIDIA CUDA/TensorRT (needs nvidia-container-toolkit)
+docker run -d \
+  --gpus all \
+  -v visionserve:/root/.visionserve \
+  -p 11435:11435 \
+  --name visionserve \
+  mtbui2010/visionserve:v0.1.0-gpu
+```
 
-Weights are **not baked in** — download them once into a local directory and
-mount it at `/models`. The built-in `pull` command handles this Ollama-style:
+The named volume `visionserve:/root/.visionserve` persists downloaded models across
+restarts. Omit `-v` if you don't need persistence.
+
+#### Step 2 — Pull a model
 
 ```bash
-mkdir -p $HOME/visionserve-models
+docker exec -it visionserve visionserve pull rf-detr
+```
 
-# Pull a model (downloads ONNX weights from HuggingFace)
+All available models (all free, Apache-2.0 / MIT):
+
+```bash
+docker exec -it visionserve visionserve pull rf-detr          # detection, COCO
+docker exec -it visionserve visionserve pull rf-detr-nano     # detection, faster
+docker exec -it visionserve visionserve pull rt-detr          # detection, COCO-80
+docker exec -it visionserve visionserve pull mobile-sam       # segmentation
+docker exec -it visionserve visionserve pull efficient-sam    # segmentation, lighter
+docker exec -it visionserve visionserve pull sam2             # segmentation, SAM2-Tiny
+docker exec -it visionserve visionserve pull grounding-dino   # open-vocab detection
+docker exec -it visionserve visionserve pull midas            # depth estimation
+docker exec -it visionserve visionserve pull depth-anything-v2  # depth estimation
+docker exec -it visionserve visionserve pull efficientnet-b0  # classification
+docker exec -it visionserve visionserve pull mobilenet-v3     # classification, lightweight
+docker exec -it visionserve visionserve pull clip             # image embeddings (512-d)
+docker exec -it visionserve visionserve pull scrfd            # face detection
+docker exec -it visionserve visionserve pull paddle-ocr       # OCR (Chinese + English)
+
+# Grounded-SAM (text → boxes → masks): pull its two dependencies first
+docker exec -it visionserve visionserve pull grounding-dino
+docker exec -it visionserve visionserve pull mobile-sam
+```
+
+#### Step 3 — That's it
+
+```bash
+curl http://localhost:11435/api/health
+# → {"status":"ok"}
+
+curl -s -F model=rf-detr -F image=@image.jpg http://localhost:11435/api/predict
+```
+
+Use the [curl](#5-call-the-api-with-curl), [Python](#6-infer-from-python), or
+[JS](#6b-infer-from-javascript--typescript) clients — all point to `http://localhost:11435`.
+
+#### One-shot inference (no server)
+
+`visionserve run` loads + infers in-process and exits, useful for scripting:
+
+```bash
+# Detection (image mounted read-only)
 docker run --rm \
-  -v $HOME/visionserve-models:/models \
+  -v visionserve:/root/.visionserve \
+  -v "$PWD/image.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
-  pull rf-detr --models /models
-
-# List all pullable models
-docker run --rm mtbui2010/visionserve:latest list
-```
-
-Common pull commands — all free, permissive-licensed:
-
-```bash
-IMG=mtbui2010/visionserve:latest
-MODELS=$HOME/visionserve-models
-
-docker run --rm -v $MODELS:/models $IMG pull rf-detr          # detection (COCO)
-docker run --rm -v $MODELS:/models $IMG pull rf-detr-nano     # detection, faster
-docker run --rm -v $MODELS:/models $IMG pull mobile-sam       # segmentation
-docker run --rm -v $MODELS:/models $IMG pull sam2             # segmentation (SAM2)
-docker run --rm -v $MODELS:/models $IMG pull grounding-dino   # open-vocab detection
-docker run --rm -v $MODELS:/models $IMG pull midas            # depth estimation
-docker run --rm -v $MODELS:/models $IMG pull efficientnet-b0  # classification
-docker run --rm -v $MODELS:/models $IMG pull clip             # image embeddings
-docker run --rm -v $MODELS:/models $IMG pull scrfd            # face detection
-docker run --rm -v $MODELS:/models $IMG pull paddle-ocr       # OCR
-
-# Grounded-SAM reuses grounding-dino + mobile-sam weights (pull both first)
-docker run --rm -v $MODELS:/models $IMG pull grounding-dino
-docker run --rm -v $MODELS:/models $IMG pull mobile-sam
-```
-
-#### Quick one-shot inference (no server needed)
-
-`visionserve run` loads the model in-process, infers, and exits — no daemon required:
-
-```bash
-MODELS=$HOME/visionserve-models
-
-# Detection
-docker run --rm \
-  -v $MODELS:/models \
-  -v $PWD/image.jpg:/img.jpg:ro \
-  mtbui2010/visionserve:latest \
-  run rf-detr /img.jpg --models /models
+  run rf-detr /img.jpg
 
 # Segmentation with a box prompt
 docker run --rm \
-  -v $MODELS:/models \
-  -v $PWD/image.jpg:/img.jpg:ro \
+  -v visionserve:/root/.visionserve \
+  -v "$PWD/image.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
-  run mobile-sam /img.jpg --box 100,80,440,300 --models /models
+  run mobile-sam /img.jpg --box 100,80,440,300
 
-# Grounded-SAM with a text prompt
+# Grounded-SAM — text → boxes → masks
 docker run --rm \
-  -v $MODELS:/models \
-  -v $PWD/image.jpg:/img.jpg:ro \
+  -v visionserve:/root/.visionserve \
+  -v "$PWD/image.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
-  run grounded-sam /img.jpg --prompt "person. car." --models /models
+  run grounded-sam /img.jpg --prompt "person. car."
 ```
 
-#### Run the server
+#### Build and publish locally
 
 ```bash
-MODELS=$HOME/visionserve-models
-
-# CPU server
-docker run -d --name visionserve \
-  -p 11435:11435 \
-  -v $MODELS:/models \
-  mtbui2010/visionserve:latest \
-  serve --addr :11435 --models /models
-
-# GPU server (needs nvidia-container-toolkit)
-docker run -d --name visionserve-gpu \
-  --gpus all \
-  -p 11435:11435 \
-  -v $MODELS:/models \
-  mtbui2010/visionserve:v0.1.0-gpu \
-  serve --addr :11435 --models /models
-
-# Health check
-curl http://localhost:11435/api/health
-# → {"status":"ok"}
+make docker                          # build CPU image
+make docker ORT_VARIANT=gpu          # build GPU image
+make push-docker                     # tag + push to Docker Hub (DOCKER_HUB_USER=mtbui2010)
 ```
 
-Then use the [curl](#5-call-the-api-with-curl), [Python](#6-infer-from-python), or
-[JS](#6b-infer-from-javascript--typescript) clients against `http://localhost:11435`.
-
-#### Build locally instead
-
-```bash
-make docker                          # build visionserve:latest (CPU)
-make docker ORT_VARIANT=gpu          # GPU image (CUDA/TensorRT EP)
-make push-docker                     # tag + push to Docker Hub (set DOCKER_HUB_USER)
-```
-
-arm64/Jetson images, GPU profiles, and Docker Compose are covered in
-[`deploy/README.md`](deploy/README.md).
+arm64/Jetson images and Docker Compose are covered in [`deploy/README.md`](deploy/README.md).
 
 ### Sample JSON output (detection)
 

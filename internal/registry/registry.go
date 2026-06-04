@@ -30,7 +30,11 @@ func New(root string) *Registry {
 
 // Scan scans root/*/manifest.yaml and validates each one. A broken manifest (e.g. missing
 // ONNX file, forbidden license) is SKIPPED + collected into the returned error list, without aborting the scan.
+// The root directory is created automatically if it does not yet exist.
 func (r *Registry) Scan() ([]error, error) {
+	if err := os.MkdirAll(r.root, 0o755); err != nil {
+		return nil, fmt.Errorf("registry: cannot create models directory %s: %w", r.root, err)
+	}
 	entries, err := os.ReadDir(r.root)
 	if err != nil {
 		return nil, fmt.Errorf("registry: failed to read directory %s: %w", r.root, err)

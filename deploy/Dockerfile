@@ -138,9 +138,12 @@ ENV LD_LIBRARY_PATH=/usr/local/lib
 
 RUN ldconfig
 
-# Model weights + manifests are mounted at runtime (not baked in — weights are large).
-VOLUME ["/models"]
+# Model weights are stored in ~/.visionserve/models (/root/.visionserve/models when
+# running as root). Mount a named volume here to persist models across container restarts:
+#   docker run -v visionserve:/root/.visionserve ...
+VOLUME ["/root/.visionserve"]
 
 EXPOSE 11435
 ENTRYPOINT ["visionserve"]
-CMD ["serve", "--addr", ":11435", "--models", "/models"]
+# No --models flag needed: the binary defaults to ~/.visionserve/models.
+CMD ["serve", "--addr", ":11435"]
