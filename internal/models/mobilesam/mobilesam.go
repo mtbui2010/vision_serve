@@ -53,7 +53,9 @@ func (m *mobileSAM) Task() models.Task { return models.TaskSegmentation }
 // Roles are the ONNX sessions lifecycle must load (keys into the manifest 'files' map).
 func (m *mobileSAM) Roles() []string { return []string{roleEncoder, roleDecoder} }
 
-// Infer runs the encoder once, then the decoder once per prompt set → one mask each.
+// Infer runs the encoder once, then either:
+//   - Automatic Mask Generator (16×16 grid) when no prompt is provided, or
+//   - one decoder run per prompt set (box / point).
 func (m *mobileSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
 	sets, err := promptToPointSets(prompt)
 	if err != nil {
@@ -63,7 +65,7 @@ func (m *mobileSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner
 	origW := img.Bounds().Dx()
 	origH := img.Bounds().Dy()
 
-	// 1) Encoder: image → embedding. scale maps original coords → 1024 input space.
+	// Encoder: image → embedding (always runs once, shared across all decoder calls).
 	encIn, scale := encoderInput(img)
 	encInName := firstName(r.InputNames(roleEncoder), "input_image")
 	encOuts, err := r.Run(roleEncoder, map[string]engine.Tensor{encInName: encIn})
@@ -75,7 +77,21 @@ func (m *mobileSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner
 	}
 	embedding := encOuts[0]
 
-	// 2) Decoder per prompt set → mask.
+	decRun := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
+		return r.Run(roleDecoder, inputs)
+	}
+	decOutNames := r.OutputNames(roleDecoder)
+
+	// No prompt → Automatic Mask Generator (16×16 grid, ~256 decoder calls).
+	if sets == nil {
+		masks, err := autoSegment(img, embedding, scale, decRun, decOutNames)
+		if err != nil {
+			return models.Result{}, err
+		}
+		return models.Result{Masks: masks}, nil
+	}
+
+	// Prompted: one decoder run per prompt set.
 	zeros := make([]float32, 256*256)
 	masks := make([]models.Mask, 0, len(sets))
 	for _, ps := range sets {
@@ -88,11 +104,11 @@ func (m *mobileSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner
 			"has_mask_input":   engine.F32([]float32{0}, 1),
 			"orig_im_size":     engine.F32([]float32{float32(origH), float32(origW)}, 2),
 		}
-		outs, err := r.Run(roleDecoder, dec)
+		outs, err := decRun(dec)
 		if err != nil {
 			return models.Result{}, fmt.Errorf("mobilesam: decoder failed: %w", err)
 		}
-		maskT, iouT := pickMaskAndIoU(r.OutputNames(roleDecoder), outs)
+		maskT, iouT := pickMaskAndIoU(decOutNames, outs)
 		if maskT == nil {
 			return models.Result{}, fmt.Errorf("mobilesam: decoder output has no mask tensor (shapes %v)", shapesOf(outs))
 		}

@@ -69,8 +69,8 @@ type PredictJSONRequest struct {
 	Prompt      string  `json:"prompt,omitempty"`   // text: "cat. remote."
 	Box         string  `json:"box,omitempty"`      // "x,y,w,h" (multiple boxes: separated by ';')
 	Point       string  `json:"point,omitempty"`    // "x,y[,label]" (multiple: separated by ';')
-	MinSize     float64 `json:"min_size,omitempty"` // minimum bbox area in px² (0 = no limit)
-	MaxSize     float64 `json:"max_size,omitempty"` // maximum bbox area in px² (0 = no limit)
+	MinSize     float64 `json:"min_size,omitempty"` // minimum bbox area as % of image area, 0 = no limit (e.g. 0.1 = 0.1%)
+	MaxSize     float64 `json:"max_size,omitempty"` // maximum bbox area as % of image area, 0 = no limit (e.g. 90 = 90%)
 }
 
 // LoadRequest / UnloadRequest are used by /api/load and /api/unload.

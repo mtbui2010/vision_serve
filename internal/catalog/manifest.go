@@ -2,6 +2,7 @@ package catalog
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -26,9 +27,19 @@ func (e Entry) RenderManifest() string {
 		fmt.Fprintf(&b, "architecture: %s\n", e.Architecture)
 	}
 
-	// model_file (single-file) vs files: map (multi-session).
-	manifestFiles := e.manifestFiles()
-	if len(manifestFiles) > 0 {
+	// model_file (single-file) vs files: map (multi-session or virtual).
+	if len(e.VirtualFiles) > 0 {
+		// Virtual pipeline model: paths reference sibling model directories.
+		b.WriteString("\nfiles:\n")
+		roles := make([]string, 0, len(e.VirtualFiles))
+		for k := range e.VirtualFiles {
+			roles = append(roles, k)
+		}
+		sort.Strings(roles)
+		for _, role := range roles {
+			fmt.Fprintf(&b, "  %s: %s\n", role, e.VirtualFiles[role])
+		}
+	} else if manifestFiles := e.manifestFiles(); len(manifestFiles) > 0 {
 		b.WriteString("\nfiles:\n")
 		for _, f := range manifestFiles {
 			fmt.Fprintf(&b, "  %s: %s\n", f.ManifestRole, f.LocalFilename)

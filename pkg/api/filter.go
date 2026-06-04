@@ -1,5 +1,20 @@
 package api
 
+// FilterBySizePct filters detections and masks by bounding-box area expressed as a
+// percentage of the total image area (0–100). Zero means no limit for that bound.
+// Example: minPct=0.1 keeps only boxes/masks covering at least 0.1% of the image.
+func FilterBySizePct(res Result, minPct, maxPct float64, imgW, imgH int) Result {
+	area := float64(imgW * imgH)
+	var minAbs, maxAbs float64
+	if minPct > 0 {
+		minAbs = minPct / 100.0 * area
+	}
+	if maxPct > 0 {
+		maxAbs = maxPct / 100.0 * area
+	}
+	return FilterBySize(res, minAbs, maxAbs)
+}
+
 // FilterBySize removes detections and masks whose bounding-box area (w*h, px²) is
 // outside [minSize, maxSize]. Zero means no limit for that bound.
 func FilterBySize(res Result, minSize, maxSize float64) Result {

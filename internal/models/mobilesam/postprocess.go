@@ -59,8 +59,8 @@ func promptToPointSets(p models.Prompt) ([]pointSet, error) {
 				"Either run `grounded-sam ... --prompt %q`, or give mobile-sam a box: `mobile-sam ... --box x,y,w,h`",
 				p.Text, p.Text)
 		}
-		return nil, fmt.Errorf("mobilesam: a prompt (box or point) is required — SAM segments around a prompt, " +
-			"e.g. `run mobile-sam img.jpg --box x,y,w,h` (for text-driven segmentation use the 'grounded-sam' model)")
+		// No prompt at all → caller uses the Automatic Mask Generator.
+		return nil, nil
 	}
 	return sets, nil
 }
@@ -114,23 +114,7 @@ func maskToResult(mask, iou *engine.Tensor, origW, origH int) (models.Mask, erro
 		return models.Mask{}, fmt.Errorf("mobilesam: unexpected mask shape %v", mask.Shape)
 	}
 
-	// Best channel by iou (single-mask decoder has N=1).
-	best, conf := 0, 0.0
-	if iou != nil && len(iou.Data) > 0 {
-		bestScore := float32(-1e30)
-		lim := n
-		if len(iou.Data) < lim {
-			lim = len(iou.Data)
-		}
-		for i := 0; i < lim; i++ {
-			if iou.Data[i] > bestScore {
-				bestScore = iou.Data[i]
-				best = i
-			}
-		}
-		conf = float64(bestScore)
-	}
-
+	best, conf := bestChannel(mask, iou)
 	off := best * h * w
 	bin := make([]bool, h*w)
 	minX, minY, maxX, maxY := w, h, -1, -1

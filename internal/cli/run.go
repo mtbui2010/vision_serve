@@ -29,8 +29,8 @@ func runRun(args []string) error {
 	promptFlag := fs.String("prompt", "", "text prompt for open-vocab models, e.g. \"cat. remote.\" (GroundingDINO / Grounded-SAM)")
 	boxFlag := fs.String("box", "", "box prompt(s) for SAM, \"x,y,w,h\" (multiple separated by ';')")
 	pointFlag := fs.String("point", "", "point prompt(s) for SAM, \"x,y[,label]\" (label 1=fg 0=bg; multiple separated by ';')")
-	minSizeFlag := fs.Float64("min-size", 0, "minimum bbox area in pixels² (0 = no limit)")
-	maxSizeFlag := fs.Float64("max-size", 0, "maximum bbox area in pixels² (0 = no limit)")
+	minSizeFlag := fs.Float64("min-size", 0, "minimum bbox area as %% of image area (0 = no limit, e.g. 0.1 = 0.1%%)")
+	maxSizeFlag := fs.Float64("max-size", 0, "maximum bbox area as %% of image area (0 = no limit, e.g. 90 = 90%%)")
 
 	// Allow flags interleaved with positionals (e.g. `run rf-detr img.jpg --out r.png`). The
 	// standard flag package stops at the first positional, so we loop: parse flags -> take 1
@@ -83,7 +83,7 @@ func runRun(args []string) error {
 	}
 
 	if *minSizeFlag > 0 || *maxSizeFlag > 0 {
-		res = api.FilterBySize(res, *minSizeFlag, *maxSizeFlag)
+		res = api.FilterBySizePct(res, *minSizeFlag, *maxSizeFlag, img.Bounds().Dx(), img.Bounds().Dy())
 	}
 
 	// Optional: draw boxes + mask overlays onto the image and save it (demo/visualization).

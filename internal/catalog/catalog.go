@@ -99,6 +99,14 @@ type Entry struct {
 	Verified bool
 	// Note is an optional human-readable caveat shown for unverified entries.
 	Note string
+
+	// Dependencies lists model names that must already be downloaded before this
+	// virtual model can be "pulled" (e.g. grounded-sam needs grounding-dino + mobile-sam).
+	Dependencies []string
+	// VirtualFiles, if non-nil, makes Pull skip all network downloads and instead
+	// write a manifest whose files: block contains these role→relative-path pairs
+	// (relative to <modelsDir>/<name>/). Dependencies are checked first.
+	VirtualFiles map[string]string
 }
 
 // builtin is the curated catalog. Keep entries permissive-only.
@@ -228,6 +236,32 @@ var builtin = []Entry{
 		Verified:          true,
 		Note: "Encoder input 'input_image' [H,W,3] HWC raw 0-255 (normalize+pad baked in graph). " +
 			"Decoder outputs: masks (upsampled to orig size), iou_predictions, low_res_masks.",
+	},
+	{
+		Name:         "grounded-sam",
+		Task:         "open_vocab",
+		License:      "Apache-2.0",
+		Architecture: "grounded-sam",
+		Description:  "Grounded-SAM — text-prompted segmentation (GroundingDINO → MobileSAM).",
+		Dependencies: []string{"grounding-dino", "mobile-sam"},
+		VirtualFiles: map[string]string{
+			"gdino":   "../grounding-dino/model.onnx",
+			"encoder": "../mobile-sam/mobile_sam_encoder.onnx",
+			"decoder": "../mobile-sam/mobile_sam_decoder_single.onnx",
+		},
+		InputWidth:        800,
+		InputHeight:       800,
+		InputLayout:       "NCHW",
+		Letterbox:         false,
+		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		PostprocessType:   "grounded-sam",
+		BoxFormat:         "cxcywh",
+		ConfThreshold:     0.3,
+		TextThreshold:     0.25,
+		MaxDetections:     300,
+		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		Verified:          true,
 	},
 	{
 		Name:         "rt-detr",

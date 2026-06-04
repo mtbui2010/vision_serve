@@ -90,9 +90,21 @@ func TestPromptBoxToPoints(t *testing.T) {
 	}
 }
 
-func TestPromptEmptyErrors(t *testing.T) {
-	if _, err := promptToPointSets(models.Prompt{}); err == nil {
-		t.Fatalf("expected error for empty prompt")
+func TestPromptEmptyReturnsNil(t *testing.T) {
+	// Empty prompt → nil slice, nil error (triggers Automatic Mask Generator path).
+	sets, err := promptToPointSets(models.Prompt{})
+	if err != nil {
+		t.Fatalf("expected no error for empty prompt, got: %v", err)
+	}
+	if sets != nil {
+		t.Fatalf("expected nil sets for empty prompt, got: %v", sets)
+	}
+}
+
+func TestPromptTextOnlyErrors(t *testing.T) {
+	// Text-only prompt → error (must use grounded-sam for text).
+	if _, err := promptToPointSets(models.Prompt{Text: "cat"}); err == nil {
+		t.Fatalf("expected error for text-only prompt on mobile-sam")
 	}
 }
 

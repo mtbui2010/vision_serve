@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // PullOptions controls a pull operation.
@@ -42,13 +43,24 @@ func Pull(name string, opts PullOptions) error {
 		return fmt.Errorf("create model dir: %w", err)
 	}
 
+	// Virtual models: check that all dependencies are already downloaded.
+	for _, dep := range entry.Dependencies {
+		depManifest := filepath.Join(opts.ModelsDir, dep, "manifest.yaml")
+		if _, err := os.Stat(depManifest); err != nil {
+			return fmt.Errorf("%s requires %q to be pulled first:\n  visionserve pull %s", entry.Name, dep, dep)
+		}
+	}
+
 	source := "huggingface.co/" + entry.HFRepo
-	if entry.HFRepo == "" {
+	if len(entry.Dependencies) > 0 {
+		source = "local (" + strings.Join(entry.Dependencies, " + ") + ")"
+	} else if entry.HFRepo == "" {
 		source = "external sources (Google Drive / direct URL)"
 	}
 	fmt.Fprintf(out, "pulling %s (%s, %s) from %s\n",
 		entry.Name, entry.Task, entry.License, source)
 
+	// Virtual models have no files to download — they only need a manifest.
 	for _, file := range entry.Files {
 		destPath := filepath.Join(dstDir, file.LocalFilename)
 

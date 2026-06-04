@@ -98,7 +98,7 @@ func (s *Server) handlePredict(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if minSize > 0 || maxSize > 0 {
-		res = api.FilterBySize(res, minSize, maxSize)
+		res = api.FilterBySizePct(res, minSize, maxSize, img.Bounds().Dx(), img.Bounds().Dy())
 	}
 	writeJSON(w, http.StatusOK, res)
 }

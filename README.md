@@ -114,9 +114,10 @@ make run MODEL=rf-detr IMAGE=image.jpg                        # → detection JS
 make run MODEL=rf-detr IMAGE=image.jpg OUT=out.png           # + draw bboxes, save out.png
 make run MODEL=rt-detr IMAGE=image.jpg                        # RT-DETR (640×640, NMS-free)
 
-# Segmentation — needs a box or point prompt (original-image coords)
+# Segmentation — box or point prompt (original-image coords)
 make run MODEL=mobile-sam IMAGE=img.jpg BOX=34,58,120,240 OUT=mask.png
 make run MODEL=mobile-sam IMAGE=img.jpg POINT=95,180,1 OUT=mask.png   # label 1=fg 0=bg
+make run MODEL=mobile-sam IMAGE=img.jpg OUT=masks.png                 # no prompt → segment everything (AMG)
 make run MODEL=efficient-sam IMAGE=img.jpg BOX=34,58,120,240 OUT=mask.png
 make run MODEL=sam2 IMAGE=img.jpg BOX=34,58,120,240 OUT=mask.png
 
@@ -139,10 +140,10 @@ make run MODEL=scrfd IMAGE=photo.jpg OUT=faces.png            # face boxes with 
 make run MODEL=paddle-ocr IMAGE=doc.jpg                       # text detection + recognition
 make run MODEL=clip IMAGE=img.jpg                             # 512-d embedding vector
 
-# Size filtering — drop objects smaller or larger than a threshold (bbox area in px²)
-make run MODEL=rf-detr IMAGE=img.jpg MIN_SIZE=1000            # ignore small objects < 1000 px²
-make run MODEL=rf-detr IMAGE=img.jpg MAX_SIZE=50000           # ignore very large objects
-make run MODEL=mobile-sam IMAGE=img.jpg BOX=10,10,200,200 MIN_SIZE=5000 MAX_SIZE=200000
+# Size filtering — drop objects outside a range (% of image area, 0 = no limit)
+make run MODEL=rf-detr IMAGE=img.jpg MIN_SIZE=0.5             # ignore objects < 0.5% of image
+make run MODEL=rf-detr IMAGE=img.jpg MAX_SIZE=80              # ignore objects > 80% of image
+make run MODEL=mobile-sam IMAGE=img.jpg MIN_SIZE=0.1 MAX_SIZE=50
 ```
 
 **`make run` variables:**
@@ -155,8 +156,8 @@ make run MODEL=mobile-sam IMAGE=img.jpg BOX=10,10,200,200 MIN_SIZE=5000 MAX_SIZE
 | `PROMPT` | open-vocab text | `PROMPT="cat. remote."` |
 | `BOX` | SAM box prompt | `BOX=34,58,120,240` (multiple via `;`) |
 | `POINT` | SAM point prompt | `POINT=95,180,1` (label 1=fg 0=bg) |
-| `MIN_SIZE` | min bbox area in px² — filter out objects smaller than this | `MIN_SIZE=1000` |
-| `MAX_SIZE` | max bbox area in px² — filter out objects larger than this | `MAX_SIZE=100000` |
+| `MIN_SIZE` | min bbox area as % of image — filter out small objects | `MIN_SIZE=0.5` |
+| `MAX_SIZE` | max bbox area as % of image — filter out large objects | `MAX_SIZE=80` |
 | `GPU` | `1` (default) or `0` to force CPU | `GPU=0` |
 | `MODELS` | registry directory | `MODELS=./models` |
 
@@ -193,8 +194,10 @@ curl -s http://localhost:11435/api/models
 curl -s -F model=rf-detr -F image=@image.jpg \
   http://localhost:11435/api/predict
 
-# MobileSAM with a box prompt
+# MobileSAM with a box prompt (or omit box/point to segment everything — AMG mode)
 curl -s -F model=mobile-sam -F image=@image.jpg -F box=34,58,120,240 \
+  http://localhost:11435/api/predict
+curl -s -F model=mobile-sam -F image=@image.jpg \
   http://localhost:11435/api/predict
 
 # Grounded-SAM with a text prompt (text → boxes → masks)
@@ -212,8 +215,8 @@ curl -s -H 'Content-Type: application/json' \
 | `prompt` | open-vocab text | `"cat. remote."` |
 | `box` | SAM box | `"x,y,w,h"` (multiple separated by `;`) |
 | `point` | SAM point | `"x,y[,label]"` (multiple separated by `;`) |
-| `min_size` | filter small objects (bbox area px²) | `"1000"` |
-| `max_size` | filter large objects (bbox area px²) | `"100000"` |
+| `min_size` | filter small objects (bbox area as % of image, 0 = no limit) | `"0.5"` |
+| `max_size` | filter large objects (bbox area as % of image, 0 = no limit) | `"80"` |
 
 ### 6. Infer from Python
 
@@ -407,9 +410,10 @@ docker exec -it visionserve visionserve pull clip             # image embeddings
 docker exec -it visionserve visionserve pull scrfd            # face detection
 docker exec -it visionserve visionserve pull paddle-ocr       # OCR (Chinese + English)
 
-# Grounded-SAM (text → boxes → masks): pull its two dependencies first
+# Grounded-SAM (text → boxes → masks): pull dependencies first, then grounded-sam
 docker exec -it visionserve visionserve pull grounding-dino
 docker exec -it visionserve visionserve pull mobile-sam
+docker exec -it visionserve visionserve pull grounded-sam
 ```
 
 #### Step 3 — That's it
@@ -533,7 +537,7 @@ Depth estimation results come back in `depth_map` (flat row-major float32, relat
 |------|-------|---------|--------|-----------------|-------|--------|
 | Detection | RF-DETR | Apache-2.0 | [PierreMarieCurie/rf-detr-onnx](https://huggingface.co/PierreMarieCurie/rf-detr-onnx) | `rf-detr` | 560×560 | working |
 | Detection | RT-DETR | Apache-2.0 | [onnx-community/RT-DETR-l-hf](https://huggingface.co/onnx-community/RT-DETR-l-hf) | `rt-detr` | 640×640 | working — NMS-free, COCO-80 |
-| Segmentation | MobileSAM | Apache-2.0 | [Acly/MobileSAM](https://huggingface.co/Acly/MobileSAM) | `mobile-sam` | 1024×1024 | working — box/point prompt |
+| Segmentation | MobileSAM | Apache-2.0 | [Acly/MobileSAM](https://huggingface.co/Acly/MobileSAM) | `mobile-sam` | 1024×1024 | working — box/point prompt, or no prompt → segment everything (AMG) |
 | Segmentation | EfficientSAM | Apache-2.0 | [yunyangx/EfficientSAM](https://huggingface.co/yunyangx/EfficientSAM) | `efficient-sam` | 1024×1024 | working — box/point prompt |
 | Segmentation | SAM2-Tiny | Apache-2.0 | [SharpAI/sam2-hiera-tiny-onnx](https://huggingface.co/SharpAI/sam2-hiera-tiny-onnx) | `sam2` | 1024×1024 | working — multi-scale encoder |
 | Segmentation | NanoSAM | Apache-2.0 | [NVIDIA-AI-IOT/nanosam](https://github.com/NVIDIA-AI-IOT/nanosam) (manual) | `nano-sam` | 1024×1024 | implemented — manual download |
@@ -567,12 +571,12 @@ Quick reference for choosing the right model. All models are free (Apache-2.0 / 
 | No fixed class list (text query) | `grounding-dino` | zero-shot: `"cat. remote."` → boxes |
 | Face detection | `scrfd` | WiderFace-tuned, returns 5 keypoints |
 
-### Segmentation (all need a box or point prompt)
+### Segmentation
 
 | Scenario | Model | Why |
 |----------|-------|-----|
-| Fastest SAM on CPU/GPU | `mobile-sam` | TinyViT encoder, good latency vs quality |
-| Lightweight SAM alternative | `efficient-sam` | ViT-Tiny SAMI, similar quality |
+| Fastest SAM on CPU/GPU | `mobile-sam` | TinyViT encoder; no prompt → segment everything (AMG) |
+| Lightweight SAM alternative | `efficient-sam` | ViT-Tiny SAMI, similar quality; box/point prompt |
 | Best mask quality | `sam2` | Multi-scale encoder, Meta AI SAM2-Tiny |
 | NVIDIA Jetson / TensorRT | `nano-sam` | ResNet-18 encoder, optimized for TRT |
 | Text → masks (zero-shot) | `grounded-sam` | GroundingDINO + MobileSAM chained |
@@ -593,9 +597,10 @@ Quick reference for choosing the right model. All models are free (Apache-2.0 / 
 | Zero-shot / visual search / retrieval | `clip` | 512-d L2 embeddings, cosine similarity |
 | OCR — Chinese + English | `paddle-ocr` | PP-OCRv4 DBNet++ det + SVTR-tiny rec |
 
-> **Size filtering tip:** add `--min-size N` / `--max-size N` (px²) to any detection or
-> segmentation run to drop noise detections or objects that are too large. Works for
-> every model — server-side, no extra overhead.
+> **Size filtering tip:** add `--min-size N` / `--max-size N` (% of image area, 0 = no limit)
+> to any detection or segmentation run to drop noise or oversized objects. Example:
+> `--min-size 0.5` drops anything covering less than 0.5% of the image. Works for every
+> model — server-side, no extra overhead.
 
 ---
 
