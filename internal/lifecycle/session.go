@@ -22,6 +22,7 @@ import (
 type Session struct {
 	name        string
 	task        api.Task
+	device      string        // "gpu:0" or "cpu" — set from the active EP on load
 	idleTimeout time.Duration
 
 	model  models.Model    // simple mode
@@ -35,11 +36,33 @@ type Session struct {
 }
 
 func newSimpleSession(name string, task api.Task, m models.Model, eng *engine.Session, idle time.Duration, now time.Time) *Session {
-	return &Session{name: name, task: task, model: m, engine: eng, idleTimeout: idle, lastUsed: now}
+	return &Session{
+		name:        name,
+		task:        task,
+		device:      engine.DeviceString(eng.ActiveEP()),
+		model:       m,
+		engine:      eng,
+		idleTimeout: idle,
+		lastUsed:    now,
+	}
 }
 
-func newPipelineSession(name string, task api.Task, p models.PipelineModel, engines map[string]*engine.Session, idle time.Duration, now time.Time) *Session {
-	return &Session{name: name, task: task, pipeline: p, engines: engines, idleTimeout: idle, lastUsed: now}
+func newPipelineSession(name string, task api.Task, p models.PipelineModel, engs map[string]*engine.Session, idle time.Duration, now time.Time) *Session {
+	// Determine device from the first session in the map (all roles share the same EP).
+	dev := "cpu"
+	for _, e := range engs {
+		dev = engine.DeviceString(e.ActiveEP())
+		break
+	}
+	return &Session{
+		name:        name,
+		task:        task,
+		device:      dev,
+		pipeline:    p,
+		engines:     engs,
+		idleTimeout: idle,
+		lastUsed:    now,
+	}
 }
 
 // Predict runs the full pipeline: preprocess → infer (ORT) → postprocess (simple), or
@@ -63,6 +86,7 @@ func (s *Session) Predict(img image.Image, prompt models.Prompt, now time.Time) 
 	s.touch(now)
 	res.Model = s.name
 	res.Task = s.task
+	res.Device = s.device
 	res.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
 	return res, nil
 }

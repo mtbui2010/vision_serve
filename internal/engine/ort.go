@@ -80,7 +80,11 @@ type Session struct {
 	sess        *ort.DynamicAdvancedSession
 	inputNames  []string
 	outputNames []string
+	activeEP    Provider // EP that was actually loaded (first one whose libs were available)
 }
+
+// ActiveEP returns the execution provider that is actually running this session.
+func (s *Session) ActiveEP() Provider { return s.activeEP }
 
 // NewSession creates a session from the ONNX file with an EP fallback chain (TensorRT→CUDA→CPU).
 // If inputNames/outputNames are empty, they are auto-probed from the ONNX file.
@@ -125,8 +129,9 @@ func NewSession(modelPath string, inputNames, outputNames []string, providers []
 	}
 
 	var sess *ort.DynamicAdvancedSession
+	var activeEP Provider
 	captured, runErr := captureStderr(func() error {
-		appendProviders(opts, providers)
+		activeEP = appendProviders(opts, providers)
 		var e error
 		sess, e = ort.NewDynamicAdvancedSession(modelPath, inputNames, outputNames, opts)
 		return e
@@ -143,7 +148,7 @@ func NewSession(modelPath string, inputNames, outputNames []string, providers []
 		fmt.Fprintf(os.Stderr, "engine: [trace] ORT messages for %s (EP fallback is normal if a GPU lib is missing):\n%s",
 			filepath.Base(modelPath), captured)
 	}
-	return &Session{sess: sess, inputNames: inputNames, outputNames: outputNames}, nil
+	return &Session{sess: sess, inputNames: inputNames, outputNames: outputNames, activeEP: activeEP}, nil
 }
 
 // providerNames renders the requested EP order for trace output.
@@ -168,34 +173,38 @@ func providerNames(providers []Provider) string {
 	return strings.Join(names, " → ")
 }
 
-// appendProviders adds the EPs in priority order. CPU is the default and is skipped.
-// Each append error is just noted and ignored (fallback), without breaking the whole session.
-func appendProviders(opts *ort.SessionOptions, providers []Provider) {
+// appendProviders adds the EPs in priority order and returns the first one whose
+// libraries were available (= the EP that will actually run inference).
+// CPU is ORT's built-in fallback and is always available.
+func appendProviders(opts *ort.SessionOptions, providers []Provider) Provider {
 	for _, p := range providers {
 		switch p {
 		case ProviderTensorRT:
 			if trt, err := ort.NewTensorRTProviderOptions(); err == nil {
 				_ = opts.AppendExecutionProviderTensorRT(trt)
 				trt.Destroy()
+				return p
 			}
 		case ProviderCUDA:
 			if cuda, err := ort.NewCUDAProviderOptions(); err == nil {
 				_ = opts.AppendExecutionProviderCUDA(cuda)
 				cuda.Destroy()
+				return p
 			}
 		case ProviderCoreML:
-			// Apple Silicon / macOS. flags=0 is the default behavior.
 			_ = opts.AppendExecutionProviderCoreML(0)
+			return p
 		case ProviderDirectML:
-			// Windows GPU (AMD / Intel / NVIDIA). deviceID=0 = first adapter.
 			_ = opts.AppendExecutionProviderDirectML(0)
+			return p
 		case ProviderOpenVINO:
-			// Intel CPU / iGPU / VPU. Empty options = let OpenVINO auto-select the device.
 			_ = opts.AppendExecutionProviderOpenVINO(map[string]string{})
+			return p
 		case ProviderCPU:
-			// The CPU EP is ORT's default — no need to append.
+			return p
 		}
 	}
+	return ProviderCPU
 }
 
 // Run runs inference: takes input tensors (in the model's input order) and returns the

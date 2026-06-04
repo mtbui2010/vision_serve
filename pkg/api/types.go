@@ -19,6 +19,7 @@ const (
 type Result struct {
 	Task            Task             `json:"task"`
 	Model           string           `json:"model"`
+	Device          string           `json:"device,omitempty"` // "gpu:0" or "cpu"
 	Detections      []Detection      `json:"detections,omitempty"`
 	Masks           []Mask           `json:"masks,omitempty"`
 	Classifications []Classification `json:"classifications,omitempty"` // top-K class predictions

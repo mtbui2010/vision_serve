@@ -84,34 +84,17 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 ############################
-# Stage 3b — GPU runtime: CUDA 12.4 + cuDNN 9 + TensorRT 10
+# Stage 3b — GPU runtime: CUDA 12.4 + cuDNN 9 (no TensorRT)
 ############################
-# Base provides CUDA runtime + cuDNN (needed by the ORT CUDA EP).
-# We then install TensorRT 10.x from NVIDIA's package repo so that
-# libnvinfer.so.10 is present for the ORT TensorRT EP.
-#
-# TensorRT 10 on CUDA 12: apt package tensorrt (meta) pulls in:
-#   libnvinfer10, libnvinfer-plugin10, libnvonnxparsers10, libnvparsers10
-# which are exactly what ORT's libonnxruntime_providers_tensorrt.so dlopen()s.
+# TensorRT is intentionally excluded from this image variant.
+# libonnxruntime_providers_tensorrt.so is removed below so ORT silently
+# skips the TRT EP and falls through to the CUDA EP — no hard crash on
+# systems where libnvinfer.so is absent or the wrong version.
+# For TRT acceleration, build on the Jetson (Dockerfile.edge) where JetPack
+# bundles a matched TRT version.
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime-gpu
-ARG TRT_VERSION=10.6.0
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-# Add NVIDIA TensorRT package repository (same key/repo used by TensorRT DEB installer).
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget gnupg2 && \
-    wget -qO /tmp/cuda-keyring.deb \
-        "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb" && \
-    dpkg -i /tmp/cuda-keyring.deb && rm /tmp/cuda-keyring.deb && \
-    rm -rf /var/lib/apt/lists/*
-# Install TensorRT libraries only (no Python bindings — keeps image leaner).
-# libnvinfer-bin + libnvinfer-dev are not needed at runtime; only the shared libs.
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        libnvinfer10 \
-        libnvinfer-plugin10 \
-        libnvonnxparsers10 && \
     rm -rf /var/lib/apt/lists/*
 
 ############################
@@ -122,11 +105,14 @@ RUN apt-get update && \
 FROM ort-${ORT_VARIANT} AS ort-selected
 FROM runtime-${ORT_VARIANT} AS final
 
-# ORT shared libraries (cpu: libonnxruntime.so only;
-#                       gpu: + libonnxruntime_providers_cuda.so
-#                             + libonnxruntime_providers_tensorrt.so
-#                             + libonnxruntime_providers_shared.so)
+# ORT shared libraries.
+# cpu: libonnxruntime.so only.
+# gpu: libonnxruntime.so + CUDA providers + shared provider.
+#      libonnxruntime_providers_tensorrt.so is removed: it hard-crashes on
+#      systems where libnvinfer.so is absent or version-mismatched. ORT will
+#      silently skip TRT and fall through to the CUDA EP.
 COPY --from=ort-selected /opt/ort/lib/libonnxruntime*.so* /usr/local/lib/
+RUN rm -f /usr/local/lib/libonnxruntime_providers_tensorrt.so*
 
 # Server binary.
 COPY --from=build /out/visionserve /usr/local/bin/visionserve

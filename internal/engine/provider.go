@@ -27,6 +27,19 @@ var validProviders = map[Provider]bool{
 	ProviderCPU:      true,
 }
 
+// DeviceString maps an execution provider to the device string returned in API responses.
+// GPU EPs return "gpu:0" (device index 0); CPU returns "cpu".
+func DeviceString(ep Provider) string {
+	switch ep {
+	case ProviderTensorRT, ProviderCUDA, ProviderCoreML, ProviderDirectML:
+		return "gpu:0"
+	case ProviderOpenVINO:
+		return "openvino:0"
+	default:
+		return "cpu"
+	}
+}
+
 // ResolveProviders normalizes + validates the fallback chain from the manifest (runtime.prefer).
 // It always ensures CPU is present at the end of the chain so both edge and server can run.
 // Important for edge: try TensorRT → CUDA → CPU.

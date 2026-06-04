@@ -4,7 +4,7 @@
 BINARY      := visionserve
 PKG         := ./cmd/visionserve
 BIN_DIR     := bin
-VERSION     := $(shell git describe --tags --always 2>/dev/null || echo "0.1.0-dev")
+VERSION     := $(shell git describe --tags --always 2>/dev/null || echo "0.1.1-dev")
 LDFLAGS     := -s -w -X visionserve/internal/cli.Version=$(VERSION)
 GOFLAGS     ?=
 
@@ -111,33 +111,54 @@ build-linux-arm64: ## Build for Jetson/arm64
 
 docker: ## Build the server image (CPU; add ORT_VARIANT=gpu for a GPU image)
 	cp deploy/.dockerignore .dockerignore
-	docker build -f deploy/Dockerfile $(if $(filter gpu,$(ORT_VARIANT)),--build-arg ORT_VARIANT=gpu) -t visionserve:$(VERSION) -t visionserve:latest .
+	docker build -f deploy/Dockerfile \
+		--build-arg VERSION=$(PUSH_VERSION) \
+		$(if $(filter gpu,$(ORT_VARIANT)),--build-arg ORT_VARIANT=gpu) \
+		-t visionserve:$(PUSH_VERSION)-$(if $(filter gpu,$(ORT_VARIANT)),gpu,cpu) \
+		$(if $(filter gpu,$(ORT_VARIANT)),,\
+			-t visionserve:$(PUSH_VERSION) \
+			-t visionserve:latest) .
 
-docker-edge: ## Build the edge image (arm64/Jetson)
+docker-arm: ## Build the Jetson/arm64 image (ORT_SOURCE=jetson for CUDA+TRT EP)
 	cp deploy/.dockerignore .dockerignore
-	docker buildx build --platform linux/arm64 -f deploy/Dockerfile.edge -t visionserve:$(VERSION)-edge .
+	docker buildx build --platform linux/arm64 -f deploy/Dockerfile.edge \
+		--build-arg VERSION=$(PUSH_VERSION) \
+		--build-arg ORT_SOURCE=$(if $(filter jetson,$(ORT_SOURCE)),jetson,cpu) \
+		-t visionserve:$(PUSH_VERSION)-arm \
+		-t visionserve:$(PUSH_VERSION)-arm64 \
+		$(if $(LOAD),--load) .
+
+docker-edge: ## Build the edge image (arm64, CPU only) — alias for docker-arm
+	$(MAKE) docker-arm
 
 DOCKER_HUB_USER ?= mtbui2010
-# PUSH_VERSION is the tag of the already-built local image (e.g. v0.1.0).
+# PUSH_VERSION is the tag of the already-built local image (e.g. v0.1.2).
 # Override at the command line if needed: make push-docker PUSH_VERSION=v0.2.0
-PUSH_VERSION    ?= v0.1.0
+PUSH_VERSION    ?= v0.1.2
 
 push-docker: ## Tag and push CPU + GPU images to Docker Hub (DOCKER_HUB_USER=mtbui2010)
 	@echo "=== Tagging images for Docker Hub ($(DOCKER_HUB_USER)) ==="
 	docker tag visionserve:$(PUSH_VERSION)-cpu   $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-cpu
 	docker tag visionserve:$(PUSH_VERSION)-cpu   $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)
-	docker tag visionserve:$(PUSH_VERSION)-cpu   $(DOCKER_HUB_USER)/visionserve:latest
 	docker tag visionserve:$(PUSH_VERSION)-gpu   $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-gpu
-	@echo "=== Pushing to Docker Hub ==="
+	docker tag visionserve:$(PUSH_VERSION)-gpu   $(DOCKER_HUB_USER)/visionserve:latest
+	@echo "=== Pushing CPU + GPU ==="
 	docker push $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-cpu
 	docker push $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)
-	docker push $(DOCKER_HUB_USER)/visionserve:latest
 	docker push $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-gpu
+	docker push $(DOCKER_HUB_USER)/visionserve:latest
 	@echo "=== Done. Images pushed: ==="
 	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)"
 	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-cpu"
 	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-gpu"
 	@echo "  $(DOCKER_HUB_USER)/visionserve:latest"
+
+push-docker-arm: ## Push ARM/Jetson image to Docker Hub
+	@echo "=== Tagging ARM image for Docker Hub ($(DOCKER_HUB_USER)) ==="
+	docker tag visionserve:$(PUSH_VERSION)-arm   $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-arm
+	@echo "=== Pushing ARM ==="
+	docker push $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-arm
+	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-arm"
 
 ## --- Python client (PyPI) ---
 

@@ -27,10 +27,12 @@
 
 ARG ORT_VERSION=1.20.1
 ARG ORT_SOURCE=cpu
-# Base used only when ORT_SOURCE=jetson. Pick the L4T release matching your JetPack.
-# r36.x = JetPack 6.x. The l4t-base image carries CUDA/cuDNN/TensorRT at runtime via the
-# NVIDIA container runtime; an L4T *ML* image additionally ships onnxruntime.
+ARG VERSION=docker-arm
+# L4T ML image that ships libonnxruntime.so with CUDA+TRT EP for arm64.
+# r36.x = JetPack 6.x (CUDA 12.2 + TensorRT 8.6).
+# Used ONLY when ORT_SOURCE=jetson.
 ARG L4T_BASE=nvcr.io/nvidia/l4t-base:r36.3.0
+ARG L4T_ML_IMAGE=nvcr.io/nvidia/l4t-ml:r36.3.0
 
 ############################
 # Stage 1 — build the Go binary for arm64
@@ -48,7 +50,6 @@ RUN apt-get update && \
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
-ARG VERSION=docker-edge
 RUN CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
     go build -ldflags "-s -w -X visionserve/internal/cli.Version=${VERSION}" \
     -o /out/visionserve ./cmd/visionserve
@@ -80,22 +81,25 @@ RUN apt-get update && \
 COPY --from=ort-cpu /opt/ort/lib/libonnxruntime.so* /usr/local/lib/
 
 ############################
-# Stage 3b — Jetson runtime (TensorRT/CUDA EP)
+# Stage 2c — extract ORT from L4T-ML (Jetson CUDA+TRT EP)
 ############################
-# ASSUMPTIONS for ORT_SOURCE=jetson:
-#   * You build this ON a Jetson (so the NVIDIA container runtime injects CUDA/cuDNN/
-#     TensorRT), or you use an L4T *ML* base that ships them.
-#   * libonnxruntime.so built with the TensorRT/CUDA EP for your JetPack is provided to
-#     the build by placing it under deploy/ort-jetson/ in the build context. It is NOT
-#     downloaded here because no stable public URL exists for a JetPack-matched build.
-# If deploy/ort-jetson/ is absent the build will fail at the COPY — that is intentional,
-# so you do not silently ship a CPU-only image while expecting GPU acceleration.
+# L4T-ML ships libonnxruntime.so built with the CUDA+TensorRT EP as part of
+# the Python onnxruntime package. We extract it here so our slim final stage
+# gets the correct arm64+GPU-enabled .so without a manual file copy.
+FROM ${L4T_ML_IMAGE} AS ort-jetson-src
+RUN mkdir -p /export && \
+    find / -name "libonnxruntime.so*" -not -path "*/proc/*" 2>/dev/null | \
+    xargs -I{} cp -P {} /export/ && \
+    ls -lh /export/
+
+############################
+# Stage 3b — Jetson runtime (L4T base + ORT extracted above)
+############################
 FROM ${L4T_BASE} AS runtime-jetson
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/* || true
-# Provide your Jetson-matched ONNX Runtime shared library here:
-COPY deploy/ort-jetson/libonnxruntime.so* /usr/local/lib/
+COPY --from=ort-jetson-src /export/libonnxruntime.so* /usr/local/lib/
 
 ############################
 # Final — select runtime by ORT_SOURCE
@@ -108,7 +112,7 @@ ENV LD_LIBRARY_PATH=/usr/local/lib
 
 COPY --from=build /out/visionserve /usr/local/bin/visionserve
 
-VOLUME ["/models"]
+VOLUME ["/root/.visionserve"]
 EXPOSE 11435
 ENTRYPOINT ["visionserve"]
-CMD ["serve", "--addr", ":11435", "--models", "/models"]
+CMD ["serve", "--addr", ":11435"]

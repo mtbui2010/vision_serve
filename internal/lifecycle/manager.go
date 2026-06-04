@@ -53,6 +53,12 @@ func (m *Manager) Load(name string) error {
 
 	entry, ok := m.reg.Get(name)
 	if !ok {
+		// Model not in registry — it may have been pulled while the server was
+		// running. Re-scan once before giving up.
+		m.reg.Scan() //nolint:errcheck — scan errors are non-fatal (logged at startup)
+		entry, ok = m.reg.Get(name)
+	}
+	if !ok {
 		return fmt.Errorf("lifecycle: model %q not found in registry", name)
 	}
 	man := entry.Manifest

@@ -104,8 +104,13 @@ func Pull(name string, opts PullOptions) error {
 		fmt.Fprintf(out, "  manifest.yaml already present, keeping it\n")
 	}
 
-	fmt.Fprintf(out, "success: %s is ready in %s\n", entry.Name, dstDir)
-	fmt.Fprintf(out, "  run it with:  visionserve run %s <image> --models %s\n", entry.Name, opts.ModelsDir)
+	// Use the absolute path so the message is unambiguous regardless of cwd.
+	absDstDir, err := filepath.Abs(dstDir)
+	if err != nil {
+		absDstDir = dstDir
+	}
+	fmt.Fprintf(out, "success: %s is ready in %s\n", entry.Name, absDstDir)
+	fmt.Fprintf(out, "  run it with:  visionserve run %s <image>\n", entry.Name)
 	return nil
 }
 

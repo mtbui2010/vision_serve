@@ -351,40 +351,43 @@ filtering, NMS, top-k, sort, group-by-class, and `get_depth_at_detection` /
 
 Pre-built images on Docker Hub: [`mtbui2010/visionserve`](https://hub.docker.com/r/mtbui2010/visionserve)
 
-| Tag | Contents | Size |
-|-----|----------|------|
-| `latest`, `v0.1.0`, `v0.1.0-cpu` | Go binary + ONNX Runtime CPU | ~141 MB |
-| `v0.1.0-gpu` | + CUDA 12.4 + cuDNN 9 + TensorRT 10 | ~6.7 GB |
+| Tag | Platform | Contents | Size |
+|-----|----------|----------|------|
+| **`latest`**, `v0.1.2-gpu` | x86-64 NVIDIA | CUDA 12.4 + cuDNN 9 (no TensorRT) | ~4 GB |
+| `v0.1.2`, `v0.1.2-cpu` | x86-64 | CPU only — no GPU required | ~141 MB |
+| `v0.1.2-arm` | Jetson arm64 | CUDA + TensorRT EP (JetPack 6) | ~4 GB |
+
+> **`latest` = GPU image.** Use `v0.1.2-cpu` explicitly on machines without an NVIDIA GPU.
 
 #### Step 1 — Start the server
 
 ```bash
-# CPU (no GPU required)
-docker run -d \
-  -v visionserve:/root/.visionserve \
-  -p 11435:11435 \
-  --name visionserve \
-  mtbui2010/visionserve:latest
-```
-
-```bash
-# GPU — NVIDIA CUDA/TensorRT (needs nvidia-container-toolkit)
+# GPU — default (needs nvidia-container-toolkit)
 docker run -d \
   --gpus all \
   -v visionserve:/root/.visionserve \
   -p 11435:11435 \
   --name visionserve \
-  mtbui2010/visionserve:v0.1.0-gpu
+  mtbui2010/visionserve:latest
+
+# CPU only
+docker run -d \
+  -v visionserve:/root/.visionserve \
+  -p 11435:11435 \
+  --name visionserve \
+  mtbui2010/visionserve:v0.1.2-cpu
 ```
 
-The named volume `visionserve:/root/.visionserve` persists downloaded models across
-restarts. Omit `-v` if you don't need persistence.
+The named volume `visionserve:/root/.visionserve` persists models across restarts.
+Omit `-v` if persistence is not needed.
 
-#### Step 2 — Pull a model
+#### Step 2 — Pull a model (no restart needed)
 
 ```bash
 docker exec -it visionserve visionserve pull rf-detr
 ```
+
+The server detects newly pulled models automatically — no restart required.
 
 All available models (all free, Apache-2.0 / MIT):
 
@@ -426,34 +429,41 @@ Use the [curl](#5-call-the-api-with-curl), [Python](#6-infer-from-python), or
 `visionserve run` loads + infers in-process and exits, useful for scripting:
 
 ```bash
-# Detection (image mounted read-only)
-docker run --rm \
+# Detection
+docker run --rm --gpus all \
   -v visionserve:/root/.visionserve \
   -v "$PWD/image.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
   run rf-detr /img.jpg
 
 # Segmentation with a box prompt
-docker run --rm \
+docker run --rm --gpus all \
   -v visionserve:/root/.visionserve \
   -v "$PWD/image.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
   run mobile-sam /img.jpg --box 100,80,440,300
 
 # Grounded-SAM — text → boxes → masks
-docker run --rm \
+docker run --rm --gpus all \
   -v visionserve:/root/.visionserve \
   -v "$PWD/image.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
   run grounded-sam /img.jpg --prompt "person. car."
+
+# CPU only (no GPU)
+docker run --rm \
+  -v visionserve:/root/.visionserve \
+  -v "$PWD/image.jpg:/img.jpg:ro" \
+  mtbui2010/visionserve:v0.1.2-cpu \
+  run rf-detr /img.jpg
 ```
 
 #### Build and publish locally
 
 ```bash
-make docker                          # build CPU image
-make docker ORT_VARIANT=gpu          # build GPU image
-make push-docker                     # tag + push to Docker Hub (DOCKER_HUB_USER=mtbui2010)
+make docker                     # build CPU image  → visionserve:v0.1.2-cpu
+make docker ORT_VARIANT=gpu     # build GPU image  → visionserve:v0.1.2-gpu (latest)
+make push-docker                # push CPU + GPU to Docker Hub
 ```
 
 arm64/Jetson images and Docker Compose are covered in [`deploy/README.md`](deploy/README.md).
