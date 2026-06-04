@@ -32,4 +32,6 @@ __pycache__/
 *.swp
 
 # paper
-paper
+paper/*
+blog/*
+
