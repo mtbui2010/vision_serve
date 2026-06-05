@@ -1,0 +1,56 @@
+# Grasp (class-aware) — RF-DETR detection → MobileSAM segmentation → analytic mask2grasp,
+# Apache-2.0.
+#
+# A detector (rf-detr) finds named objects; each box is segmented by MobileSAM; the per-object
+# mask is turned into planar parallel-jaw grasps by the pure-Go antipodal search
+# (internal/grasp). Each grasp inherits the detected object's class + confidence. For
+# class-AGNOSTIC grasps (no detector, whole-image automask) see ../grasp.
+#
+# task: grasp — output carries `grasps` (with class/conf), plus the source `detections` and
+# `masks`.
+#
+# The `input:` and `postprocess:` blocks below describe the DETECTOR (rf-detr) preprocess +
+# decode; MobileSAM preprocesses raw in-graph and ignores them.
+#
+# Weights are NOT committed. This manifest REUSES the rf-detr and MobileSAM weights via
+# relative paths, so pull both (see models/rf-detr/README.md and models/mobile-sam/README.md).
+#
+# Run: `visionserve run grasp-rfdetr img.jpg`
+name: grasp-rfdetr
+task: grasp
+license: Apache-2.0
+architecture: grasp
+
+detector: rf-detr          # class-aware: reuse rf-detr's decode (NMS-free DETR)
+segmenter: mobile-sam
+
+# Three ONNX graphs by role, referenced from the sibling model directories.
+files:
+  det: ../rf-detr/rf-detr-base-real.onnx
+  encoder: ../mobile-sam/mobile_sam_encoder.onnx
+  decoder: ../mobile-sam/mobile_sam_decoder_single.onnx
+
+input:                     # describes the rf-detr detector preprocess
+  width: 560
+  height: 560
+  layout: NCHW
+  letterbox: true
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std:  [0.229, 0.224, 0.225]
+
+postprocess:               # describes the rf-detr detector decode
+  type: detr
+  box_format: cxcywh
+  conf_threshold: 0.5
+  max_detections: 300      # also caps grasps returned per mask
+
+labels: ../rf-detr/coco91.txt   # reuse rf-detr's labels (written when rf-detr is pulled)
+
+grasp:
+  gripper_min: 10          # parallel-jaw opening bounds in ORIGINAL-image pixels
+  gripper_max: 150         # a request may override via gripper_min / gripper_max
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

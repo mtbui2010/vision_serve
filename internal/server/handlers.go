@@ -208,6 +208,9 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 		if err != nil {
 			return "", nil, models.Prompt{}, 0, 0, err
 		}
+		// Per-request predict options threaded to the model (the grasp model reads them).
+		prompt.MinSize, prompt.MaxSize = req.MinSize, req.MaxSize
+		prompt.GripperMin, prompt.GripperMax = req.GripperMin, req.GripperMax
 		return req.Model, img, prompt, req.MinSize, req.MaxSize, nil
 	}
 
@@ -235,5 +238,10 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 	// parse size filters; ignore parse errors (default 0 = no limit)
 	minSize, _ := strconv.ParseFloat(r.FormValue("min_size"), 64)
 	maxSize, _ := strconv.ParseFloat(r.FormValue("max_size"), 64)
+	// grasp gripper bounds (px); ignore parse errors (default 0 = manifest default)
+	gripperMin, _ := strconv.ParseFloat(r.FormValue("gripper_min"), 64)
+	gripperMax, _ := strconv.ParseFloat(r.FormValue("gripper_max"), 64)
+	prompt.MinSize, prompt.MaxSize = minSize, maxSize
+	prompt.GripperMin, prompt.GripperMax = gripperMin, gripperMax
 	return model, img, prompt, minSize, maxSize, nil
 }

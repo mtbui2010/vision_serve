@@ -18,7 +18,6 @@ import (
 	"sync"
 
 	"visionserve/internal/engine"
-	"visionserve/internal/models"
 )
 
 const (
@@ -42,16 +41,17 @@ type amgResult struct {
 	err   error
 }
 
-// autoSegment runs the AMG pipeline and returns all surviving masks sorted by
-// descending confidence. Returns an empty slice (not an error) if nothing passes
-// the quality filters.
+// autoSegment runs the AMG pipeline and returns all surviving masks (as raw
+// bitmaps at original-image resolution) sorted by descending confidence. Returns an
+// empty slice (not an error) if nothing passes the quality filters. Callers encode
+// to RLE (models.Mask) only when needed for the API response.
 func autoSegment(
 	img image.Image,
 	embedding engine.Tensor,
 	scale float64,
 	decRun func(map[string]engine.Tensor) ([]engine.Tensor, error),
 	decOutNames []string,
-) ([]models.Mask, error) {
+) ([]MaskBitmap, error) {
 	origW := img.Bounds().Dx()
 	origH := img.Bounds().Dy()
 	totalPx := origW * origH
@@ -88,7 +88,7 @@ func autoSegment(
 	}
 
 	if len(cands) == 0 {
-		return []models.Mask{}, nil
+		return []MaskBitmap{}, nil
 	}
 
 	// Greedy IoU NMS: keep higher-confidence masks, suppress heavily overlapping ones.
@@ -111,13 +111,15 @@ func autoSegment(
 		}
 	}
 
-	out := make([]models.Mask, 0, len(cands))
+	out := make([]MaskBitmap, 0, len(cands))
 	for i, c := range cands {
 		if !keep[i] {
 			continue
 		}
-		out = append(out, models.Mask{
-			RLE:  encodeRLEColumnMajor(c.bin, c.h, c.w),
+		out = append(out, MaskBitmap{
+			Data: c.bin,
+			W:    c.w,
+			H:    c.h,
 			BBox: c.bbox,
 			Conf: c.conf,
 		})

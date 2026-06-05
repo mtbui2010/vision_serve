@@ -60,10 +60,43 @@ func (m *mobileSAM) PoolSizes() map[string]int { return map[string]int{roleDecod
 // Infer runs the encoder once, then either:
 //   - Automatic Mask Generator (16×16 grid) when no prompt is provided, or
 //   - one decoder run per prompt set (box / point).
+//
+// It returns the public Result (masks as column-major RLE).
 func (m *mobileSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
-	sets, err := promptToPointSets(prompt)
+	bms, err := m.inferBitmaps(img, prompt, r)
 	if err != nil {
 		return models.Result{}, err
+	}
+	masks := make([]models.Mask, len(bms))
+	for i, b := range bms {
+		masks[i] = b.toMask()
+	}
+	return models.Result{Masks: masks}, nil
+}
+
+// InferMasks runs the same encoder→decoder/AMG pipeline as Infer but also returns the
+// raw mask bitmaps (original-image resolution). The masks slice is the RLE-encoded
+// public form (index-aligned with the bitmaps); in-process consumers such as the grasp
+// pipeline use the bitmaps directly and avoid decoding the RLE straight back. The
+// encode happens once here (needed for the API response anyway); no decode ever runs.
+func (m *mobileSAM) InferMasks(img image.Image, prompt models.Prompt, r models.Runner) ([]models.Mask, []MaskBitmap, error) {
+	bms, err := m.inferBitmaps(img, prompt, r)
+	if err != nil {
+		return nil, nil, err
+	}
+	masks := make([]models.Mask, len(bms))
+	for i, b := range bms {
+		masks[i] = b.toMask()
+	}
+	return masks, bms, nil
+}
+
+// inferBitmaps is the shared core: encoder once, then AMG (no prompt) or one decoder
+// run per prompt set, producing raw mask bitmaps at original-image resolution.
+func (m *mobileSAM) inferBitmaps(img image.Image, prompt models.Prompt, r models.Runner) ([]MaskBitmap, error) {
+	sets, err := promptToPointSets(prompt)
+	if err != nil {
+		return nil, err
 	}
 
 	origW := img.Bounds().Dx()
@@ -74,10 +107,10 @@ func (m *mobileSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner
 	encInName := firstName(r.InputNames(roleEncoder), "input_image")
 	encOuts, err := r.Run(roleEncoder, map[string]engine.Tensor{encInName: encIn})
 	if err != nil {
-		return models.Result{}, fmt.Errorf("mobilesam: encoder failed: %w", err)
+		return nil, fmt.Errorf("mobilesam: encoder failed: %w", err)
 	}
 	if len(encOuts) == 0 {
-		return models.Result{}, fmt.Errorf("mobilesam: encoder returned no output")
+		return nil, fmt.Errorf("mobilesam: encoder returned no output")
 	}
 	embedding := encOuts[0]
 
@@ -88,16 +121,12 @@ func (m *mobileSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner
 
 	// No prompt → Automatic Mask Generator (16×16 grid, ~256 decoder calls).
 	if sets == nil {
-		masks, err := autoSegment(img, embedding, scale, decRun, decOutNames)
-		if err != nil {
-			return models.Result{}, err
-		}
-		return models.Result{Masks: masks}, nil
+		return autoSegment(img, embedding, scale, decRun, decOutNames)
 	}
 
 	// Prompted: one decoder run per prompt set.
 	zeros := make([]float32, 256*256)
-	masks := make([]models.Mask, 0, len(sets))
+	bitmaps := make([]MaskBitmap, 0, len(sets))
 	for _, ps := range sets {
 		coords := ps.scaledCoords(scale)
 		dec := map[string]engine.Tensor{
@@ -110,20 +139,20 @@ func (m *mobileSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner
 		}
 		outs, err := decRun(dec)
 		if err != nil {
-			return models.Result{}, fmt.Errorf("mobilesam: decoder failed: %w", err)
+			return nil, fmt.Errorf("mobilesam: decoder failed: %w", err)
 		}
 		maskT, iouT := pickMaskAndIoU(decOutNames, outs)
 		if maskT == nil {
-			return models.Result{}, fmt.Errorf("mobilesam: decoder output has no mask tensor (shapes %v)", shapesOf(outs))
+			return nil, fmt.Errorf("mobilesam: decoder output has no mask tensor (shapes %v)", shapesOf(outs))
 		}
-		mk, err := maskToResult(maskT, iouT, origW, origH)
+		bm, err := maskToBitmap(maskT, iouT)
 		if err != nil {
-			return models.Result{}, err
+			return nil, err
 		}
-		masks = append(masks, mk)
+		bitmaps = append(bitmaps, bm)
 	}
 
-	return models.Result{Masks: masks}, nil
+	return bitmaps, nil
 }
 
 func firstName(names []string, fallback string) string {

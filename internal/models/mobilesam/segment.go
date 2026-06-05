@@ -66,11 +66,11 @@ func Segment(
 		if maskT == nil {
 			return nil, fmt.Errorf("mobilesam: decoder output has no mask tensor (shapes %v)", shapesOf(outs))
 		}
-		mk, err := maskToResult(maskT, iouT, origW, origH)
+		bm, err := maskToBitmap(maskT, iouT)
 		if err != nil {
 			return nil, err
 		}
-		masks = append(masks, mk)
+		masks = append(masks, bm.toMask())
 	}
 	return masks, nil
 }

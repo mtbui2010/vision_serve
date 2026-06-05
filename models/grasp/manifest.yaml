@@ -1,0 +1,42 @@
+# Grasp (class-agnostic) — MobileSAM automask → analytic mask2grasp, Apache-2.0.
+#
+# No detector: the whole image is segmented with MobileSAM's Automatic Mask Generator
+# (16x16 grid) and every object mask is turned into planar parallel-jaw grasps by the
+# pure-Go antipodal force-closure search (internal/grasp). Grasps are class-agnostic
+# (no label). For class-AWARE grasps, see ../grasp-rfdetr (adds an rf-detr detector).
+#
+# task: grasp — output carries `grasps` (and the source `masks`).
+#
+# Weights are NOT committed. This manifest REUSES the MobileSAM weights via relative
+# paths, so pull MobileSAM (see models/mobile-sam/README.md); no extra files are needed.
+#
+# Run: `visionserve run grasp img.jpg`
+#   optional gripper bounds (px): --gripper-min / --gripper-max (or gripper_min/gripper_max
+#   in the JSON/multipart request); --min-size / --max-size filter objects by area.
+name: grasp
+task: grasp
+license: Apache-2.0
+architecture: grasp
+
+segmenter: mobile-sam      # default; the only segmenter wired in v1
+
+# MobileSAM encoder + decoder, referenced from the sibling model directory.
+files:
+  encoder: ../mobile-sam/mobile_sam_encoder.onnx
+  decoder: ../mobile-sam/mobile_sam_decoder_single.onnx
+
+input:
+  # Reference only — MobileSAM resizes/normalizes/pads to 1024 in-graph; no detector here,
+  # so these dims are a placeholder to satisfy validation (the segmenter ignores them).
+  width: 1024
+  height: 1024
+  layout: NCHW
+  letterbox: false
+
+grasp:
+  gripper_min: 10        # parallel-jaw opening bounds in ORIGINAL-image pixels
+  gripper_max: 150       # a request may override via gripper_min / gripper_max
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

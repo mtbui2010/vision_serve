@@ -104,14 +104,36 @@ func pickMaskAndIoU(names []string, outs []engine.Tensor) (mask, iou *engine.Ten
 	return mask, iou
 }
 
-// maskToResult thresholds the best mask (logit>0), encodes it as a column-major RLE,
-// and computes a tight bbox + confidence (from iou_predictions).
-func maskToResult(mask, iou *engine.Tensor, origW, origH int) (models.Mask, error) {
+// MaskBitmap is a binary mask at ORIGINAL-image resolution (row-major, len W*H),
+// with its tight bbox ([x,y,w,h] original-image pixels) and confidence. It is the
+// un-encoded form behind models.Mask.RLE: in-process consumers (the grasp pipeline)
+// take these directly to avoid the RLE encode→decode round-trip — the decoder already
+// upsamples masks to original size, so no rescaling is needed.
+type MaskBitmap struct {
+	Data []bool // row-major, len = W*H, true = foreground
+	W, H int
+	BBox [4]float64
+	Conf float64
+}
+
+// toMask encodes a MaskBitmap into the public models.Mask (column-major RLE + bbox + conf).
+func (b MaskBitmap) toMask() models.Mask {
+	return models.Mask{
+		RLE:  encodeRLEColumnMajor(b.Data, b.H, b.W),
+		BBox: b.BBox,
+		Conf: b.Conf,
+	}
+}
+
+// maskToBitmap thresholds the best mask (logit>0) and computes a tight bbox +
+// confidence (from iou_predictions). It stops short of RLE encoding so callers can
+// consume the raw bitmap directly.
+func maskToBitmap(mask, iou *engine.Tensor) (MaskBitmap, error) {
 	n := int(mask.Dim(1))
 	h := int(mask.Dim(2))
 	w := int(mask.Dim(3))
 	if n < 1 || h <= 0 || w <= 0 {
-		return models.Mask{}, fmt.Errorf("mobilesam: unexpected mask shape %v", mask.Shape)
+		return MaskBitmap{}, fmt.Errorf("mobilesam: unexpected mask shape %v", mask.Shape)
 	}
 
 	best, conf := bestChannel(mask, iou)
@@ -143,11 +165,7 @@ func maskToResult(mask, iou *engine.Tensor, origW, origH int) (models.Mask, erro
 		bbox = [4]float64{float64(minX), float64(minY), float64(maxX - minX + 1), float64(maxY - minY + 1)}
 	}
 
-	return models.Mask{
-		RLE:  encodeRLEColumnMajor(bin, h, w),
-		BBox: bbox,
-		Conf: conf,
-	}, nil
+	return MaskBitmap{Data: bin, W: w, H: h, BBox: bbox, Conf: conf}, nil
 }
 
 // encodeRLEColumnMajor encodes a binary mask as COCO-style uncompressed RLE: counts of

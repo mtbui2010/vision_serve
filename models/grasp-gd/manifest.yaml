@@ -1,0 +1,61 @@
+# Grasp (open-vocabulary, class-aware) — GroundingDINO detection → MobileSAM segmentation →
+# analytic mask2grasp, Apache-2.0.
+#
+# A TEXT prompt drives GroundingDINO (open-vocabulary detector): every box it finds for the
+# prompted phrases is segmented by MobileSAM, and the per-object mask is turned into planar
+# parallel-jaw grasps by the pure-Go antipodal search (internal/grasp). Each grasp inherits the
+# detected object's class (the matched phrase) + confidence. Unlike ../grasp-rfdetr (fixed COCO
+# vocabulary) this accepts ANY object named in the prompt; unlike ../grasp (class-agnostic
+# automask) the grasps are labelled. No detector at all → see ../grasp.
+#
+# task: grasp — output carries `grasps` (with class/conf), plus the source `detections` and
+# `masks`.
+#
+# REQUIRES a text prompt, e.g.  --prompt "cup. bottle. scissors."  (period-separated phrases).
+#
+# The `input:` / `postprocess:` blocks describe the GroundingDINO detector; MobileSAM
+# preprocesses raw in-graph and ignores them. GroundingDINO also preprocesses in Go (resize
+# 800x800 + ImageNet normalize), so those dims are reference-only.
+#
+# Weights are NOT committed. This manifest REUSES the grounding-dino and MobileSAM weights via
+# relative paths, so pull both (see models/grounding-dino/README.md and
+# models/mobile-sam/README.md). The BERT vocab.txt is resolved next to files.det
+# (../grounding-dino/vocab.txt).
+#
+# Run: `visionserve run grasp-gd img.jpg --prompt "cup. bottle."`
+name: grasp-gd
+task: grasp
+license: Apache-2.0
+architecture: grasp
+
+detector: grounding-dino   # open-vocab, text-prompted: class-aware grasps for ANY named object
+segmenter: mobile-sam
+
+# Three ONNX graphs by role, referenced from the sibling model directories.
+files:
+  det: ../grounding-dino/model.onnx
+  encoder: ../mobile-sam/mobile_sam_encoder.onnx
+  decoder: ../mobile-sam/mobile_sam_decoder_single.onnx
+
+input:                     # describes the GroundingDINO detector preprocess (reference only)
+  width: 800
+  height: 800
+  layout: NCHW
+  letterbox: false
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std:  [0.229, 0.224, 0.225]
+
+postprocess:               # GroundingDINO thresholds
+  conf_threshold: 0.3      # box_threshold: per-query score filter
+  text_threshold: 0.25     # token→label assignment threshold
+
+# No `labels:` file — GroundingDINO derives class names from the prompt phrases.
+
+grasp:
+  gripper_min: 10          # parallel-jaw opening bounds in ORIGINAL-image pixels
+  gripper_max: 150         # a request may override via gripper_min / gripper_max
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

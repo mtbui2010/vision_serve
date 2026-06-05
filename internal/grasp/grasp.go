@@ -72,23 +72,77 @@ func (a vec2) sub(b vec2) vec2    { return vec2{a.X - b.X, a.Y - b.Y} }
 func (a vec2) norm() float64      { return math.Hypot(a.X, a.Y) }
 func (a vec2) dot(b vec2) float64 { return a.X*b.X + a.Y*b.Y }
 
-// normalMap computes the per-pixel 2D boundary normal (unit vectors) of the
-// mask via the same separable Sobel-like kernels as utils.mask2normalmap with
-// r=2. Interior and exterior pixels yield ~zero gradient; only boundary pixels
-// carry a nonzero normal. Returns gradient vectors (NOT normalized) plus their
-// norms, so callers can both threshold (norm>0) and use the unit direction.
-//
-// kernel_y (shape (2r+1) x (2r+1)) is:
-//   rows [0..r-1]   = +1
-//   row   r         =  0
-//   rows [r+1..2r]  = -1
-// kernel_x = kernel_y transposed. cv2.filter2D correlates (no kernel flip), so
-// we correlate here too.
-func normalMap(b Bitmap, r int) (gx, gy []float64) {
-	gx = make([]float64, b.W*b.H)
-	gy = make([]float64, b.W*b.H)
+// boundaryPoint is a decimated boundary contact: location + unit outward normal.
+type boundaryPoint struct {
+	loc vec2 // pixel location (x,y), integer-valued
+	nrm vec2 // unit boundary normal
+}
+
+// normalRadius is the Sobel-like kernel radius (matches utils.mask2normalmap r=2).
+const normalRadius = 2
+
+// boundingBox returns the tight inclusive bbox [x0,y0]..[x1,y1] of the set pixels.
+// ok is false when the mask is empty.
+func boundingBox(b Bitmap) (x0, y0, x1, y1 int, ok bool) {
+	x0, y0, x1, y1 = b.W, b.H, -1, -1
 	for y := 0; y < b.H; y++ {
+		row := y * b.W
 		for x := 0; x < b.W; x++ {
+			if b.Data[row+x] {
+				if x < x0 {
+					x0 = x
+				}
+				if x > x1 {
+					x1 = x
+				}
+				if y < y0 {
+					y0 = y
+				}
+				if y > y1 {
+					y1 = y
+				}
+			}
+		}
+	}
+	return x0, y0, x1, y1, x1 >= 0
+}
+
+// collectBoundary returns the nonzero-normal boundary pixels as unit-normal
+// contacts (no decimation yet). Equivalent to the torch.nonzero(normalmap_norm)
+// step in mask2grasps, using the same separable Sobel-like kernels as
+// utils.mask2normalmap with r=2:
+//
+//	kernel_y rows [0..r-1]=+1, row r=0, rows [r+1..2r]=-1; kernel_x = transpose.
+//
+// cv2.filter2D correlates (no kernel flip), so we correlate too. Only boundary
+// pixels carry a nonzero normal, and every such pixel lies within r of a set
+// pixel — so we compute normals ONLY inside the mask's bounding box expanded by r
+// (clamped to the image). This is exact (pixels outside have zero normal) while
+// avoiding a full-frame O(W·H·(2r+1)²) sweep for a small object in a large image.
+func collectBoundary(b Bitmap) []boundaryPoint {
+	const eps = 1e-10
+	const r = normalRadius
+	x0, y0, x1, y1, ok := boundingBox(b)
+	if !ok {
+		return nil
+	}
+	// expand by the kernel radius and clamp to the image bounds.
+	if x0 -= r; x0 < 0 {
+		x0 = 0
+	}
+	if y0 -= r; y0 < 0 {
+		y0 = 0
+	}
+	if x1 += r; x1 >= b.W {
+		x1 = b.W - 1
+	}
+	if y1 += r; y1 >= b.H {
+		y1 = b.H - 1
+	}
+
+	var pts []boundaryPoint
+	for y := y0; y <= y1; y++ {
+		for x := x0; x <= x1; x++ {
 			var sx, sy float64
 			for ky := -r; ky <= r; ky++ {
 				for kx := -r; kx <= r; kx++ {
@@ -111,37 +165,13 @@ func normalMap(b Bitmap, r int) (gx, gy []float64) {
 					}
 				}
 			}
-			gx[y*b.W+x] = sx
-			gy[y*b.W+x] = sy
-		}
-	}
-	return gx, gy
-}
-
-// boundaryPoint is a decimated boundary contact: location + unit outward normal.
-type boundaryPoint struct {
-	loc vec2 // pixel location (x,y), integer-valued
-	nrm vec2 // unit boundary normal
-}
-
-// collectBoundary returns the nonzero-normal boundary pixels as unit-normal
-// contacts (no decimation yet). Equivalent to the torch.nonzero(normalmap_norm)
-// step in mask2grasps.
-func collectBoundary(b Bitmap) []boundaryPoint {
-	const eps = 1e-10
-	gx, gy := normalMap(b, 2)
-	var pts []boundaryPoint
-	for y := 0; y < b.H; y++ {
-		for x := 0; x < b.W; x++ {
-			i := y*b.W + x
-			g := vec2{gx[i], gy[i]}
-			n := g.norm()
+			n := math.Hypot(sx, sy)
 			if n <= 0 {
 				continue
 			}
 			pts = append(pts, boundaryPoint{
 				loc: vec2{float64(x), float64(y)},
-				nrm: vec2{g.X / (n + eps), g.Y / (n + eps)},
+				nrm: vec2{sx / (n + eps), sy / (n + eps)},
 			})
 		}
 	}
