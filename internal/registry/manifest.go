@@ -28,6 +28,7 @@ var validTasks = map[api.Task]bool{
 	api.TaskDepth:          true,
 	api.TaskClassification: true,
 	api.TaskEmbed:          true,
+	api.TaskGrasp:          true,
 }
 
 // Manifest is the "Modelfile for CV" — specified in docs/manifest-spec.md.
@@ -43,6 +44,18 @@ type Manifest struct {
 
 	// Architecture: the architecture type used to select the factory (models.New). Defaults to Name.
 	Architecture string `yaml:"architecture"`
+
+	// SHA256 (OPTIONAL): content hash(es) that bind the declared license to specific
+	// weight bytes. Accepts EITHER a single hex digest (single-file model) OR a
+	// role→digest map (multi-file model). When present, weights whose computed
+	// SHA-256 does not match are refused at load time. See VerifyWeights + docs/manifest-spec.md.
+	SHA256 SHA256Field `yaml:"sha256"`
+
+	// SourceURL (OPTIONAL): the audited upstream the weights were obtained from
+	// (e.g. the official RF-DETR/MobileSAM/GroundingDINO repo). Recorded for
+	// provenance and optionally checked against a curated allowlist (see
+	// VerifiedSourcePrefixes). Purely informational unless an allowlist is supplied.
+	SourceURL string `yaml:"source_url"`
 
 	Input struct {
 		Width     int    `yaml:"width"`
@@ -64,6 +77,21 @@ type Manifest struct {
 	} `yaml:"postprocess"`
 
 	Labels string `yaml:"labels"` // labels file, one class per line
+
+	// Detector/Segmenter: composition for the "grasp" architecture. Segmenter picks the
+	// mask backbone (default "mobile-sam"); Detector is OPTIONAL — set it (e.g. "rf-detr",
+	// "grounding-dino") for class-aware grasps, omit it for class-agnostic (whole-image
+	// automask). The detector/segmenter ONNX graphs are referenced via the files map by
+	// role (det / encoder / decoder), like grounded-sam references sibling weights.
+	Detector  string `yaml:"detector"`
+	Segmenter string `yaml:"segmenter"`
+
+	// Grasp: parallel-jaw defaults for the "grasp" architecture (gripper opening bounds in
+	// original-image pixels). A request may override these per call (gripper_min/gripper_max).
+	Grasp struct {
+		GripperMin float64 `yaml:"gripper_min"`
+		GripperMax float64 `yaml:"gripper_max"`
+	} `yaml:"grasp"`
 
 	Runtime struct {
 		Prefer            []string `yaml:"prefer"`

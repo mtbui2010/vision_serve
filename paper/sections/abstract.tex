@@ -1,19 +1,24 @@
-Deploying computer vision models locally remains fragmented: each model typically ships
-its own Python server, imposes heavy runtime dependencies, and often carries restrictive
-licenses---the popular YOLO series, for instance, is released under AGPL-3.0, which
-virally relicenses any software that links against it~\cite{ultralytics2023yolo,agpllicense}.
-There is no single lightweight server that covers the full CV stack, enforces permissive
-licensing, and ships as a self-contained binary with no Python runtime dependency.
-
-We present \textbf{VisionServe}, an open-source inference server written in Go that serves
-16 computer vision models across 6 task types---object detection, instance segmentation,
-open-vocabulary detection, image classification, monocular depth estimation, and visual
-embedding---using ONNX Runtime as its sole inference backend~\cite{onnxruntime}.
-VisionServe ships as a single statically-linked binary, requires no Python interpreter at
-runtime, and enforces an Apache-2.0/MIT/BSD license allowlist at model-load time,
-automatically rejecting AGPL models.
-On an NVIDIA RTX~A6000, end-to-end inference latency ranges from 33\,ms (CLIP embedding,
-p50) to 570\,ms (GroundingDINO, p50), with VRAM footprints between 308\,MB and 4\,392\,MB
-and cold-start times under 6\,s for all models.
-VisionServe is released under the Apache-2.0 license and is available at
-\url{https://github.com/}{[repository]}.
+Open-source model hubs make it trivial to load weights whose declared license cannot be
+trusted: recent audits find that 95.8\% of models lack the required license text and that
+35.5\% of model-to-application transitions silently strip restrictive (copyleft)
+clauses~\cite{jewitt2026permissivewashing,jewitt2025licensedrift}. For a permissively-licensed
+project, loading a single AGPL model virally relicenses the whole
+deployment~\cite{ultralytics2023yolo,agpllicense}. We present \textbf{VisionServe}, a
+single-binary Go inference server that is, to our knowledge, the first inference runtime to
+enforce a permissive-license allowlist \emph{at model-load time}: it binds each model's
+declared license to specific weight bytes (sha256) and an audited \texttt{source\_url},
+entirely offline, and refuses to load anything outside the policy. This is load-time
+license-\emph{policy} enforcement, hardened by content-hashing and a verified-source
+allowlist---a gap that build-time SCA scanners, deploy-time Kubernetes admission controllers,
+and model signing structurally do not cover. We further characterize the CV serving-overhead
+crossover: on identical ONNX, the single Go binary scales to roughly $8\times$ a GIL-bound
+FastAPI+ONNX~Runtime baseline's peak goodput (695 vs.\ 85~rps for MobileNetV3-Small at
+concurrency~64), while being slower per request at low load ($\sim$78\,ms vs.\ $\sim$15\,ms at
+concurrency~1). A latency decomposition shows the per-request cost is pure-Go JPEG decode and
+resize, not the GPU (ORT~Run $<$1\,ms; JPEG decode $\sim$19\,ms); when clients submit a
+pre-decoded tensor (skipping server-side image decode), VisionServe matches a default
+Triton's inference-serving ceiling ($\sim$563 vs.\ $\sim$549~rps) at $\sim$3.4\,ms latency,
+showing that decode---not the runtime---was its only deficit. Export and serving preserve
+accuracy to within 0.5\% Top-1 of commonly-cited references. VisionServe also serves 16
+registered models across 6 CV task types (12 benchmarked). It is released under the
+Apache-2.0 license and is available at \url{https://github.com/}{[repository]}.

@@ -22,6 +22,7 @@ type (
 	Result         = api.Result
 	Detection      = api.Detection
 	Mask           = api.Mask
+	Grasp          = api.Grasp
 	Classification = api.Classification
 )
 
@@ -32,6 +33,7 @@ const (
 	TaskDepth          = api.TaskDepth
 	TaskClassification = api.TaskClassification
 	TaskEmbed          = api.TaskEmbed
+	TaskGrasp          = api.TaskGrasp
 )
 
 // Model is the interface every model must implement.
@@ -96,6 +98,15 @@ type Config struct {
 	// auxiliary files like vocab.txt); Files = role → absolute ONNX path (e.g. encoder/decoder).
 	Dir   string
 	Files map[string]string
+
+	// Grasp composition (architecture "grasp"). Segmenter picks the mask backbone
+	// (default "mobile-sam"); Detector is optional (e.g. "rf-detr", "grounding-dino") —
+	// empty means class-agnostic (automask). GripperMin/Max are the default parallel-jaw
+	// opening bounds in pixels (a request may override them via the Prompt).
+	Detector   string
+	Segmenter  string
+	GripperMin float64
+	GripperMax float64
 }
 
 // Base is the minimal interface every model implements (simple Model and
@@ -118,13 +129,28 @@ type Point struct {
 //   - GroundingDINO / Grounded-SAM: Text (e.g. "cat. remote.").
 //
 // rf-detr ignores the prompt (it implements the plain Model interface).
+//
+// The trailing fields are per-request predict OPTIONS (not prompt content): size
+// filters and grasp gripper bounds. Models that don't use them ignore them; the
+// grasp model reads them in Infer. They live here because Infer's signature only
+// carries (img, Prompt, Runner), so this is the single channel for per-call params.
 type Prompt struct {
 	Text   string
 	Boxes  [][4]float64
 	Points []Point
+
+	// MinSize/MaxSize: object bbox-area filter as a percent of image area (0 = no
+	// limit), same semantics as api.FilterBySizePct. The grasp model applies these
+	// to detections (box mode) or masks (automask) BEFORE deriving grasps.
+	MinSize float64
+	MaxSize float64
+	// GripperMin/GripperMax: parallel-jaw opening bounds in ORIGINAL-image pixels for
+	// the grasp model (0 = use the manifest default).
+	GripperMin float64
+	GripperMax float64
 }
 
-// Empty reports whether the prompt carries no information.
+// Empty reports whether the prompt carries no PROMPT content (options aside).
 func (p Prompt) Empty() bool {
 	return p.Text == "" && len(p.Boxes) == 0 && len(p.Points) == 0
 }
@@ -139,6 +165,17 @@ type Runner interface {
 	InputNames(role string) []string
 	// OutputNames returns the output order of the role's session (to index Run's result).
 	OutputNames(role string) []string
+}
+
+// PoolSizer is an optional interface for PipelineModels that want multiple concurrent
+// session copies for specific roles. Returning n > 1 for a role makes lifecycle create
+// a SessionPool of n identical sessions, allowing n concurrent inferences on that role
+// instead of serializing all callers on one mutex.
+//
+// Example: MobileSAM decoder pool=4 lets AMG run 4 decoder calls simultaneously.
+// Models that don't implement PoolSizer get a single session per role (pool of 1).
+type PoolSizer interface {
+	PoolSizes() map[string]int
 }
 
 // PipelineModel is for models that need a prompt and/or multiple chained ONNX sessions

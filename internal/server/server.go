@@ -43,6 +43,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/load", s.handleLoad)
 	mux.HandleFunc("POST /api/unload", s.handleUnload)
 	mux.HandleFunc("POST /api/predict", s.handlePredict)
+	mux.HandleFunc("POST /api/infer_tensor", s.handleInferTensor)
 	return logRequests(mux)
 }
 

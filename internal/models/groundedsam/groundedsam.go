@@ -73,6 +73,10 @@ func (m *groundedSAM) Task() models.Task { return models.TaskOpenVocab }
 // Roles: GroundingDINO + the two MobileSAM sessions.
 func (m *groundedSAM) Roles() []string { return []string{roleGDINO, roleEncoder, roleDecoder} }
 
+// PoolSizes requests 4 decoder copies so multiple detected boxes can be
+// segmented concurrently rather than sequentially.
+func (m *groundedSAM) PoolSizes() map[string]int { return map[string]int{roleDecoder: 4} }
+
 // Infer runs detection then per-box segmentation; masks are index-aligned with detections.
 func (m *groundedSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
 	if strings.TrimSpace(prompt.Text) == "" {

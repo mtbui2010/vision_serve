@@ -145,7 +145,7 @@ func TestPostprocess_TensorIdentification(t *testing.T) {
 	meta := models.PreprocessMeta{
 		OrigWidth: 1280, OrigHeight: 720,
 		ScaleX: 0.5, ScaleY: 0.5,
-		PadX: 160, PadY: 0,
+		PadX: 0, PadY: 0,
 	}
 
 	// Build minimal tensors: one proposal visible at stride-8, rest below threshold.

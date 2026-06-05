@@ -29,7 +29,7 @@ interpreter, GPU driver stack beyond what ONNX Runtime needs, or container runti
 \paragraph{VisionServe.}
 We present VisionServe, a lightweight inference server written in Go that is designed to be
 the ``Ollama for Computer Vision''~\cite{ollama2023}: one binary, pulled from a local model
-registry, serving any of 16 supported models over a REST API with no Python dependency.
+registry, serving any of 16 registered models over a REST API with no Python dependency.
 All inference is delegated to ONNX Runtime~\cite{onnxruntime} via a thin cgo binding,
 enabling automatic fallback across execution providers (TensorRT $\to$ CUDA $\to$ CoreML
 $\to$ DirectML $\to$ OpenVINO $\to$ CPU) without changes to model code.
@@ -41,28 +41,35 @@ load any model that does not pass.
 This paper makes the following contributions:
 
 \begin{itemize}
-  \item \textbf{Single-binary CV server.} A Go server that wraps ONNX Runtime to serve
-        16 computer vision models across 6 task types---object detection, instance
-        segmentation, open-vocabulary detection, image classification, monocular depth
-        estimation, and visual embedding---with no Python runtime dependency and a
-        footprint small enough for edge devices.
+  \item \textbf{A license-enforcing model loader (primary).} To our knowledge the first
+        inference runtime to enforce a permissive-license allowlist (Apache-2.0/MIT/BSD)
+        \emph{at model-load time}, refusing non-permissive models by construction, and binding
+        the declared license to specific weight bytes (sha256) and an audited
+        \texttt{source\_url}, entirely offline in a single edge binary.
 
-  \item \textbf{Structural license-safety enforcement.} A registry parser that statically
-        enforces an Apache-2.0/MIT/BSD allowlist and rejects AGPL models at load time,
-        providing a machine-checkable guarantee against copyleft contamination for every
-        deployment.
+  \item \textbf{A novelty boundary and threat model.} We position the gate against build-time
+        SCA scanners, deploy-time admission controllers, and model signing---none of which
+        enforces a license policy at model-load time---and give an honest threat model
+        exercised by a reproducible adversarial demo (an AGPL-declared model, a weight-hash
+        mismatch, and an unaudited source are each refused).
 
-  \item \textbf{Unified result schema and client libraries.} A single result envelope
-        (\texttt{Detections}, \texttt{Masks}, \texttt{Classifications}, \texttt{DepthMap},
-        \texttt{Embeddings}) shared across all tasks, paired with Python and
-        JavaScript/TypeScript client libraries that expose post-processing utilities such as
-        \texttt{nms()}, \texttt{filter\_by\_conf()}, \texttt{group\_by\_class()}, and
-        \texttt{get\_depth\_at\_detection()}.
+  \item \textbf{A CV-specific serving-overhead crossover characterization (measured).} On
+        identical ONNX, a single-binary Go server scales to $\sim$$8\times$ a GIL-bound
+        FastAPI+ONNX~Runtime baseline's peak goodput (695 vs.\ 85~rps for MobileNetV3-Small at
+        concurrency~64), and we report honestly where it loses ($\sim$78\,ms vs.\
+        $\sim$15\,ms per request at concurrency~1).
 
-  \item \textbf{Benchmark suite.} A reproducible evaluation of all 16 models on an NVIDIA
-        RTX~A6000, reporting p50/p95 latency, throughput, VRAM consumption, and cold-start
-        time, providing practitioners with data to make informed model-selection decisions
-        for their hardware budget.
+  \item \textbf{A latency decomposition localizing the overhead} to pure-Go JPEG decode
+        ($\sim$19\,ms) and resize/normalize ($\sim$3.6\,ms), not the GPU (ORT~Run $<$1\,ms on
+        an A6000)---the CV-specific instance of non-inference overhead dominating small-DNN
+        serving~\cite{abouelhamayed2024beyond}.
+
+  \item \textbf{A reproducible end-to-end evaluation:} served accuracy (export and serving
+        preserve ImageNet Top-1 to within 0.5\%), throughput--latency behavior across
+        concurrency, and multi-model footprint (one Go process serving four models uses
+        917\,MB RSS / 920\,MB VRAM vs.\ 1632\,MB / 1384\,MB for four FastAPI+ORT processes),
+        plus a single unified result schema and Python/JavaScript client libraries across all
+        16 registered models (12 benchmarked) on an NVIDIA RTX~A6000.
 \end{itemize}
 
 \paragraph{Paper outline.}

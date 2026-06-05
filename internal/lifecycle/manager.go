@@ -67,6 +67,13 @@ func (m *Manager) Load(name string) error {
 		return fmt.Errorf("lifecycle: no weights for %q at %s — download them per the README in the model directory", name, man.ModelFilePath())
 	}
 
+	// License-policy hardening: when the manifest pins a sha256 (and/or a verified
+	// source allowlist is configured), bind the declared license to the audited
+	// bytes/origin. A no-op for manifests that declare neither (backward compatible).
+	if err := man.VerifyWeights(); err != nil {
+		return fmt.Errorf("lifecycle: weight verification failed for %q: %w", name, err)
+	}
+
 	labels, err := man.LoadLabels()
 	if err != nil {
 		return err
@@ -92,6 +99,10 @@ func (m *Manager) Load(name string) error {
 		Labels:     labels,
 		Dir:        man.Dir(),
 		Files:      man.FilesAbs(),
+		Detector:   man.Detector,
+		Segmenter:  man.Segmenter,
+		GripperMin: man.Grasp.GripperMin,
+		GripperMax: man.Grasp.GripperMax,
 	}
 
 	base, err := models.New(man.ArchOrName(), cfg)
@@ -112,19 +123,42 @@ func (m *Manager) Load(name string) error {
 		if len(filesAbs) == 0 {
 			return fmt.Errorf("lifecycle: model %q is multi-session but its manifest has no 'files' map", name)
 		}
-		engines := map[string]*engine.Session{}
+		// Collect per-role pool sizes (default 1 = single session).
+		poolSizes := map[string]int{}
+		if ps, ok := mdl.(models.PoolSizer); ok {
+			poolSizes = ps.PoolSizes()
+		}
+		engines := map[string]engine.Runnable{}
 		for _, role := range mdl.Roles() {
 			path, ok := filesAbs[role]
 			if !ok {
 				closeEngines(engines)
 				return fmt.Errorf("lifecycle: role %q of model %q not found in manifest 'files'", role, name)
 			}
-			es, err := engine.NewSession(path, nil, nil, providers)
-			if err != nil {
-				closeEngines(engines)
-				return err
+			n := poolSizes[role]
+			if n <= 1 {
+				es, err := engine.NewSession(path, nil, nil, providers)
+				if err != nil {
+					closeEngines(engines)
+					return err
+				}
+				engines[role] = es
+			} else {
+				// Session pool: n identical sessions for concurrent inference.
+				sessions := make([]*engine.Session, n)
+				for i := range sessions {
+					s, err := engine.NewSession(path, nil, nil, providers)
+					if err != nil {
+						for j := 0; j < i; j++ {
+							_ = sessions[j].Close()
+						}
+						closeEngines(engines)
+						return err
+					}
+					sessions[i] = s
+				}
+				engines[role] = engine.NewSessionPool(sessions)
 			}
-			engines[role] = es
 		}
 		sess = newPipelineSession(man.Name, task, mdl, engines, idle, now)
 	case models.Model:
@@ -148,8 +182,8 @@ func (m *Manager) Load(name string) error {
 	return nil
 }
 
-// closeEngines releases a partially-built set of sessions on a load error.
-func closeEngines(engines map[string]*engine.Session) {
+// closeEngines releases a partially-built set of sessions/pools on a load error.
+func closeEngines(engines map[string]engine.Runnable) {
 	for _, e := range engines {
 		_ = e.Close()
 	}
@@ -189,6 +223,21 @@ func (m *Manager) PredictPrompt(name string, img image.Image, prompt models.Prom
 		return api.Result{}, fmt.Errorf("lifecycle: model %q was just unloaded", name)
 	}
 	return s.Predict(img, prompt, time.Now())
+}
+
+// InferTensor ensures the model is loaded then runs the tensor-in path (no decode/preprocess).
+// See Session.PredictTensor. Simple models only.
+func (m *Manager) InferTensor(name string, in engine.Tensor) (api.Result, error) {
+	if err := m.Load(name); err != nil {
+		return api.Result{}, err
+	}
+	m.mu.Lock()
+	s := m.live[name]
+	m.mu.Unlock()
+	if s == nil {
+		return api.Result{}, fmt.Errorf("lifecycle: model %q was just unloaded", name)
+	}
+	return s.PredictTensor(in, time.Now())
 }
 
 // Loaded returns the names of the models currently in memory.

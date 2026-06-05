@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"visionserve/internal/engine"
 )
 
 // Version is the binary version (overridden at build time via -ldflags).
-var Version = "0.1.2-dev"
+var Version = "0.1.4-dev"
 
 const usage = `visionserve — Ollama for Computer Vision (local-first, edge-GPU)
 
@@ -20,6 +22,7 @@ Usage:
   visionserve ps                    show models loaded in memory (requires a running server)
   visionserve rm <model>            unload a model from memory (requires a running server)
   visionserve pull <model>          download a curated model from HuggingFace into the registry (no arg = list)
+  visionserve pull <folder>         validate a local model folder (manifest.yaml + .onnx) + install it into the registry
   visionserve version               print the version
 
 Common flags:
@@ -52,6 +55,12 @@ func Execute(args []string) error {
 		return runPull(args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("visionserve %s\n", Version)
+		if engine.TRTAvailable() {
+			fmt.Printf("TensorRT: available (%s)\n", engine.TRTLibPath())
+		} else {
+			fmt.Println("TensorRT: not found — install for 10-50× faster GPU inference")
+			fmt.Println("          check LD_LIBRARY_PATH or visit https://developer.nvidia.com/tensorrt")
+		}
 		return nil
 	case "help", "--help", "-h":
 		fmt.Print(usage)

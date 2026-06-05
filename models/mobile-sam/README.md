@@ -112,36 +112,58 @@ Outputs:
 
 ## Usage
 
-SAM **requires a box or point prompt**. The CLI runs in-process (no server needed):
+### Prompted segmentation (box or point)
 
 ```bash
 visionserve run mobile-sam img.jpg --box x,y,w,h --out mask.png
+visionserve run mobile-sam img.jpg --point x,y,1 --out mask.png   # label 1=fg 0=bg
 ```
 
-- `--box "x,y,w,h"` — box prompt (multiple boxes separated by `;`).
+- `--box "x,y,w,h"` — box prompt in original-image coords (multiple separated by `;`).
 - `--point "x,y[,label]"` — point prompt (label 1=fg, 0=bg; multiple separated by `;`).
-- `--out mask.png` — saves the image with the mask drawn on it.
+- `--out mask.png` — saves the image with mask(s) drawn on it.
 
-Via the HTTP server, `POST /api/predict` with a `box` field (and `model: mobile-sam`):
+Via the HTTP server:
 
-```json
-{ "model": "mobile-sam", "image_base64": "...", "box": "x,y,w,h" }
+```bash
+curl -s -F model=mobile-sam -F image=@img.jpg -F box="34,58,120,240" \
+  http://localhost:11435/api/predict
 ```
 
-Running without any prompt is an error — MobileSAM has nothing to segment around.
+### No-prompt mode: Automatic Mask Generator (segment everything)
+
+When **no box or point prompt is given**, MobileSAM runs the **Automatic Mask Generator
+(AMG)**: it places a 16×16 grid of foreground points across the image and runs the
+decoder once per point (256 calls total), reusing the encoder embedding. Masks with
+predicted IoU < 0.85 are discarded; the remaining masks are deduplicated via pixel-IoU
+NMS (threshold 0.70). The result is a set of masks covering all significant objects.
+
+```bash
+# CLI — segment everything
+visionserve run mobile-sam img.jpg --out masks.png
+
+# HTTP
+curl -s -F model=mobile-sam -F image=@img.jpg \
+  http://localhost:11435/api/predict
+```
+
+> **Performance note:** AMG runs 256 decoder calls in parallel goroutines using a
+> pool of 4 decoder sessions. With TRT EP: ~7 s. Without TRT (CUDA EP or CPU): ~27 s.
+> Use a box/point prompt when speed matters (~160 ms TRT, ~1.7 s without).
 
 ## Performance
 
-Measured on NVIDIA RTX A6000 (48 GB VRAM), VisionServe Go HTTP server, 20 warm requests.
+Measured on NVIDIA RTX A6000 via VisionServe HTTP server (warm, `duration_ms`):
 
-| Metric | Value |
-|--------|-------|
-| p50 latency (end-to-end HTTP) | 161 ms |
-| p95 latency | 185 ms |
-| Inference only (srv p50) | 136 ms |
-| Throughput | 6.4 RPS |
-| VRAM (GPU) | 966 MB |
-| ONNX size | 58 MB |
-| Cold-start | 7.3 s |
+| Mode | TRT EP (`gpu:0+trt`) | CUDA EP / CPU (`gpu:0` / `cpu`) |
+|------|---------------------|---------------------------------|
+| Box/point prompt (1 box) | **~160 ms** | ~1 700 ms |
+| AMG — no prompt (256 calls, pool=4) | **~7 s** | ~27 s |
 
-Encoder runs once per image; decoder runs once per box/point prompt. The p50 above is for a single box prompt.
+> **Why CUDA EP ≈ CPU for SAM:** ViT encoder and SAM cross-attention ops lack CUDA kernels
+> in ORT's standard build, falling back to CPU. TRT compiles the full graph to GPU.
+
+VisionServe auto-detects TRT at startup. Check with `visionserve version` or look for
+`device: "gpu:0+trt"` in the API response.
+
+**ONNX size:** encoder 27 MB + decoder 16 MB. **VRAM:** ~966 MB (TRT). **Cold-start:** ~7–12 s.

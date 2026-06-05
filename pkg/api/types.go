@@ -13,15 +13,18 @@ const (
 	TaskDepth          Task = "depth"            // monocular depth estimation
 	TaskClassification Task = "classification"   // image classification
 	TaskEmbed          Task = "embed"            // image/text embedding (CLIP, ArcFace)
+	TaskGrasp          Task = "grasp"            // planar parallel-jaw grasp synthesis
 )
 
 // Result is the normalized output — a unified schema across tasks.
 type Result struct {
 	Task            Task             `json:"task"`
 	Model           string           `json:"model"`
-	Device          string           `json:"device,omitempty"` // "gpu:0" or "cpu"
+	Device          string           `json:"device,omitempty"` // "cpu" | "gpu:0" | "gpu:0+trt"
+	Hint            string           `json:"hint,omitempty"`   // setup recommendation (e.g. install TRT)
 	Detections      []Detection      `json:"detections,omitempty"`
 	Masks           []Mask           `json:"masks,omitempty"`
+	Grasps          []Grasp          `json:"grasps,omitempty"`
 	Classifications []Classification `json:"classifications,omitempty"` // top-K class predictions
 	Embeddings      [][]float32      `json:"embeddings,omitempty"`       // one embedding vector per image/input
 	DepthMap        []float32        `json:"depth_map,omitempty"`        // row-major HxW relative depth
@@ -42,6 +45,22 @@ type Detection struct {
 	BBox  [4]float64 `json:"bbox"`
 	Class string     `json:"class"`
 	Conf  float64    `json:"conf"`
+}
+
+// Grasp is a planar parallel-jaw grasp in ORIGINAL image coordinates.
+//
+// Class/Conf carry the source object's label and detector confidence when the grasp
+// was produced in box mode (a detector found a named object, which was then segmented);
+// both are empty/zero for class-agnostic grasps (no detector — whole-image automask).
+// Quality is the analytic mask2grasp score and is always present.
+type Grasp struct {
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Theta   float64 `json:"theta"`           // in-plane gripper-closing angle (radians)
+	Width   float64 `json:"width"`           // jaw opening, original-image pixels
+	Quality float64 `json:"quality"`         // analytic grasp score in [0,1]
+	Class   string  `json:"class,omitempty"` // source object label (box mode); "" if class-agnostic
+	Conf    float64 `json:"conf,omitempty"`  // source detector confidence (box mode); 0 if class-agnostic
 }
 
 // Mask is a segmentation result. The mask is encoded with RLE (COCO-style, column-major counts).
@@ -71,6 +90,10 @@ type PredictJSONRequest struct {
 	Point       string  `json:"point,omitempty"`    // "x,y[,label]" (multiple: separated by ';')
 	MinSize     float64 `json:"min_size,omitempty"` // minimum bbox area as % of image area, 0 = no limit (e.g. 0.1 = 0.1%)
 	MaxSize     float64 `json:"max_size,omitempty"` // maximum bbox area as % of image area, 0 = no limit (e.g. 90 = 90%)
+	// Grasp models only: parallel-jaw opening bounds in ORIGINAL-image pixels. 0 = use the
+	// manifest default. A candidate grasp is kept only if gripper_min <= width <= gripper_max.
+	GripperMin float64 `json:"gripper_min,omitempty"`
+	GripperMax float64 `json:"gripper_max,omitempty"`
 }
 
 // LoadRequest / UnloadRequest are used by /api/load and /api/unload.

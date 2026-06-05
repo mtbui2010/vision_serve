@@ -3,23 +3,30 @@ package server
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"image"
 	"io"
+	"math"
 	"net/http"
 	"strconv"
+	"strings"
 
 	// register decoders for common image formats
 	_ "image/jpeg"
 	_ "image/png"
 
+	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/pkg/api"
 )
 
 // maxImageBytes limits the uploaded image size (to prevent OOM). 32 MiB.
 const maxImageBytes = 32 << 20
+
+// maxTensorBytes limits a raw tensor body (to prevent OOM). 128 MiB.
+const maxTensorBytes = 128 << 20
 
 // GET /api/health
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -101,6 +108,80 @@ func (s *Server) handlePredict(w http.ResponseWriter, r *http.Request) {
 		res = api.FilterBySizePct(res, minSize, maxSize, img.Bounds().Dx(), img.Bounds().Dy())
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// POST /api/infer_tensor?model=<name>&shape=N,C,H,W
+//
+//	body = raw little-endian float32, row-major NCHW (an ALREADY-PREPROCESSED tensor).
+//
+// Tensor-in path: skips server-side image decode + preprocess. For clients that already hold a
+// pixel/feature tensor in memory (no JPEG/PNG round-trip) and for benchmarking the serving +
+// inference layer head-to-head with tensor-in servers (e.g. Triton). Simple models only.
+func (s *Server) handleInferTensor(w http.ResponseWriter, r *http.Request) {
+	model := r.URL.Query().Get("model")
+	if model == "" {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("missing 'model' query param"))
+		return
+	}
+	shape, err := parseShape(r.URL.Query().Get("shape"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxTensorBytes))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Errorf("reading tensor body: %w", err))
+		return
+	}
+	data, err := bytesToFloat32(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var want int64 = 1
+	for _, d := range shape {
+		want *= d
+	}
+	if int64(len(data)) != want {
+		writeError(w, http.StatusBadRequest,
+			fmt.Errorf("tensor has %d float32 but shape %v implies %d", len(data), shape, want))
+		return
+	}
+	res, err := s.mgr.InferTensor(model, engine.Tensor{Data: data, Shape: shape, Dtype: "f32"})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// parseShape parses "N,C,H,W" into positive int64 dims.
+func parseShape(s string) ([]int64, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, fmt.Errorf("missing 'shape' query param (e.g. shape=1,3,224,224)")
+	}
+	parts := strings.Split(s, ",")
+	out := make([]int64, len(parts))
+	for i, p := range parts {
+		v, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64)
+		if err != nil || v <= 0 {
+			return nil, fmt.Errorf("invalid shape %q (want positive ints, e.g. 1,3,224,224)", s)
+		}
+		out[i] = v
+	}
+	return out, nil
+}
+
+// bytesToFloat32 reinterprets a little-endian byte slice as []float32.
+func bytesToFloat32(b []byte) ([]float32, error) {
+	if len(b)%4 != 0 {
+		return nil, fmt.Errorf("tensor body length %d is not a multiple of 4 (float32)", len(b))
+	}
+	out := make([]float32, len(b)/4)
+	for i := range out {
+		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	}
+	return out, nil
 }
 
 func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, models.Prompt, float64, float64, error) {

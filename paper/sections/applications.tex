@@ -11,9 +11,9 @@ dependency, it eliminates the roughly 200\,MB overhead that PyTorch or TensorFlo
 deployments impose even before any model weights are loaded. This footprint reduction
 is significant on boards with 4--8\,GB of unified memory.
 
-As a concrete example, rf-detr-nano running on a Jetson Orin with the TensorRT EP
-achieves a median end-to-end latency of 57\,ms per frame at 640$\times$480 input
-resolution, including HTTP overhead. The same model falls back gracefully to the CUDA EP
+As a concrete example, rf-detr-nano runs on a Jetson Orin with the TensorRT EP; on-device
+latency and energy on the Jetson are to be reported once measured on the device (we do not
+relabel the workstation figures here). The same model falls back gracefully to the CUDA EP
 on a workstation GPU, and to the CPU EP on a plain ARM board, with no configuration
 change required from the operator.
 

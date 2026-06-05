@@ -229,3 +229,109 @@
   note={Released under AGPL-3.0},
   year={2023}
 }
+
+% ---- Competing serving / inference systems (related work) --------------
+
+@misc{llamacpp,
+  title={{llama.cpp}: {LLM} Inference in {C/C++}},
+  author={{ggml-org}},
+  howpublished={\url{https://github.com/ggml-org/llama.cpp}},
+  note={MIT License; single static binary, no Python runtime},
+  year={2023}
+}
+
+@misc{litert,
+  title={{LiteRT} and {MediaPipe}},
+  author={{Google AI Edge}},
+  howpublished={\url{https://github.com/google-ai-edge/LiteRT}},
+  note={Apache-2.0 License},
+  year={2024}
+}
+
+@misc{ortserver,
+  title={{ONNX Runtime Server}},
+  author={{Microsoft}},
+  howpublished={\url{https://github.com/microsoft/onnxruntime}},
+  note={MIT License},
+  year={2019}
+}
+
+@misc{openvinoms,
+  title={{OpenVINO Model Server}},
+  author={{Intel}},
+  howpublished={\url{https://github.com/openvinotoolkit/model_server}},
+  note={Apache-2.0 License},
+  year={2021}
+}
+
+@misc{roboflowinfer,
+  title={{Roboflow Inference}},
+  author={{Roboflow}},
+  howpublished={\url{https://github.com/roboflow/inference}},
+  note={Apache-2.0 core; bundles GPL/AGPL-licensed models},
+  year={2023}
+}
+
+@misc{kserve,
+  title={{KServe}: Standardized Serverless {ML} Inference},
+  author={{KServe Authors}},
+  howpublished={\url{https://github.com/kserve/kserve}},
+  note={Apache-2.0 License},
+  year={2021}
+}
+
+@misc{rayserve,
+  title={{Ray Serve}: Scalable Model Serving},
+  author={{Ray Project}},
+  howpublished={\url{https://docs.ray.io/en/latest/serve/index.html}},
+  note={Apache-2.0 License},
+  year={2021}
+}
+
+% ---- Supply-chain license compliance & serving overhead (revision, verified vs arXiv) ----
+
+@inproceedings{abouelhamayed2024beyond,
+  title={Beyond Inference: Performance Analysis of {DNN} Server Overheads for Computer Vision},
+  author={AbouElhamayed, Ahmed F. and Balle, Susanne and Singh, Deshanand and
+          Abdelfattah, Mohamed S.},
+  booktitle={Proceedings of the 61st ACM/IEEE Design Automation Conference (DAC)},
+  year={2024},
+  eprint={2403.12981},
+  archivePrefix={arXiv},
+  primaryClass={cs.DC},
+  note={Non-inference overhead up to 56\% of latency, $\sim$80\% of throughput for CV DNNs}
+}
+
+@misc{jewitt2026permissivewashing,
+  title={Permissive-Washing in the Open {AI} Supply Chain: A Large-Scale Audit of License Integrity},
+  author={Jewitt, James and Rajbahadur, Gopi Krishnan and Li, Hao and Adams, Bram and
+          Hassan, Ahmed E.},
+  year={2026},
+  eprint={2602.08816},
+  archivePrefix={arXiv},
+  primaryClass={cs.SE},
+  note={124{,}278 chains; 95.8\% of models lack required license text, 3.2\% satisfy
+        text+copyright, 5.75\% of apps preserve a compliant notice}
+}
+
+@misc{jewitt2025licensedrift,
+  title={From {Hugging Face} to {GitHub}: Tracing License Drift in the Open-Source {AI} Ecosystem},
+  author={Jewitt, James and Li, Hao and Adams, Bram and Rajbahadur, Gopi Krishnan and
+          Hassan, Ahmed E.},
+  year={2025},
+  eprint={2509.09873},
+  archivePrefix={arXiv},
+  primaryClass={cs.SE},
+  note={1.6M models; 35.5\% of model$\to$application transitions strip restrictive clauses}
+}
+
+@misc{ali2026fastapitriton,
+  title={Scalable and Secure {AI} Inference in Healthcare: A Comparative Benchmarking of
+         {FastAPI} and {Triton Inference Server} on {Kubernetes}},
+  author={Ali, Ratul},
+  year={2026},
+  eprint={2602.00053},
+  archivePrefix={arXiv},
+  primaryClass={cs.DC},
+  note={FastAPI p50 22\,ms low-load; Triton 780\,rps via dynamic batching}
+}

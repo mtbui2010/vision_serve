@@ -2,9 +2,24 @@
 % Related Work
 % -----------------------------------------------------------------------
 
-\paragraph{Inference serving frameworks.}
-General-purpose inference servers provide multi-model hosting and hardware
-acceleration but are designed for data-center workloads.
+% NOTE (W7 revision): the following \cite keys are referenced below but are NOT
+% yet present in references.bib. They MUST be added before compiling. Do not
+% claim novelty on No-Python / Single-binary / Multi-EP --- those are precedented
+% (see the honest concessions below).
+%   TODO(bib): llamacpp        -- llama.cpp, ggml-org, https://github.com/ggml-org/llama.cpp (MIT)
+%   TODO(bib): litert          -- LiteRT / MediaPipe, Google AI Edge, https://github.com/google-ai-edge/LiteRT (Apache-2.0)
+%   TODO(bib): ortserver       -- ONNX Runtime Server, Microsoft, https://github.com/microsoft/onnxruntime (MIT)
+%   TODO(bib): openvinoms       -- OpenVINO Model Server, Intel, https://github.com/openvinotoolkit/model_server (Apache-2.0)
+%   TODO(bib): roboflowinfer    -- Roboflow Inference, https://github.com/roboflow/inference (Apache-2.0 core; commercial sub-licensor of Ultralytics, i.e. pay-to-relicense)
+%   TODO(bib): kserve           -- KServe, https://github.com/kserve/kserve (Apache-2.0) [optional]
+%   TODO(bib): rayserve         -- Ray Serve, https://docs.ray.io/en/latest/serve/index.html (Apache-2.0) [optional]
+% Supply-chain / overhead keys ADDED to references.bib in this revision:
+%   abouelhamayed2024beyond (DAC'24), jewitt2026permissivewashing (arXiv 2602.08816),
+%   jewitt2025licensedrift (arXiv 2509.09873), ali2026fastapitriton (arXiv 2602.00053).
+
+\paragraph{General-purpose inference servers.}
+Data-center inference servers provide multi-model hosting and hardware
+acceleration but target cluster, not edge, deployment.
 NVIDIA Triton Inference Server~\cite{nvidia2023triton} is highly capable,
 supporting multiple backends and dynamic batching, yet its operational model
 requires Docker or Kubernetes, Python deployment scripts, and a non-trivial
@@ -14,80 +29,175 @@ TorchServe~\cite{pytorch2023torchserve} is tightly coupled to PyTorch,
 requiring a Python environment for both model packaging and serving, and
 provides no native support for ONNX-only runtimes.
 BentoML~\cite{bentoml2023} offers a flexible Python-based abstraction for
-packaging and deploying ML services, but its cloud-centric design and
-Python runtime dependency make it a poor fit for lean, offline edge deployments.
-Ollama~\cite{ollama2023} takes a philosophically different approach: a single
-compiled binary that manages model downloads and serves inference over a local
-REST API with zero external dependencies.
-VisionServe adopts the same user-facing philosophy as Ollama --- one binary,
-no account, no cloud, no Python runtime --- and applies it to the computer
-vision domain, where the multi-session, multi-task, and execution-provider
-complexity of CV models demands a purpose-built design.
-None of the frameworks above provide a license-safe, binary-only serving
-solution for the full range of modern CV tasks.
+packaging and deploying ML services, but its cloud-centric design and Python
+runtime dependency make it a poor fit for lean, offline edge deployments.
+Kubernetes-native frameworks such as KServe and Ray Serve~\cite{kserve,rayserve}
+scale serving across a cluster but inherit the same Python and orchestration
+dependencies and are likewise out of scope for a single low-SWaP device.
+The serving-overhead regime we study is established but underexplored for CV.
+AbouElhamayed et al.~\cite{abouelhamayed2024beyond} show that for CV DNNs,
+non-inference overhead reaches up to 56\% of end-to-end latency and $\sim$80\% of
+throughput---i.e.\ the serving layer, not the GPU, governs goodput for small
+models, which is exactly our regime. The lean-versus-heavy trade-off is likewise
+known to be load-dependent: Ali~\cite{ali2026fastapitriton} reports a lean FastAPI
+server at p50 22\,ms under low load while a batching-oriented Triton reaches
+780~rps at scale---lean wins at low load, heavy wins at scale. Our contribution is
+not to re-discover this trade-off but to resolve the CV-specific crossover
+concurrency on identical ONNX and to localize the overhead
+(Section~\ref{sec:eval}), reporting honestly where the single Go binary loses
+(per-request latency at low load).
 
-\paragraph{Computer vision model ecosystems.}
-Ultralytics YOLO~\cite{ultralytics2023yolo} is among the most widely used
-real-time object detectors, but it is released under the GNU Affero General
-Public License v3.0 (AGPL-3.0)~\cite{agpllicense}.
-AGPL is a strong copyleft: any software that incorporates or links against an
-AGPL component must itself be distributed under AGPL, including commercial and
-closed-source products.
-This makes Ultralytics YOLO incompatible with permissive-license projects and
-with any proprietary downstream deployment.
-Torchvision~\cite{torchvision2023} ships BSD-3 licensed weights for standard
-architectures but is a library, not a server; inference requires importing the
+\paragraph{Single-binary and C++ no-Python serving (the precedent we build on).}
+VisionServe's ``single compiled binary, no Python runtime'' packaging is
+\emph{not} novel, and we do not claim it as such. The canonical precedent is
+llama.cpp~\cite{llamacpp}, which ships a single statically-linkable C/C++
+binary with zero Python dependencies and a CPU+CUDA/Metal/Vulkan backend set;
+it established the ``download one binary and serve locally'' pattern that
+Ollama~\cite{ollama2023} later popularized for large language models.
+On the CV side, LiteRT (formerly TensorFlow Lite) and the MediaPipe
+framework~\cite{litert} provide a C++ core with CPU/GPU/NPU delegates and no
+Python runtime requirement at inference time.
+Microsoft's ONNX Runtime Server~\cite{ortserver} and Intel's OpenVINO Model
+Server~\cite{openvinoms} are both C++ servers that are embeddable via a C/C++
+API without a Python interpreter.
+We therefore explicitly \textbf{concede the ``No-Python'' and ``single-binary''
+axes to prior art}: llama.cpp already demonstrates the single-static-binary,
+zero-Python form factor, and several C++ servers above are Python-free.
+VisionServe's contribution is not inventing this form factor but bringing it,
+in a memory-safe Go binary, to the multi-task, prompted, multi-session
+\emph{computer-vision} setting under a license-enforcement policy.
+
+\paragraph{Computer-vision--native serving and the license question.}
+Several systems are CV-native, so we do not claim that axis as uniquely ours
+either. Roboflow Inference~\cite{roboflowinfer} is a CV-first server with an
+Apache-2.0 core supporting CUDA/TensorRT/CPU and Jetson. Importantly, it is
+\emph{not} a naive copyleft-bundler: Roboflow is a \emph{commercial
+sub-licensor} of Ultralytics, paying for a relicensing agreement so that it may
+legally serve YOLO weights through its platform. The contrast with VisionServe
+is therefore not ``compliant vs.\ negligent'' but two opposite \emph{strategies}
+for the same copyleft problem: \emph{pay-to-relicense} (Roboflow buys a
+commercial license to neutralize the AGPL obligation) versus
+\emph{technically-refuse-to-load} (VisionServe makes loading a
+copyleft-declared model impossible by construction). The pay-to-relicense path
+keeps the obligation off the deployer only while the commercial relationship
+holds and does not generalize to the long tail of self-hosted copyleft models;
+the refuse-to-load path is free, offline, and deployer-side.
+LiteRT/MediaPipe and vendor SDKs (e.g.\ NVIDIA DeepStream, Hailo) are also
+CV-native but are tied to a specific framework or accelerator and perform no
+model-license auditing.
+Ultralytics YOLO~\cite{ultralytics2023yolo} itself is among the most widely
+used real-time detectors but is released under AGPL-3.0~\cite{agpllicense}: a
+strong copyleft that virally relicenses any software incorporating it,
+including commercial and closed-source downstream products.
+Torchvision~\cite{torchvision2023} ships BSD-3 weights for standard
+architectures but is a library, not a server, and requires importing the
 PyTorch Python stack.
-HuggingFace Hub aggregates a large number of CV models with convenient
-download APIs, but inference requires the Python \texttt{transformers} or
-\texttt{diffusers} stack, and the host license of a Hub-hosted model is
-determined by the uploader, not by the Hub itself --- a model's presence on
-Hub says nothing about its license.
-VisionServe addresses this gap by maintaining an explicit license allowlist
-(Apache-2.0, MIT, and BSD families) validated at startup; models with any
-other license are rejected outright, giving downstream adopters a strong
-audit guarantee.
+HuggingFace Hub aggregates many CV models with convenient download APIs, but
+inference requires the Python \texttt{transformers}/\texttt{diffusers} stack,
+and a model's host license is set by the uploader, not verified by the Hub ---
+a model's mere presence on Hub says nothing about its license.
+Against this field, \textbf{no competitor enforces a permissive-license
+allowlist at model-load time}: Roboflow buys its way out, the rest do not
+check. This is the one axis on which VisionServe is genuinely uncontested.
 
-\paragraph{ONNX and cross-framework portability.}
+\paragraph{Supply-chain license compliance, and why the loader is the missing enforcement point.}
+The motivation for a load-time gate is empirical: declared model licenses are
+frequently absent or wrong. Auditing 124{,}278 dataset$\to$model$\to$application
+chains, Jewitt et al.~\cite{jewitt2026permissivewashing} find that 95.8\% of
+models lack the required license text, only 3.2\% satisfy both the license-text
+and copyright requirements, and just 5.75\% of downstream applications preserve a
+compliant model notice. A companion audit of 1.6M
+models~\cite{jewitt2025licensedrift} finds that 35.5\% of
+model$\to$application transitions strip restrictive clauses, relicensing copyleft
+work as permissive. A declared license string therefore cannot be trusted alone.
+Existing tooling addresses license and provenance at two points, \emph{neither of
+which is the model loader}. Build-/CI-time software-composition-analysis scanners
+(ScanCode, FOSSology, Snyk) scan source dependency trees and emit reports and
+SBOMs, leaving the decision to a human or policy file; they do not gate weights at
+load time. Deploy-time admission controllers (Kyverno, OPA Gatekeeper, Sigstore
+policy-controller) verify container-image signatures at Kubernetes pod
+admission---container integrity and identity, not a license \emph{policy} over
+model weights. Model signing (OpenSSF/Sigstore) proves who signed and that bytes
+are unmodified---provenance and integrity, not license policy. VisionServe's gate
+is orthogonal and complementary: it moves \emph{license-policy} enforcement into
+the runtime at load time, binding the declared license to sha256 weight bytes and
+an audited \texttt{source\_url}, offline. The regulatory backdrop reinforces the
+need: the EU Cyber Resilience Act mandates machine-readable SBOMs with
+integrity-hash and license fields, and the EU AI Act adds GPAI transparency
+obligations.
+% TODO(bib): formal EU CRA / EU AI Act citations if a reference is wanted.
+
+\paragraph{ONNX, execution providers, and what VisionServe inherits.}
 The Open Neural Network Exchange format~\cite{onnx2019} defines a
-framework-agnostic computation graph that enables models trained in PyTorch,
-PaddlePaddle, TensorFlow, and other frameworks to be exported once and
-deployed anywhere.
-ONNX Runtime (ORT)~\cite{onnxruntime} is Microsoft's high-performance
-inference engine for ONNX graphs.
-ORT ships optional execution providers (EPs) for NVIDIA TensorRT and CUDA,
-Apple CoreML, Intel OpenVINO, and DirectML for Windows GPUs, all behind a
-common session API.
-VisionServe builds on the \texttt{yalue/onnxruntime\_go} Go binding and
-exposes ORT's EP selection through a manifest-level priority list, so a single
-binary automatically dispatches to the best available accelerator at runtime.
+framework-agnostic graph so models trained in PyTorch, PaddlePaddle,
+TensorFlow, and others can be exported once and deployed anywhere.
+ONNX Runtime (ORT)~\cite{onnxruntime} is Microsoft's high-performance engine
+for ONNX graphs, shipping execution providers (EPs) for NVIDIA TensorRT and
+CUDA, Apple CoreML, Intel OpenVINO, and Windows DirectML behind a common
+session API.
+VisionServe builds on the \texttt{yalue/onnxruntime\_go} binding and exposes
+ORT's EP selection through a manifest-level priority list.
+We stress that the \textbf{multi-EP / multi-hardware capability is ONNX
+Runtime's, not ours}: VisionServe \emph{inherits} exactly ORT's EP set and
+does not add a new backend or accelerator. The same applies to the C++ ORT
+Server and OpenVINO Model Server, which expose the same underlying providers.
+Our contribution on this axis is limited to driving the existing ORT EP
+fallback chain (\texttt{tensorrt}~$\rightarrow$~\texttt{cuda}~$\rightarrow$~
+\texttt{cpu}, etc.) from a declarative manifest inside the single binary.
 
-\paragraph{Summary.}
-Table~\ref{tab:related} contrasts the systems discussed above along the axes
-most relevant to edge and embedded CV deployment.
-VisionServe is unique in combining (i)~a single compiled binary with no
-Python or container runtime, (ii)~strict permissive-license enforcement for
-both the serving framework and every hosted model, (iii)~multi-EP hardware
-fallback through ONNX Runtime, and (iv)~native support for prompted and
-multi-session CV pipelines (segmentation, grounded detection) within a
-unified result schema.
+\paragraph{Positioning: the combination, and the license gate.}
+Table~\ref{tab:related} contrasts these systems along the axes most relevant
+to edge CV deployment, with overclaimed checkmarks from the earlier draft
+corrected. The honest reading is:
+the ``No-Python'' column is shared with llama.cpp, LiteRT, ORT Server, and
+OpenVINO Model Server; ``single-binary'' is shared with llama.cpp; and
+``multi-EP'' is shared with every ORT- or OpenVINO-based system because it
+\emph{is} the underlying runtime's provider set.
+What remains genuinely uncontested is the \textbf{load-time
+permissive-license gate}: VisionServe is, to our knowledge, the only
+CV-native server that validates each model's declared license against an
+allowlist (Apache-2.0 / MIT / BSD families) at load time and rejects anything
+else, while no other system performs this check and Roboflow ships copyleft
+models by default.
+Accordingly, we frame VisionServe's contribution as the \emph{combination}
+rather than any single axis: a single self-contained Go binary
+$\times$ a CV-native unified \texttt{Result} schema (detections plus
+column-major-RLE masks across detection, segmentation, open-vocabulary
+detection, and grounded segmentation) $\times$ ORT's multi-EP fallback
+$\times$ a load-time license-allowlist gate. Each ingredient exists in prior
+art; their conjunction in one Python-free, license-enforcing CV server does
+not.
 
 \begin{table}[h]
   \centering
-  \caption{Comparison of inference serving systems.}
+  \caption{Comparison of inference serving systems. Checkmarks corrected for
+  the W7 revision: ``No Python'', ``Single binary'', and ``Multi-EP'' are
+  \emph{not} unique to VisionServe (see text); only the load-time
+  license-allowlist gate is uncontested. ``Multi-EP'' for ORT/OpenVINO-based
+  systems denotes the runtime's own provider set, which VisionServe inherits.
+  $\sim$ = partial / qualified.}
   \label{tab:related}
   \small
-  \begin{tabular}{lccccc}
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{lcccccc}
     \toprule
-    \textbf{System} & \textbf{No Python} & \textbf{Single binary} &
-    \textbf{License audit} & \textbf{Multi-EP} & \textbf{CV-native} \\
+    \textbf{System} & \textbf{No} & \textbf{Single} &
+    \textbf{License} & \textbf{Multi-} & \textbf{CV-} & \textbf{Tool} \\
+    & \textbf{Python} & \textbf{binary} & \textbf{gate} &
+    \textbf{EP} & \textbf{native} & \textbf{license} \\
     \midrule
-    Triton~\cite{nvidia2023triton}        & \texttimes & \texttimes & \texttimes & \checkmark & \texttimes \\
-    TorchServe~\cite{pytorch2023torchserve} & \texttimes & \texttimes & \texttimes & \texttimes & \texttimes \\
-    BentoML~\cite{bentoml2023}            & \texttimes & \texttimes & \texttimes & \texttimes & \texttimes \\
-    Ollama~\cite{ollama2023}              & \checkmark & \checkmark & \texttimes & \texttimes & \texttimes \\
+    Triton~\cite{nvidia2023triton}            & \texttimes & \texttimes & \texttimes & \checkmark & \texttimes & BSD-3 \\
+    TorchServe~\cite{pytorch2023torchserve}   & \texttimes & \texttimes & \texttimes & \texttimes & \texttimes & Apache-2.0 \\
+    BentoML~\cite{bentoml2023}                & \texttimes & \texttimes & \texttimes & \texttimes & \texttimes & Apache-2.0 \\
+    KServe / Ray Serve~\cite{kserve,rayserve} & \texttimes & \texttimes & \texttimes & \checkmark & \texttimes & Apache-2.0 \\
+    Ollama~\cite{ollama2023}                  & \checkmark & \checkmark & \texttimes & \texttimes & \texttimes & MIT \\
+    llama.cpp~\cite{llamacpp}                 & \checkmark & \checkmark & \texttimes & \checkmark & \texttimes & MIT \\
+    LiteRT / MediaPipe~\cite{litert}          & \checkmark & $\sim$     & \texttimes & \checkmark & \checkmark & Apache-2.0 \\
+    ORT Server~\cite{ortserver}               & \checkmark & $\sim$     & \texttimes & \checkmark & \texttimes & MIT \\
+    OpenVINO Model Server~\cite{openvinoms}   & \checkmark & $\sim$     & \texttimes & \checkmark & \texttimes & Apache-2.0 \\
+    Roboflow Inference~\cite{roboflowinfer}   & \texttimes & \texttimes & \texttimes\,(pay-to-relicense) & \checkmark & \checkmark & Apache-2.0 \\
     \midrule
-    \textbf{VisionServe} (ours)           & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark \\
+    \textbf{VisionServe} (ours)               & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark & Apache-2.0 \\
     \bottomrule
   \end{tabular}
 \end{table}

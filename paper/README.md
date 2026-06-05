@@ -22,11 +22,23 @@ dependencies. It covers:
 ## How to compile
 
 ```bash
-# Option A: Overleaf (recommended)
+# Option A: the texpdf conda env (recommended — no container, no full TeX Live)
+# One-time setup: a self-contained `tectonic` engine that fetches only the
+# packages this document needs on first run and caches them.
+conda create -n texpdf -c conda-forge tectonic
+
+# Build from the repo root (runs the build inside texpdf via `conda run`):
+make pdf
+# ...or inside paper/ with the env active:
+conda activate texpdf && make pdf
+# Output: paper/main.pdf. (tectonic prints a benign "main.bbl changed" warning on
+# bibtex docs; the PDF and citations are correct.)
+
+# Option B: Overleaf
 # Upload this entire paper/ directory as a new project.
 # neurips_2024.sty is pre-installed on Overleaf.
 
-# Option B: local LaTeX
+# Option C: raw system TeX fallback
 # Download neurips_2024.sty from https://neurips.cc/Conferences/2024/PaperInformation/StyleFiles
 # Place it in paper/, then:
 cd paper

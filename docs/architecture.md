@@ -73,7 +73,8 @@ HTTP layers (`models.ParsePrompt` is shared):
 - `Points` — SAM point prompts (`label` 1 = foreground, 0 = background).
 
 Simple `Model`s (RF-DETR) ignore the prompt. The manager always calls
-`PredictPrompt(model, img, prompt)`; an empty prompt is valid.
+`PredictPrompt(model, img, prompt)`; an empty prompt is valid — for MobileSAM it
+triggers the **Automatic Mask Generator** (16×16 grid, ~256 decoder calls).
 
 ### Multi-session lifecycle
 
@@ -93,14 +94,25 @@ so "hardware support" = which ONNX Runtime **execution providers (EPs)** the eng
 append. The manifest's `runtime.prefer` declares a per-model fallback chain; `engine`
 normalizes it and **always appends `cpu` last** so every model can run somewhere.
 
-| EP | Hardware | Notes |
-|----|----------|-------|
-| `tensorrt` | NVIDIA GPU (incl. Jetson) | highest perf; edge-first |
-| `cuda` | NVIDIA GPU | general CUDA |
-| `coreml` | Apple Silicon / macOS | Neural Engine / GPU |
-| `directml` | Windows GPU (AMD / Intel / NVIDIA) | DirectX 12 |
-| `openvino` | Intel CPU / iGPU / VPU | |
-| `cpu` | any CPU | always-present final fallback |
+| EP | Hardware | `device` field | Notes |
+|----|----------|---------------|-------|
+| `tensorrt` | NVIDIA GPU (incl. Jetson) | `gpu:0+trt` | highest perf; 10–50× over CUDA EP for transformer models |
+| `cuda` | NVIDIA GPU | `gpu:0` | general CUDA; limited for custom attention ops |
+| `coreml` | Apple Silicon / macOS | `gpu:0` | Neural Engine / GPU |
+| `directml` | Windows GPU (AMD / Intel / NVIDIA) | `gpu:0` | DirectX 12 |
+| `openvino` | Intel CPU / iGPU / VPU | `openvino:0` | |
+| `cpu` | any CPU | `cpu` | always-present final fallback |
+
+**TRT auto-detect:** before attempting the TRT EP, VisionServe checks for `libnvinfer.so.10`
+in `LD_LIBRARY_PATH` and common system paths (`/usr/lib/x86_64-linux-gnu`, `/usr/local/lib`,
+etc.). If the lib is absent the TRT EP is skipped entirely — no hard crash, graceful fallback
+to CUDA. This check runs once at startup in a background goroutine and is cached.
+
+**Important for transformer models (GroundingDINO, MobileSAM):** ORT's CUDA EP falls back
+to CPU for ops like deformable multi-scale attention and custom ViT attention — there are no
+CUDA kernels for them in the standard ORT build. CUDA EP therefore gives no speedup over
+CPU for these models. TRT compiles the entire graph and eliminates the fallback, achieving
+10–50× speedup. The `device` field and startup logs tell you which EP is active.
 
 Appending an EP whose libraries are missing on the host is **not fatal** — the engine
 silently falls back to the next EP in the chain (set `VISIONSERVE_TRACE=1` to see which EP
@@ -113,6 +125,8 @@ ROCm, so AMD discrete GPUs are reachable only via DirectML on Windows).
 
 Every task returns the same `api.Result`. There is **no per-model schema**:
 
+- `Device` — `"cpu"` | `"gpu:0"` (CUDA EP) | `"gpu:0+trt"` (TensorRT EP).
+- `Hint` — non-empty when using `gpu:0` without TRT; recommends installing TensorRT.
 - `Detections` — each `{ bbox [x,y,w,h], class, conf }`, bbox in **original-image** coords.
   Used by detection (RF-DETR, RT-DETR, SCRFD) and open-vocab detection (GroundingDINO).
 - `Masks` — each `{ rle, bbox, conf }`, the mask encoded as **column-major RLE**

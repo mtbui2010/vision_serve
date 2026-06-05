@@ -7,6 +7,11 @@
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
+% Map literal Unicode em-dashes to the LaTeX `---` ligature so the source compiles
+% identically under pdflatex (arXiv/IEEE) and the XeTeX engine used by `make pdf`
+% (tectonic). Without this, XeTeX silently drops U+2014 with a legacy Times font.
+\usepackage{newunicodechar}
+\newunicodechar{—}{---}
 \usepackage{hyperref}
 \usepackage{url}
 \usepackage{booktabs}

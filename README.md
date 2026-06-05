@@ -368,21 +368,34 @@ Pre-built images on Docker Hub: [`mtbui2010/visionserve`](https://hub.docker.com
 # GPU — default (needs nvidia-container-toolkit)
 docker run -d \
   --gpus all \
-  -v visionserve:/root/.visionserve \
   -p 11435:11435 \
+  -v ~/.visionserve_models:/root/.models \
   --name visionserve \
   mtbui2010/visionserve:latest
 
 # CPU only
 docker run -d \
-  -v visionserve:/root/.visionserve \
   -p 11435:11435 \
+  -v ~/.visionserve_models:/root/.models \
   --name visionserve \
   mtbui2010/visionserve:v0.1.2-cpu
 ```
 
-The named volume `visionserve:/root/.visionserve` persists models across restarts.
-Omit `-v` if persistence is not needed.
+The registry lives at `/root/.models` inside the container (set via
+`VISIONSERVE_MODELS`). Bind-mounting your host folder `~/.visionserve_models` onto it
+gives you the nicest workflow:
+
+- **Models persist on the host**, visible in plain `~/.visionserve_models/` (catalog
+  `pull` downloads land there too).
+- **Drop in your own model and it just appears** — put a folder with a
+  `manifest.yaml` + `.onnx` at `~/.visionserve_models/<name>/` and `visionserve list`
+  shows it immediately, **no `pull` or `docker cp` needed** (the container reads the
+  same files through the mount).
+
+> Prefer zero mounts? Omit `-v` entirely — the image declares `/root/.models` as a
+> `VOLUME`, so pulled models still persist across restarts via an anonymous volume
+> (but then your local model folders aren't visible to the container — use `pull` with
+> a path or the [`vspull` helper](deploy/vspull.sh) to copy them in).
 
 #### Step 2 — Pull a model (no restart needed)
 
@@ -416,6 +429,32 @@ docker exec -it visionserve visionserve pull mobile-sam
 docker exec -it visionserve visionserve pull grounded-sam
 ```
 
+**Bring your own / fine-tuned model.** With the bind-mount above, just drop the model
+folder on the host and it shows up — no repo, no `pull`, no `docker cp`:
+
+```bash
+# a folder with manifest.yaml + <model>.onnx (+ labels.txt)
+cp -r ./rf-detr-mycustom ~/.visionserve_models/
+
+docker exec -it visionserve visionserve list          # rf-detr-mycustom is listed
+curl -s -F model=rf-detr-mycustom -F image=@img.jpg http://localhost:11435/api/predict
+```
+
+To **validate** the folder before trusting it (checks permissive license, a registered
+`architecture`, and that the weights exist — the CV equivalent of `ollama create`), run
+`pull` against its in-container path:
+
+```bash
+docker exec -it visionserve visionserve pull /root/.models/rf-detr-mycustom
+```
+
+> No bind-mount? Then the container can't see host folders — copy it in first
+> (`docker cp ./rf-detr-mycustom visionserve:/tmp/x && docker exec -it visionserve visionserve pull /tmp/x`),
+> or use the [`vspull` helper](deploy/vspull.sh).
+
+A fine-tuned model reuses an existing `architecture` (e.g. `architecture: rf-detr`)
+and ships its own `labels:` file. See [docs/manifest-spec.md](docs/manifest-spec.md#installing-a-local-model--pull-folder-the-modelfile-path).
+
 #### Step 3 — That's it
 
 ```bash
@@ -435,28 +474,28 @@ Use the [curl](#5-call-the-api-with-curl), [Python](#6-infer-from-python), or
 ```bash
 # Detection
 docker run --rm --gpus all \
-  -v visionserve:/root/.visionserve \
+  -v visionserve:/root/.models \
   -v "$PWD/image.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
   run rf-detr /img.jpg
 
 # Segmentation with a box prompt
 docker run --rm --gpus all \
-  -v visionserve:/root/.visionserve \
+  -v visionserve:/root/.models \
   -v "$PWD/image.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
   run mobile-sam /img.jpg --box 100,80,440,300
 
 # Grounded-SAM — text → boxes → masks
 docker run --rm --gpus all \
-  -v visionserve:/root/.visionserve \
+  -v visionserve:/root/.models \
   -v "$PWD/image.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
   run grounded-sam /img.jpg --prompt "person. car."
 
 # CPU only (no GPU)
 docker run --rm \
-  -v visionserve:/root/.visionserve \
+  -v visionserve:/root/.models \
   -v "$PWD/image.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:v0.1.2-cpu \
   run rf-detr /img.jpg
@@ -481,11 +520,33 @@ image** coordinates as `[x, y, w, h]` (top-left corner + width/height):
 {
   "task": "detection",
   "model": "rf-detr",
+  "device": "gpu:0+trt",
   "detections": [
     { "bbox": [34.5, 58.0, 120.2, 240.7], "class": "person", "conf": 0.91 },
     { "bbox": [210.0, 130.4, 88.6, 64.1], "class": "dog", "conf": 0.77 }
   ],
   "duration_ms": 18.4
+}
+```
+
+The `device` field reports which execution provider ran inference:
+
+| Value | Meaning |
+|-------|---------|
+| `cpu` | CPU only |
+| `gpu:0` | CUDA EP (NVIDIA GPU, no TensorRT) |
+| `gpu:0+trt` | TensorRT EP — fastest; requires `libnvinfer.so.10` |
+| `openvino:0` | Intel OpenVINO EP |
+
+When `device` is `gpu:0` (CUDA EP without TRT), a `hint` field is included recommending TRT installation for transformer-based models where CUDA EP provides no speedup over CPU:
+
+```json
+{
+  "task": "segmentation",
+  "model": "mobile-sam",
+  "device": "gpu:0",
+  "hint": "TensorRT not found (libnvinfer.so.10) — install for 10-50× faster inference...",
+  ...
 }
 ```
 
@@ -495,6 +556,7 @@ Segmentation results come back under `masks` (each with a column-major RLE-encod
 {
   "task": "segmentation",
   "model": "mobile-sam",
+  "device": "gpu:0+trt",
   "masks": [
     { "rle": "...", "bbox": [34.0, 58.0, 120.0, 240.0], "conf": 0.98 }
   ],
@@ -664,14 +726,16 @@ YOLOv8n  GPU (PyTorch):       ~18 ms   CNN, 6 MB, AGPL-3.0 ✗
 RF-DETR-nano  GPU (VisionServe): 57 ms    transformer, 103 MB, Apache-2.0 ✓  (srv-only: 37 ms)
 RF-DETR-base  GPU (VisionServe): 78 ms    transformer, 103 MB, Apache-2.0 ✓  (srv-only: 55 ms)
 YOLOv8m  GPU (PyTorch):       ~45 ms   CNN, 52 MB, AGPL-3.0 ✗
-GroundingDINO GPU (VisionServe): ~325 ms  open-vocab (text query), 719 MB, Apache-2.0 ✓
+GroundingDINO GPU+TRT (VisionServe): ~70 ms   open-vocab (text query), 686 MB, Apache-2.0 ✓
+GroundingDINO GPU/CPU (VisionServe): ~6 s    (CUDA EP w/o TRT = CPU speed; TRT required)
 ```
 
 RF-DETR-nano at 57 ms (srv-only 37 ms) is **competitive with YOLOv8n** at the server level. The gap for RF-DETR-base comes from:
 1. **DETR transformer architecture** — global cross-attention on 300 queries is more expensive
    than YOLO's local grid predictions, but NMS-free and more accurate on dense/occluded scenes.
-2. **CUDA EP vs TensorRT** — we're on CUDA EP (ONNX Runtime). TensorRT would add another
-   2–4× speedup; it requires `libnvinfer.so.10` which isn't installed on this host.
+2. **CUDA EP vs TensorRT** — CUDA EP alone provides ~1.5× speedup for RF-DETR (CNN ops).
+   TensorRT compiles the full graph and gives 10–50× speedup; requires `libnvinfer.so.10`.
+   VisionServe auto-detects TRT at startup (check `visionserve version` or server logs).
 3. **Go preprocess + HTTP** — adds ~20 ms overhead on top of inference.
 
 **YOLO (Ultralytics) is forbidden** in VisionServe by design — it is AGPL-3.0 copyleft,
@@ -689,12 +753,12 @@ make pull MODEL=rf-detr-nano        # ~103 MB, 384×384 input, 57 ms GPU (srv-on
 - **Face detection:** SCRFD at 45 ms, only 16 MB ONNX, 420 MB VRAM — very efficient.
 - **Detection:** RF-DETR-nano at 57 ms (srv 37 ms), RF-DETR at 78 ms (srv 55 ms). Add `--min-size`/`--max-size` to filter noise.
 - **Depth:** MiDaS at 65 ms (srv 13 ms) — Go preprocess dominates (52 ms overhead). Depth Anything V2 not yet measured.
-- **Segmentation:** MobileSAM (161 ms) < EfficientSAM (181 ms) < SAM2 (242 ms). SAM2 p95 is 544 ms — multi-scale encoder is VRAM-heavy (2.5 GB).
+- **Segmentation:** MobileSAM box/point prompt: ~160 ms (TRT) / ~1.7 s (CUDA EP or CPU). AMG (no prompt, 256 calls): ~7 s (TRT+pool) / ~27 s (CUDA EP). SAM2 p95 is 544 ms — multi-scale encoder is VRAM-heavy (2.5 GB).
 - **OCR:** PaddleOCR at 54 ms total, 34 ms inference.
-- **Open-vocab:** GroundingDINO at 570 ms GPU (srv 550 ms) — heavy transformer (686 MB, 4.4 GB VRAM). CPU would be ~7× slower.
+- **Open-vocab:** GroundingDINO ~70 ms (TRT) / ~6 s (CUDA EP or CPU) — transformer model (686 MB) with deformable attention ops that ORT CUDA EP falls back to CPU.
 - **Go HTTP overhead:** typically 10–55 ms on top of pure inference. Bottleneck is always ORT, not the server.
 - **Cold-start** ranges from 2.9 s (MobileNetV3) to 12.3 s (GroundingDINO). Use `make serve` for production.
-- **TensorRT EP** (needs `libnvinfer.so.10`) gives 2–4× additional speedup — all models have `tensorrt` first in their `runtime.prefer` chain.
+- **TensorRT EP** (needs `libnvinfer.so.10`) gives **10–50× speedup** on transformer models (GroundingDINO, MobileSAM) — CUDA EP alone provides no speedup for these models because their custom attention ops fall back to CPU internally. RF-DETR and CNN-based models benefit more from CUDA EP (~1.5×). All models list `tensorrt` first in `runtime.prefer`; VisionServe auto-detects and uses TRT when `libnvinfer.so.10` is available.
 
 ### Accuracy reference (from papers / official repos)
 

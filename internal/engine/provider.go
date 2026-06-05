@@ -28,10 +28,15 @@ var validProviders = map[Provider]bool{
 }
 
 // DeviceString maps an execution provider to the device string returned in API responses.
-// GPU EPs return "gpu:0" (device index 0); CPU returns "cpu".
+//   - "gpu:0+trt" — TensorRT EP (fastest; requires libnvinfer.so.10)
+//   - "gpu:0"     — CUDA / CoreML / DirectML EP
+//   - "openvino:0"— OpenVINO EP
+//   - "cpu"       — CPU fallback
 func DeviceString(ep Provider) string {
 	switch ep {
-	case ProviderTensorRT, ProviderCUDA, ProviderCoreML, ProviderDirectML:
+	case ProviderTensorRT:
+		return "gpu:0+trt"
+	case ProviderCUDA, ProviderCoreML, ProviderDirectML:
 		return "gpu:0"
 	case ProviderOpenVINO:
 		return "openvino:0"

@@ -30,22 +30,27 @@ Model weights are **not** baked in; they are downloaded on first use via `vision
 ```bash
 # GPU (default / recommended)
 docker run -d \
-  -v visionserve:/root/.visionserve \
   --gpus all \
   -p 11435:11435 \
+  -v ~/.visionserve_models:/root/.models \
   --name visionserve \
   mtbui2010/visionserve:latest
 
 # CPU only
 docker run -d \
-  -v visionserve:/root/.visionserve \
   -p 11435:11435 \
+  -v ~/.visionserve_models:/root/.models \
   --name visionserve \
   mtbui2010/visionserve:v0.1.2-cpu
 ```
 
-The named volume `visionserve:/root/.visionserve` persists downloaded models across
-restarts. Omit `-v` if persistence is not needed.
+The registry lives at `/root/.models` inside the container (`VISIONSERVE_MODELS`).
+Bind-mounting the host folder `~/.visionserve_models` onto it means pulled models
+**persist on the host** (visible in plain `~/.visionserve_models/`), and any **local
+model** you drop there (`manifest.yaml` + `.onnx`) shows up in `list` immediately —
+no `pull` / `docker cp` needed. Prefer no mount? Omit `-v`: the image declares
+`/root/.models` as a `VOLUME`, so catalog pulls still persist via an anonymous volume
+(but local host folders won't be visible — use `pull <path>` to copy them in).
 
 ### Step 2 — Pull a model (no restart needed)
 
@@ -73,9 +78,10 @@ docker exec -it visionserve visionserve pull clip             # image embeddings
 docker exec -it visionserve visionserve pull scrfd            # face detection
 docker exec -it visionserve visionserve pull paddle-ocr       # OCR
 
-# Grounded-SAM (text → boxes → masks): pull both dependencies first
+# Grounded-SAM (text → boxes → masks): pull dependencies first, then grounded-sam
 docker exec -it visionserve visionserve pull grounding-dino
 docker exec -it visionserve visionserve pull mobile-sam
+docker exec -it visionserve visionserve pull grounded-sam
 ```
 
 ### Step 3 — Call the API
@@ -94,6 +100,10 @@ curl -s -F model=grounding-dino -F image=@photo.jpg -F prompt="cat. remote." \
 # Segmentation with a box prompt
 curl -s -F model=mobile-sam -F image=@photo.jpg -F box="100,80,440,300" \
   http://localhost:11435/api/predict | python3 -m json.tool
+
+# Segmentation — no prompt → Automatic Mask Generator (segment everything, ~256 masks)
+curl -s -F model=mobile-sam -F image=@photo.jpg \
+  http://localhost:11435/api/predict | python3 -m json.tool
 ```
 
 ---
@@ -104,14 +114,14 @@ curl -s -F model=mobile-sam -F image=@photo.jpg -F box="100,80,440,300" \
 
 ```bash
 docker run --rm --gpus all \
-  -v visionserve:/root/.visionserve \
+  -v visionserve:/root/.models \
   -v "$PWD/photo.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
   run rf-detr /img.jpg
 
 # With prompts
 docker run --rm --gpus all \
-  -v visionserve:/root/.visionserve \
+  -v visionserve:/root/.models \
   -v "$PWD/photo.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
   run grounded-sam /img.jpg --prompt "person. car."
@@ -121,12 +131,35 @@ docker run --rm --gpus all \
 
 ## GPU image details (x86-64)
 
-The GPU image (`latest` / `v0.1.2-gpu`) bundles **CUDA 12.4 + cuDNN 9**.
-TensorRT is **intentionally excluded** — it caused hard crashes on systems where
-`libnvinfer.so` was absent or a different version. ORT uses the **CUDA EP** directly,
-which is still 3–5× faster than CPU.
+The GPU image (`latest` / `v0.1.3-gpu`) bundles **CUDA 12.4 + cuDNN 9** and includes
+`libonnxruntime_providers_tensorrt.so`. TensorRT EP is used **automatically** when
+`libnvinfer.so.10` is found on the host; otherwise VisionServe silently falls back to
+CUDA EP — no crash.
 
-For TensorRT acceleration on Jetson, use the `v0.1.2-arm` image instead.
+**Why TRT matters:** GroundingDINO and MobileSAM use custom attention ops that ORT's
+CUDA EP falls back to CPU for. Without TRT they run at CPU speed (~6 s GDINO, ~1.7 s SAM).
+With TRT: ~70 ms GDINO, ~160 ms SAM.
+
+**Check TRT status:**
+```bash
+docker exec visionserve visionserve version
+# TensorRT: available (/usr/lib/x86_64-linux-gnu/libnvinfer.so.10)
+# — or —
+# TensorRT: not found — install for 10-50× faster GPU inference
+```
+
+**To enable TRT:** install TensorRT 10.x on the host and mount the lib:
+```bash
+# Option A — install TRT on the host (Ubuntu/Debian)
+sudo apt-get install tensorrt   # or download from https://developer.nvidia.com/tensorrt
+
+# Option B — mount an existing TRT lib into the container
+docker run ... -v /usr/lib/x86_64-linux-gnu/libnvinfer.so.10:/usr/lib/x86_64-linux-gnu/libnvinfer.so.10:ro ...
+```
+
+**Prerequisites on the host (CUDA EP, no TRT):**
+- NVIDIA driver ≥ 550
+- [`nvidia-container-toolkit`](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/)
 
 **Prerequisites on the host:**
 - NVIDIA driver ≥ 550
@@ -151,7 +184,7 @@ make push-docker-arm
 
 ```bash
 docker run -d \
-  -v visionserve:/root/.visionserve \
+  -v visionserve:/root/.models \
   --runtime nvidia \
   -p 11435:11435 \
   --name visionserve \

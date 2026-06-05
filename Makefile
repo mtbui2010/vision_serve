@@ -26,12 +26,20 @@ GPU    ?= 1
 # Python interpreter used to build the client package for PyPI.
 PYTHON ?= python3
 
+# Conda env that provides the LaTeX engine (tectonic) for `make pdf`. tectonic is a
+# self-contained engine that fetches only the packages the paper needs and caches
+# them — no container, no full TeX Live. Create it once with:
+#   conda create -n texpdf -c conda-forge tectonic
+CONDA  ?= conda
+TEXENV ?= texpdf
+
 # The runtime needs libonnxruntime.so. If the user has not exported ORT_DYLIB_PATH, auto-detect:
 # skip node_modules (avoids other-arch builds), prefer a full ORT build (onnxruntime/capi).
 ORT_DYLIB_PATH ?= $(shell find $(HOME) /usr/local/lib /usr/lib -name 'libonnxruntime.so*' 2>/dev/null | grep -v node_modules | grep -E 'onnxruntime/capi.*\.so\.[0-9]' | head -1)
 
 .PHONY: all build install run serve list ps rm pull demo terminate test fmt vet tidy lint clean \
-        build-linux-arm64 docker docker-edge pypi help
+        build-linux-arm64 docker docker-edge pypi help pdf paper-clean \
+        push-docker push-docker-arm push-docker-next-version
 
 all: build ## Default target: build
 
@@ -103,6 +111,22 @@ tidy: ## go mod tidy
 lint: vet ## Alias for vet (also runs golangci-lint if installed)
 	@command -v golangci-lint >/dev/null 2>&1 && golangci-lint run || echo "golangci-lint not installed — ran go vet only"
 
+## --- Paper (LaTeX -> PDF) ---
+# Builds paper/main.pdf inside the `$(TEXENV)` conda env (tectonic, no container).
+# Create the env once with:
+#   conda create -n $(TEXENV) -c conda-forge tectonic
+
+pdf: ## Build the paper PDF (paper/main.pdf) inside the texpdf conda env [TEXENV=texpdf]
+	@command -v $(CONDA) >/dev/null 2>&1 || { echo "ERROR: '$(CONDA)' not found — install conda or set CONDA=…" >&2; exit 1; }
+	@$(CONDA) env list | awk '{print $$1}' | grep -qx "$(TEXENV)" || { \
+		echo "ERROR: conda env '$(TEXENV)' not found. Create it once with:" >&2; \
+		echo "  conda create -n $(TEXENV) -c conda-forge tectonic" >&2; exit 1; }
+	$(CONDA) run -n $(TEXENV) --no-capture-output $(MAKE) -C paper pdf
+	@echo "→ paper/main.pdf"
+
+paper-clean: ## Remove paper LaTeX aux files (keeps main.pdf)
+	$(MAKE) -C paper clean
+
 ## --- Cross build / Docker ---
 
 build-linux-arm64: ## Build for Jetson/arm64
@@ -134,7 +158,7 @@ docker-edge: ## Build the edge image (arm64, CPU only) — alias for docker-arm
 DOCKER_HUB_USER ?= mtbui2010
 # PUSH_VERSION is the tag of the already-built local image (e.g. v0.1.2).
 # Override at the command line if needed: make push-docker PUSH_VERSION=v0.2.0
-PUSH_VERSION    ?= v0.1.2
+PUSH_VERSION    ?= v0.1.4
 
 push-docker: ## Tag and push CPU + GPU images to Docker Hub (DOCKER_HUB_USER=mtbui2010)
 	@echo "=== Tagging images for Docker Hub ($(DOCKER_HUB_USER)) ==="
@@ -152,6 +176,42 @@ push-docker: ## Tag and push CPU + GPU images to Docker Hub (DOCKER_HUB_USER=mtb
 	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-cpu"
 	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-gpu"
 	@echo "  $(DOCKER_HUB_USER)/visionserve:latest"
+
+push-docker-next-version: ## Auto-detect latest Docker Hub tag, bump patch, build CPU+GPU, push all
+	@set -e; \
+	echo "=== Querying Docker Hub for latest version ==="; \
+	LATEST=$$(curl -sf "https://hub.docker.com/v2/repositories/$(DOCKER_HUB_USER)/visionserve/tags/?page_size=100" \
+	    | python3 -c "import sys,json,re; \
+	      tags=[t['name'] for t in json.load(sys.stdin).get('results',[]) \
+	            if re.match(r'^v[0-9]+\.[0-9]+\.[0-9]+$$',t['name'])]; \
+	      tags.sort(key=lambda x:[int(n) for n in x[1:].split('.')]); \
+	      print(tags[-1] if tags else 'v0.1.0')" 2>/dev/null || echo ""); \
+	if [ -z "$$LATEST" ]; then \
+	    echo "  WARNING: Docker Hub query failed — falling back to PUSH_VERSION=$(PUSH_VERSION)"; \
+	    LATEST=$(PUSH_VERSION); \
+	fi; \
+	NEXT=$$(echo "$$LATEST" | python3 -c "import sys; \
+	    v=sys.stdin.read().strip().lstrip('v').split('.'); \
+	    v[2]=str(int(v[2])+1); print('v'+'.'.join(v))"); \
+	VER=$$(echo "$$NEXT" | sed 's/^v//'); \
+	echo "  Latest: $$LATEST  →  Next: $$NEXT"; \
+	echo "=== Updating version in source ==="; \
+	sed -i "s|^PUSH_VERSION.*|PUSH_VERSION    ?= $$NEXT|" Makefile; \
+	sed -i "s|Version = \"[^\"]*\"|Version = \"$$VER-dev\"|" internal/cli/root.go; \
+	echo "  Makefile PUSH_VERSION = $$NEXT"; \
+	echo "  internal/cli/root.go  Version = $$VER-dev"; \
+	echo "=== Building CPU image ($$NEXT) ==="; \
+	$(MAKE) docker PUSH_VERSION=$$NEXT; \
+	echo "=== Building GPU image ($$NEXT) ==="; \
+	$(MAKE) docker ORT_VARIANT=gpu PUSH_VERSION=$$NEXT; \
+	echo "=== Pushing to Docker Hub ($(DOCKER_HUB_USER)) ==="; \
+	$(MAKE) push-docker PUSH_VERSION=$$NEXT; \
+	echo ""; \
+	echo "=== Done — published $$NEXT ==="; \
+	echo "  $(DOCKER_HUB_USER)/visionserve:$$NEXT       (CPU)"; \
+	echo "  $(DOCKER_HUB_USER)/visionserve:$$NEXT-cpu"; \
+	echo "  $(DOCKER_HUB_USER)/visionserve:$$NEXT-gpu"; \
+	echo "  $(DOCKER_HUB_USER)/visionserve:latest      (GPU = latest)"
 
 push-docker-arm: ## Push ARM/Jetson image to Docker Hub
 	@echo "=== Tagging ARM image for Docker Hub ($(DOCKER_HUB_USER)) ==="

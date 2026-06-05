@@ -35,9 +35,13 @@ for (const d of det.detections) {
   console.log(d.cls, d.conf.toFixed(3), d.bbox); // bbox = [x, y, w, h] in original pixels
 }
 
-// Segmentation — MobileSAM / EfficientSAM / SAM2 with a box prompt (original-image coords)
+// Segmentation — box prompt (original-image coords)
 const seg = await client.predict("mobile-sam", "image.jpg", { box: [34, 58, 120, 240] });
 const flat = seg.masks[0]?.toMask(640, 480); // row-major Uint8Array, 1 = inside mask
+
+// Segmentation — no prompt → Automatic Mask Generator (segment everything)
+const amg = await client.predict("mobile-sam", "image.jpg");
+console.log(`found ${amg.masks.length} masks`);
 
 // Open-vocab segmentation — Grounded-SAM (text → boxes → masks)
 const gs = await client.predict("grounded-sam", "image.jpg", { prompt: "cat. remote." });
@@ -154,20 +158,23 @@ import { filterBySize } from "visionserve";
 
 const res = await client.predict("rf-detr", "image.jpg");
 
-// Absolute mode — area in pixels²
+// Absolute mode — area in pixels² (client-side filtering on received results)
 const big = filterBySize(res, { minSize: 5000 });
 const mid = filterBySize(res, { minSize: 500, maxSize: 50000 });
 
 // Relative mode — fraction of image area (0.0–1.0), supply imageWidth + imageHeight
 const rel = filterBySize(res, {
-  minSize: 0.01,     // at least 1% of image area
-  maxSize: 0.5,      // at most 50% of image area
+  minSize: 0.005,    // at least 0.5% of image area
+  maxSize: 0.9,      // at most 90% of image area
   imageWidth: 1280,
   imageHeight: 720,
 });
 
 // Via Client method:
 const filtered = client.filterBySize(res, { minSize: 500 });
+// Note: pass min_size/max_size to predict() for server-side filtering (% of image area)
+const serverFiltered = await client.predict("rf-detr", "image.jpg",
+  { minSize: 0.5, maxSize: 80 });   // 0.5%–80% of image area
 ```
 
 ## Visualization

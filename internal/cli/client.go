@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"text/tabwriter"
 
 	"visionserve/internal/catalog"
@@ -113,12 +115,32 @@ func runPull(args []string) error {
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", e.Name, e.Task, e.License, src)
 		}
 		tw.Flush()
-		return fmt.Errorf("usage: visionserve pull <model> [--models DIR] [--force]")
+		return fmt.Errorf("usage: visionserve pull <model|folder> [--models DIR] [--force]")
 	}
 
-	return catalog.Pull(rest[0], catalog.PullOptions{
+	target := rest[0]
+	opts := catalog.PullOptions{
 		ModelsDir: modelsDir(*modelsFlag),
 		Force:     *force,
 		Out:       os.Stderr,
-	})
+	}
+	// Local-folder install (like `ollama create`): if the argument looks like or
+	// resolves to a directory, validate + copy it into the registry instead of
+	// downloading a curated model from HuggingFace.
+	if isLocalModelArg(target) {
+		return catalog.InstallLocal(target, opts)
+	}
+	return catalog.Pull(target, opts)
+}
+
+// isLocalModelArg reports whether a `pull` argument should be treated as a path
+// to a local model folder rather than a catalog model name. An argument that
+// contains a path separator (or starts with "." / is absolute) is always treated
+// as a path; a bare name is treated as local only if a matching directory exists.
+func isLocalModelArg(arg string) bool {
+	if strings.ContainsRune(arg, filepath.Separator) || strings.HasPrefix(arg, ".") || filepath.IsAbs(arg) {
+		return true
+	}
+	info, err := os.Stat(arg)
+	return err == nil && info.IsDir()
 }

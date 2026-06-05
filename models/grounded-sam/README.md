@@ -26,13 +26,17 @@ files:
   decoder: ../mobile-sam/mobile_sam_decoder_single.onnx
 ```
 
-So just download the weights for those two models:
+Pull the dependencies first, then grounded-sam:
 
-- `models/grounding-dino/` — see its `README.md` (includes `model.onnx` and `vocab.txt`;
-  the BERT tokenizer reads `vocab.txt` from that directory).
-- `models/mobile-sam/` — see its `README.md`.
+```bash
+visionserve pull grounding-dino
+visionserve pull mobile-sam
+visionserve pull grounded-sam   # creates the manifest — no extra download
+```
 
-Once both sets of weights are present, Grounded-SAM works with no extra download.
+`visionserve pull grounded-sam` checks that both dependencies are present before writing
+the manifest, so the order above must be followed. The `grounded-sam` entry creates only
+a `manifest.yaml` (no ONNX download) that points to the sibling model files.
 
 ## Run
 

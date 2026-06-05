@@ -53,6 +53,10 @@ func (m *mobileSAM) Task() models.Task { return models.TaskSegmentation }
 // Roles are the ONNX sessions lifecycle must load (keys into the manifest 'files' map).
 func (m *mobileSAM) Roles() []string { return []string{roleEncoder, roleDecoder} }
 
+// PoolSizes requests a pool of 4 decoder sessions so AMG's 256 goroutines have
+// 4 concurrent inference slots instead of serializing on a single mutex.
+func (m *mobileSAM) PoolSizes() map[string]int { return map[string]int{roleDecoder: 4} }
+
 // Infer runs the encoder once, then either:
 //   - Automatic Mask Generator (16×16 grid) when no prompt is provided, or
 //   - one decoder run per prompt set (box / point).

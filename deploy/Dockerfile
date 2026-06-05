@@ -10,14 +10,14 @@
 # Usage:
 #   # CPU image (default):
 #   make docker
-#   docker run --rm -p 11435:11435 -v "$PWD/models:/models" visionserve:latest
+#   docker run --rm -p 11435:11435 visionserve:latest
 #
 #   # GPU image (TensorRT EP):
 #   make docker ORT_VARIANT=gpu
-#   docker run --rm --gpus all -p 11435:11435 -v "$PWD/models:/models" visionserve:gpu
+#   docker run --rm --gpus all -p 11435:11435 visionserve:gpu
 #
-# Model weights are NOT baked in — mount them via the /models VOLUME.
-# See deploy/README.md.
+# Model weights are NOT baked in — pull them at runtime into /root/.models (declared
+# as a VOLUME, so they persist with no -v needed). See deploy/README.md.
 
 # ── pinned versions ──────────────────────────────────────────────────────────
 # ORT 1.20.1: compatible with TensorRT 10.x (libnvinfer.so.10) and CUDA 12.
@@ -107,12 +107,11 @@ FROM runtime-${ORT_VARIANT} AS final
 
 # ORT shared libraries.
 # cpu: libonnxruntime.so only.
-# gpu: libonnxruntime.so + CUDA providers + shared provider.
-#      libonnxruntime_providers_tensorrt.so is removed: it hard-crashes on
-#      systems where libnvinfer.so is absent or version-mismatched. ORT will
-#      silently skip TRT and fall through to the CUDA EP.
+# gpu: libonnxruntime.so + CUDA + TRT providers + shared provider.
+#      libonnxruntime_providers_tensorrt.so is kept in the image; VisionServe
+#      checks for libnvinfer.so.10 at runtime before enabling TRT EP, so it
+#      never tries to load TRT if the host lacks libnvinfer — no hard crash.
 COPY --from=ort-selected /opt/ort/lib/libonnxruntime*.so* /usr/local/lib/
-RUN rm -f /usr/local/lib/libonnxruntime_providers_tensorrt.so*
 
 # Server binary.
 COPY --from=build /out/visionserve /usr/local/bin/visionserve
@@ -124,12 +123,17 @@ ENV LD_LIBRARY_PATH=/usr/local/lib
 
 RUN ldconfig
 
-# Model weights are stored in ~/.visionserve/models (/root/.visionserve/models when
-# running as root). Mount a named volume here to persist models across container restarts:
-#   docker run -v visionserve:/root/.visionserve ...
-VOLUME ["/root/.visionserve"]
+# Model registry lives at /root/.models inside the image. VISIONSERVE_MODELS makes
+# this the default for every subcommand (serve/run/list/pull), so no --models flag
+# is ever needed and `docker run` stays minimal (no -v required):
+#   docker run -d --gpus all -p 11435:11435 --name visionserve mtbui2010/visionserve:latest
+ENV VISIONSERVE_MODELS=/root/.models
+# Declared as a VOLUME so pulled models persist across restarts via an anonymous
+# volume even when the run command passes no -v. To keep a NAMED volume instead:
+#   docker run -v visionserve:/root/.models ...
+VOLUME ["/root/.models"]
 
 EXPOSE 11435
 ENTRYPOINT ["visionserve"]
-# No --models flag needed: the binary defaults to ~/.visionserve/models.
+# No --models flag needed: VISIONSERVE_MODELS above points the binary at /root/.models.
 CMD ["serve", "--addr", ":11435"]

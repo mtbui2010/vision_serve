@@ -66,7 +66,7 @@ print([m.name for m in c.ps()])    # currently loaded models
 | `ps()` | `GET /api/models` (filtered) | loaded `list[ModelInfo]` |
 | `predict(model, image, *, prompt=None, box=None, point=None, min_size=0, max_size=0)` | `POST /api/predict` | `Result` |
 
-`min_size` / `max_size` pass bbox-area px² thresholds to the server — objects outside the range are removed before the response is sent. Pass `0` for no limit.
+`min_size` / `max_size` filter by bounding-box area as a **percentage of the image area** (0–100; `0` = no limit). Example: `min_size=0.5` keeps only objects covering at least 0.5% of the image. The conversion to absolute pixels is done server-side using the uploaded image dimensions.
 
 `predict()` `image` accepts:
 - `str` / `os.PathLike` — a path to an image file,
@@ -102,10 +102,16 @@ uncompressed RLE into a boolean `(height, width)` array (requires numpy). It is 
 exact inverse of the server's encoder.
 
 ```python
+# Box-prompted segmentation
 res = c.predict("mobile-sam", "img.jpg", box=[50, 40, 120, 90])
 from PIL import Image
 w, h = Image.open("img.jpg").size
 mask = res.masks[0].to_ndarray(width=w, height=h)   # bool (h, w)
+
+# No-prompt → Automatic Mask Generator (segment everything, ~256 masks)
+res = c.predict("mobile-sam", "img.jpg")
+for m in res.masks:
+    print(m.bbox, round(m.conf, 3))
 ```
 
 For depth maps, reshape `depth_map` using `depth_width` / `depth_height`:
@@ -172,7 +178,9 @@ the box falls outside the depth map. `mode` is `"median"` (default) or `"mean"`.
 
 ### Size filtering — `Result.filter_by_size()`
 
-Remove detections/masks whose bounding-box area is outside a range.
+Remove detections/masks whose bounding-box area is outside a range (client-side, on
+already-received results). The server's `min_size` / `max_size` fields do the same
+filtering server-side (as % of image area) before the response is sent.
 
 ```python
 # Absolute mode — area in pixels²
@@ -182,8 +190,8 @@ mid = res.filter_by_size(min_size=500, max_size=50000)
 
 # Relative mode — fraction of image area (0.0–1.0), requires image dimensions
 res_rel = res.filter_by_size(
-    min_size=0.01,   # at least 1% of image area
-    max_size=0.5,    # at most 50% of image area
+    min_size=0.005,  # at least 0.5% of image area
+    max_size=0.9,    # at most 90% of image area
     image_width=1280, image_height=720,
 )
 ```

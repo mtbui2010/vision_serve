@@ -17,7 +17,7 @@ func TestValidateRejectsAGPL(t *testing.T) {
 
 // An invalid task -> rejected.
 func TestValidateRejectsBadTask(t *testing.T) {
-	m := &Manifest{Name: "x", License: "Apache-2.0", Task: "classification", ModelFile: "x.onnx"}
+	m := &Manifest{Name: "x", License: "Apache-2.0", Task: "not_a_real_task", ModelFile: "x.onnx"}
 	m.Input.Width, m.Input.Height = 1, 1
 	if err := m.validate(); err == nil || !strings.Contains(err.Error(), "task") {
 		t.Fatalf("expected an invalid-task error, got: %v", err)

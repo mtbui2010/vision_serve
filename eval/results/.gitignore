@@ -1,0 +1,6 @@
+# Measured outputs land here. DO NOT commit numbers until they have actually been measured
+# on the target hardware (the paper is being revised precisely because of unmeasured figures).
+*.csv
+*.json
+*.meta.json
+!.gitignore

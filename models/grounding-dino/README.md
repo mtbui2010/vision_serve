@@ -91,14 +91,20 @@ Thresholds (adjustable in `manifest.yaml`):
 
 ## Performance
 
-Measured on NVIDIA RTX A6000 via VisionServe HTTP server (warm):
+Measured on NVIDIA RTX A6000 via VisionServe HTTP server (warm, `duration_ms`):
 
 | Device | p50 latency | Notes |
 |--------|-------------|-------|
-| GPU (CUDA EP) | ~325–340 ms | 719 MB ONNX, 4.4 GB VRAM |
-| CPU | ~2 500 ms | standard `onnxruntime` |
+| GPU + TensorRT EP (`gpu:0+trt`) | **~70 ms** | requires `libnvinfer.so.10` |
+| GPU CUDA EP only (`gpu:0`) | ~6 000 ms | same as CPU — deformable attention ops fall back to CPU |
+| CPU | ~6 000 ms | standard ORT |
 
-Use GPU for practical throughput (~2.9 RPS). TensorRT EP would give a further 2–4× speedup.
+> **Why CUDA EP ≈ CPU:** GroundingDINO uses deformable multi-scale attention and
+> BERT-style cross-attention ops that have no CUDA kernels in ORT's standard build.
+> TRT compiles the full graph to GPU, eliminating the fallback entirely.
+
+VisionServe auto-detects TRT at startup. Check status with `visionserve version` — the
+response also includes a `hint` field when TRT is absent.
 
 ## License
 

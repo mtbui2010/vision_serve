@@ -1,0 +1,25 @@
+# VisionServe evaluation harness — Python deps.
+# Pin to the exact versions used on the measurement host and record them in each *.meta.json.
+# ONNX Runtime MUST match the libonnxruntime.so that VisionServe links (ORT_DYLIB_PATH).
+
+onnxruntime-gpu==1.20.1   # use onnxruntime==1.20.1 on CPU-only hosts
+
+# Baselines (eval/baselines)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+gunicorn>=21
+python-multipart>=0.0.9
+# torch / torchvision only needed for fastapi_torch.py and accuracy/parity.py
+torch>=2.2
+torchvision>=0.17
+# Triton / TorchServe drivers (optional, only if those baselines are used)
+tritonclient[http]>=2.40
+
+# Load generation parsing
+hdrhistogram>=0.10
+numpy>=1.24
+
+# Accuracy
+pycocotools>=2.0.7
+pillow>=10
+requests>=2.31

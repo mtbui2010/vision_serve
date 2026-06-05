@@ -180,6 +180,12 @@ func appendProviders(opts *ort.SessionOptions, providers []Provider) Provider {
 	for _, p := range providers {
 		switch p {
 		case ProviderTensorRT:
+			// Guard: skip TRT entirely if libnvinfer.so.10 is absent.
+			// Without this check, loading libonnxruntime_providers_tensorrt.so
+			// causes a hard C abort (dlopen → libnvinfer missing → SIGABRT).
+			if !TRTAvailable() {
+				continue
+			}
 			if trt, err := ort.NewTensorRTProviderOptions(); err == nil {
 				_ = opts.AppendExecutionProviderTensorRT(trt)
 				trt.Destroy()

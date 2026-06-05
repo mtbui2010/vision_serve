@@ -124,6 +124,61 @@ confirms that the dual-encoder (Swin-T image + BERT text) computation accounts f
 nearly the entire latency.  At 1.7~RPS it is unsuitable for high-frame-rate video,
 but practical for query-driven image analysis.
 
+\paragraph{Tensor input: isolating the decode deficit.}
+The end-to-end results above charge VisionServe for server-side image decode and
+preprocessing on every request.  To isolate the runtime from that cost, we added a
+\texttt{POST /api/infer\_tensor} endpoint that accepts a raw NCHW \texttt{float32}
+tensor and skips JPEG/PNG decode and preprocessing entirely, then compared against
+NVIDIA Triton serving the same MobileNetV3-Small ONNX.  Table~\ref{tab:tensorin}
+reports closed-loop throughput and latency on the A6000.  With a pre-decoded tensor,
+VisionServe's single-request latency drops to a p50 of 8.1~ms (min 3.4~ms) at 118~rps,
+versus 12.7~rps / 57~ms for the JPEG-in path, and its concurrency-64 peak of 563~rps
+essentially matches a \emph{default-configuration} Triton (HTTP front end, a single
+model instance, no dynamic batching), which peaks at $\sim$549~rps with a comparable
+2.9~ms single-request floor.  In the no-decode regime the two runtimes are therefore
+within measurement noise (peak 563 vs.\ 549~rps; min 3.4 vs.\ 2.9~ms), indicating that
+VisionServe's earlier low-load deficit was attributable to server-side image decode
+rather than the ONNX serving path itself.  We stress that the Triton figure is its
+out-of-the-box default; enabling dynamic batching or multiple instances would raise
+Triton's ceiling, and we do not claim parity against a tuned Triton deployment.
+
+\paragraph{The decode-parallelization twist.}
+Counter-intuitively, VisionServe's \emph{JPEG-in} peak goodput (695~rps, Section~\ref{sec:eval:latency})
+exceeds its \emph{tensor-in} peak (563~rps).  Pure-Go JPEG decode is CPU-heavy but
+embarrassingly parallel across goroutines and cores, so under concurrency the decode
+work overlaps with GPU inference and the server saturates more work overall.  The
+tensor-in path removes that parallel CPU work and becomes GPU-mutex- and HTTP-bound,
+exactly like Triton---which is precisely why its ceiling converges with Triton's rather
+than exceeding it.  On the client side, the choice of wire format dominates round-trip
+cost from an \texttt{np.ndarray}: a raw tensor submission measures $\sim$8~ms end to end,
+versus $\sim$64~ms for a JPEG round-trip and $\sim$136~ms for PNG.
+
+\begin{table}[t]
+  \centering
+  \small
+  \caption{%
+    Tensor-input (\texttt{/api/infer\_tensor}, raw NCHW \texttt{float32}, no
+    server-side decode) vs.\ image-input and vs.\ a \emph{default-configuration}
+    NVIDIA Triton, for MobileNetV3-Small on an RTX A6000.  Closed-loop;
+    $C$ denotes client concurrency.  Triton default = HTTP, one model instance,
+    no dynamic batching.%
+  }
+  \label{tab:tensorin}
+  \begin{tabular}{lrrr}
+    \toprule
+    \textbf{Configuration} & \textbf{$C{=}1$ rps} & \textbf{$C{=}1$ min (ms)}
+      & \textbf{peak rps} \\
+    \midrule
+    VisionServe tensor-in   & 118  & 3.4  & 563 \\
+    VisionServe JPEG-in     & 12.7 & 25.9 & 695 \\
+    Triton (default config) & 214  & 2.9  & 549 \\
+    \bottomrule
+  \end{tabular}
+  % All cells measured (closed-loop, HdrHistogram). VS JPEG-in peak (695) is the
+  % concurrency-64 figure also reported in Table~\ref{tab:benchmark}. Triton peak 549
+  % is at C=16 (declines to 524 at C=64 under default config).
+\end{table}
+
 \subsection{Cold-Start Analysis}
 \label{sec:eval:coldstart}
 
@@ -209,13 +264,22 @@ not measure Python baselines directly (doing so fairly requires matching ONNX ex
 execution providers, and input pipelines), the architectural differences introduce
 predictable, structural overheads.
 
-\paragraph{GIL contention.}
+\paragraph{Concurrency model.}
 CPython's Global Interpreter Lock (GIL) serialises Python bytecode execution across
 threads.  Under concurrent HTTP requests, a Python serving process must either run
 multiple OS processes (increasing memory footprint proportionally) or accept GIL
 contention that limits parallelism.  VisionServe's Go HTTP server uses goroutines and
-OS threads; ONNX Runtime sessions are called concurrently with no shared interpreter
-lock, allowing true parallel inference on multi-core hosts.
+OS threads and avoids a process-level interpreter lock, but we are careful not to
+overstate this: a single ONNX Runtime session in VisionServe is itself mutex-serialised
+(\texttt{engine.Session.Run} holds a per-session lock), so concurrent requests routed to
+the same session run one at a time, just as a GIL would serialise them.  Real
+intra-process concurrency comes from the per-role \emph{session pool}
+(\texttt{engine.SessionPool}): when a role is configured with a pool size $>1$, the
+\texttt{lifecycle.Manager} holds several identical sessions and dispatches each request
+to the first free one, so up to $N$ inferences proceed in parallel with no shared lock.
+The pool size is configurable per role and defaults to~1; we therefore present this as a
+configurable concurrency mechanism rather than unbounded parallel inference, and we leave
+a concurrency sweep over pool size to future work.
 
 \paragraph{Interpreter overhead at batch size 1.}
 For lightweight models such as MobileNetV3 (ONNX inference in 18~ms), Python-layer
