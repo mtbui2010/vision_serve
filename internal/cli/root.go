@@ -11,13 +11,13 @@ import (
 )
 
 // Version is the binary version (overridden at build time via -ldflags).
-var Version = "0.1.4-dev"
+var Version = "0.1.5-dev"
 
 const usage = `visionserve — Ollama for Computer Vision (local-first, edge-GPU)
 
 Usage:
   visionserve serve                 start the HTTP server (port 11435)
-  visionserve run <model> <image>   load model + predict + print JSON to stdout
+  visionserve run <model> <image>   load model + predict + print JSON to stdout (alias: predict)
   visionserve list                  list models in the registry
   visionserve ps                    show models loaded in memory (requires a running server)
   visionserve rm <model>            unload a model from memory (requires a running server)
@@ -28,10 +28,16 @@ Usage:
 Common flags:
   --models <dir>   model registry directory (default ~/.visionserve/models, or $VISIONSERVE_MODELS)
   --addr <host:port>  server address (default :11435)
-  --out <file>     (run) save the image with drawn bboxes/masks to a .png/.jpg file
+  --save           (run) save an annotated image, auto-named <stem>.go.<model>.<task>.png
+  --save-as <file> (run) save the annotated image to this exact path (.png/.jpg; alias: --out)
   --prompt <text>  (run) text prompt for open-vocab models, e.g. "cat. remote."
   --box <x,y,w,h>  (run) box prompt for SAM (multiple separated by ';')
   --point <x,y[,l]> (run) point prompt for SAM (label 1=fg 0=bg)
+  --min-size <pct> (run) drop objects whose bbox area is below pct% of the image
+  --max-size <pct> (run) drop objects whose bbox area is above pct% of the image
+
+run prints the result JSON to stdout and a one-line summary (model/task/device,
+client + server timings) to stderr. Timings exclude image draw/save.
 `
 
 // Execute is the entrypoint for the CLI. args is the full os.Args.
@@ -43,7 +49,7 @@ func Execute(args []string) error {
 	switch args[1] {
 	case "serve":
 		return runServe(args[2:])
-	case "run":
+	case "run", "predict":
 		return runRun(args[2:])
 	case "list", "ls":
 		return runList(args[2:])

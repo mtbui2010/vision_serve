@@ -36,6 +36,11 @@ dependencies = []
 images = ["pillow>=8.0", "numpy>=1.20"]
 dev = ["pillow>=8.0", "numpy>=1.20", "pytest>=7.0"]
 
+# `visionserve` CLI entrypoint. The transport is stdlib-only, so the bare command
+# works without extras; `--save` (annotated image) additionally needs `[images]`.
+[project.scripts]
+visionserve = "visionserve.cli:main"
+
 [project.urls]
 Homepage = "https://github.com/mtbui2010/vision_serve"
 Repository = "https://github.com/mtbui2010/vision_serve"

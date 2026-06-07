@@ -130,12 +130,53 @@ export class Classification {
   }
 }
 
+/** A planar parallel-jaw grasp in ORIGINAL image coordinates (from a `grasp` model). */
+export class Grasp {
+  /** Grasp centre X in ORIGINAL image pixels. */
+  readonly x: number;
+  /** Grasp centre Y in ORIGINAL image pixels. */
+  readonly y: number;
+  /** In-plane gripper-closing angle in radians (jaws close along `(cos θ, sin θ)`). */
+  readonly theta: number;
+  /** Jaw opening in ORIGINAL image pixels. */
+  readonly width: number;
+  /** Analytic grasp score in `[0, 1]`. */
+  readonly quality: number;
+  /** Source object label (box mode); `""` for class-agnostic grasps. */
+  readonly cls: string;
+  /** Source detector confidence (box mode); `0` if class-agnostic. */
+  readonly conf: number;
+
+  constructor(x: number, y: number, theta: number, width: number, quality: number, cls = "", conf = 0) {
+    this.x = x;
+    this.y = y;
+    this.theta = theta;
+    this.width = width;
+    this.quality = quality;
+    this.cls = cls;
+    this.conf = conf;
+  }
+
+  static fromJSON(d: Record<string, unknown>): Grasp {
+    return new Grasp(
+      Number(d.x ?? 0),
+      Number(d.y ?? 0),
+      Number(d.theta ?? 0),
+      Number(d.width ?? 0),
+      Number(d.quality ?? 0),
+      String(d["class"] ?? ""),
+      Number(d.conf ?? 0),
+    );
+  }
+}
+
 /** Unified prediction result returned by `POST /api/predict`. */
 export class Result {
   readonly task: Task;
   readonly model: string;
   readonly detections: Detection[];
   readonly masks: Mask[];
+  readonly grasps: Grasp[];
   readonly classifications: Classification[];
   /** Flat row-major float array for depth maps. */
   readonly depthMap: number[];
@@ -144,6 +185,8 @@ export class Result {
   /** One embedding vector per image. */
   readonly embeddings: number[][];
   readonly durationMs: number;
+  /** Execution device the server ran on, e.g. `"cpu"`, `"gpu:0"`, `"gpu:0+trt"`. */
+  readonly device: string;
 
   constructor(
     task: Task,
@@ -156,22 +199,27 @@ export class Result {
     depthHeight: number,
     embeddings: number[][],
     durationMs: number,
+    grasps: Grasp[] = [],
+    device = "",
   ) {
     this.task = task;
     this.model = model;
     this.detections = detections;
     this.masks = masks;
+    this.grasps = grasps;
     this.classifications = classifications;
     this.depthMap = depthMap;
     this.depthWidth = depthWidth;
     this.depthHeight = depthHeight;
     this.embeddings = embeddings;
     this.durationMs = durationMs;
+    this.device = device;
   }
 
   static fromJSON(d: Record<string, unknown>): Result {
     const dets = Array.isArray(d.detections) ? d.detections : [];
     const masks = Array.isArray(d.masks) ? d.masks : [];
+    const grasps = Array.isArray(d.grasps) ? d.grasps : [];
     const clsArr = Array.isArray(d.classifications) ? d.classifications : [];
     const depthMap = Array.isArray(d.depth_map) ? (d.depth_map as unknown[]).map(Number) : [];
     const embeddings = Array.isArray(d.embeddings)
@@ -190,6 +238,8 @@ export class Result {
       Number(d.depth_height ?? 0),
       embeddings,
       Number(d.duration_ms ?? 0),
+      grasps.map((x) => Grasp.fromJSON(x as Record<string, unknown>)),
+      String(d.device ?? ""),
     );
   }
 
@@ -206,6 +256,8 @@ export class Result {
       this.depthHeight,
       this.embeddings,
       this.durationMs,
+      this.grasps,
+      this.device,
     );
   }
 
@@ -224,6 +276,8 @@ export class Result {
       this.depthHeight,
       this.embeddings,
       this.durationMs,
+      this.grasps,
+      this.device,
     );
   }
 
@@ -240,6 +294,8 @@ export class Result {
       this.depthHeight,
       this.embeddings,
       this.durationMs,
+      this.grasps,
+      this.device,
     );
   }
 
@@ -286,6 +342,8 @@ export class Result {
       this.depthHeight,
       this.embeddings,
       this.durationMs,
+      this.grasps,
+      this.device,
     );
   }
 
@@ -317,6 +375,8 @@ export class Result {
         this.depthHeight,
         this.embeddings,
         this.durationMs,
+        this.grasps,
+        this.device,
       );
     }
     return result;

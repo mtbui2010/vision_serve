@@ -22,20 +22,20 @@ import (
 type Session struct {
 	name        string
 	task        api.Task
-	device      string        // "gpu:0" or "cpu" — set from the active EP on load
+	device      string // "gpu:0" or "cpu" — set from the active EP on load
 	idleTimeout time.Duration
 
 	model  models.Model    // simple mode
-	engine *engine.Session // simple mode
+	engine engine.Runnable // simple mode (a single session, or a pool when VS_POOL_OVERRIDE>1)
 
-	pipeline models.PipelineModel         // pipeline mode
-	engines  map[string]engine.Runnable  // pipeline mode (role → session or pool)
+	pipeline models.PipelineModel       // pipeline mode
+	engines  map[string]engine.Runnable // pipeline mode (role → session or pool)
 
 	mu       sync.Mutex
 	lastUsed time.Time
 }
 
-func newSimpleSession(name string, task api.Task, m models.Model, eng *engine.Session, idle time.Duration, now time.Time) *Session {
+func newSimpleSession(name string, task api.Task, m models.Model, eng engine.Runnable, idle time.Duration, now time.Time) *Session {
 	return &Session{
 		name:        name,
 		task:        task,

@@ -23,11 +23,18 @@ several known limitations remain.
           execution provider. AMD GPU users must therefore fall back to CPU inference,
           foregoing GPU acceleration on that platform.
 
-    \item \textbf{Segmentation requires an explicit prompt.}
-          MobileSAM~\cite{zhang2023mobilesam}, EfficientSAM~\cite{xiong2023efficientsam},
-          and SAM2~\cite{ravi2024sam2} all require a bounding-box or point prompt to
-          produce masks. Automatic mask generation (SAM's grid-of-points mode, which
-          densely samples the image without any prior prompt) is not implemented.
+    \item \textbf{Simplified automatic mask generation.}
+          MobileSAM~\cite{zhang2023mobilesam} supports prompt-free automatic mask
+          generation (AMG), but the implementation is a single-resolution approximation
+          of SAM's full pipeline: it tiles the image with a fixed $16\times16$ grid of
+          foreground point prompts (256 decoder calls sharing one encoder pass), keeps
+          masks whose predicted IoU exceeds a fixed threshold ($0.85$) and whose area
+          falls within heuristic bounds ($10^{-4}$ to $0.95$ of the image), then
+          deduplicates by greedy pixel-IoU NMS ($0.70$). It does \emph{not} implement
+          SAM's multi-crop / multi-scale AMG, stability-score filtering, or box-NMS
+          across crops, so dense small-object recall is lower than the reference
+          generator. EfficientSAM~\cite{xiong2023efficientsam} and SAM2~\cite{ravi2024sam2}
+          remain prompt-only.
 
     \item \textbf{Single-image batching only.}
           The server currently processes one image per request (\texttt{batch\_size=1}).
@@ -40,5 +47,43 @@ several known limitations remain.
           provider is listed in the EP allowlist, but end-to-end operation on Windows
           has not been validated. Windows-specific path handling and ORT library loading
           may require additional work.
+
+    \item \textbf{Low-load latency regression.}
+          At concurrency~1 VisionServe is slower per request than the GIL-bound
+          FastAPI+ONNX~Runtime baseline and far slower than Triton: for
+          MobileNetV3-Small its p50/min latency is $57.2$/$25.9$\,ms versus FastAPI's
+          $16.1$/$10.9$\,ms and Triton's $4.0$/$2.9$\,ms. The cost is not the GPU
+          (ORT~Run~$<$1\,ms) but pure-Go JPEG decode ($\sim$19.2\,ms): Pillow uses
+          SIMD libjpeg-turbo and Triton receives a pre-decoded tensor. A build-tagged
+          cgo libjpeg-turbo would close the gap but breaks the single-static-binary
+          property, so we keep pure-Go decode as a deliberate trade-off and report the
+          $\Delta$.
+
+    \item \textbf{Concurrency advantage scoped to GIL-bound CPython.}
+          The throughput crossover (C2) is measured against the deployed-default
+          CPython interpreter with the global interpreter lock. Free-threaded (no-GIL)
+          Python~3.13 narrows this gap, so the crossover is scoped to GIL-bound CPython
+          and \emph{not} claimed against free-threaded Python.
+
+    \item \textbf{License enforcement trusts the declared license.}
+          The load-time guarantee (C1) is license-\emph{policy} enforcement, hardened by
+          content hashing (sha256) and a verified-source allowlist; it does \emph{not}
+          semantically verify that a model's declared license matches its true legal
+          status. By binding declared license $\leftrightarrow$ weight bytes
+          $\leftrightarrow$ audited source, it mitigates relicensing and
+          permissive-washing, but a deliberately mislabeled upstream license is out of
+          scope of the threat model.
+
+    \item \textbf{\texttt{duration\_ms} not directly comparable to the baseline.}
+          VisionServe's \texttt{duration\_ms} covers preprocess~+~ORT~+~postprocess,
+          whereas the FastAPI baseline's server timer covers ORT only. Raw
+          \texttt{duration\_ms} is therefore not like-for-like; end-to-end client latency
+          is the comparable metric.
+
+    \item \textbf{Triton comparison is default-config.}
+          The Triton parity result is against an out-of-the-box Triton (HTTP, single
+          model instance, no dynamic batching). A tuned Triton (gRPC + shared memory +
+          dynamic batching) would exceed it; no parity is claimed against a tuned
+          Triton.
 
 \end{itemize}

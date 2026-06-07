@@ -135,6 +135,101 @@ deliberate: because VisionServe is itself Apache-2.0 and targets edge deployment
 commercial and closed-source products, its permissive character must be preserved by
 every model it ships.
 
+\paragraph{Threat model.}
+We scope the license gate (contribution~C1) explicitly, since its value depends on
+stating both what it defends against and what it cannot.
+\emph{In scope.}  The gate is designed to prevent four failure modes at the moment the
+runtime loads model weights:
+(i)~accidentally loading a copyleft (AGPL) model that would virally relicense an otherwise
+permissive deployment;
+(ii)~``permissive-washing'' or license drift, where a model's restrictive license is
+silently dropped or relabelled as permissive on the way into the deployment;
+(iii)~tampered or swapped weight bytes that no longer correspond to the audited model
+(a content mismatch); and
+(iv)~weights pulled from an unvetted origin.
+\emph{Mechanism.}  Enforcement is entirely offline, in a single binary, and consists of
+three bound checks applied at load time.
+First, the declared \texttt{license} field must be in the permissive allowlist
+(\texttt{Apache-2.0}/\texttt{MIT}/\texttt{BSD}); the registry parser
+(\texttt{Manifest.validate()}) refuses any other value before a session is created.
+Second, the SHA-256 digest of the weight bytes must equal the digest declared in the
+manifest (\texttt{Manifest.VerifyWeights()}); a mismatch refuses the load.
+Third, when a verified-source allowlist is supplied, the manifest's \texttt{source\_url}
+must fall under an audited prefix.
+Together these checks \emph{bind} a declared-permissive license to specific audited bytes
+obtained from an audited origin, closing the relabelling and wrong-origin holes without
+any network call.
+\emph{Out of scope.}  The gate \emph{trusts the declared license string}: it enforces a
+license \emph{policy}, but does not semantically verify that the declared license matches
+the model's true legal status.  A model that is deliberately mislabelled at its audited
+upstream---for example, a genuinely AGPL model relabelled \texttt{Apache-2.0} at the
+origin whose bytes and \texttt{source\_url} are internally consistent---is therefore
+\emph{not} caught: the SHA-256 and source binding mitigate \emph{substitution} (swapped
+bytes, wrong mirror), not \emph{upstream mislabelling}.  We accordingly frame~C1 as
+load-time license-\emph{policy} enforcement, hardened by content-hashing and a
+verified-source pin, and explicitly \emph{not} as a machine-checkable license guarantee
+or a license oracle.
+\emph{Why existing layers do not cover it.}  As discussed in
+Section~\ref{sec:related}, build-time software-composition-analysis scanners
+(ScanCode, FOSSology, Snyk) operate on source dependency trees and emit reports, not a
+load-time decision over weights; deploy-time admission controllers (Kyverno, OPA
+Gatekeeper, Sigstore policy-controller) verify container-image signatures at pod
+admission, i.e.\ container integrity, not a license policy over model weights; and model
+signing (OpenSSF/Sigstore) proves signer identity and byte integrity, not license policy.
+None of these enforces a license policy at the moment the runtime loads model weights,
+offline---which is precisely the gap~C1 fills.
+
+\paragraph{Adversarial demonstration.}
+To show that the gate \emph{actually refuses} bad models rather than merely documenting an
+intent to, Table~\ref{tab:gate} reports a reproducible adversarial demonstration.
+Starting from a baseline manifest (permissive license, correct SHA-256, audited source)
+that is \emph{admitted}, we apply one adversarial mutation at a time and record the gate's
+verdict.  Each mutation maps to one of the three bound checks above, and each is refused
+with the runtime's own diagnostic message.  The four cases are exercised by the test
+\texttt{TestGate\_AdversarialDemo}; the transcript is reproducible via
+\texttt{go test ./internal/registry -run TestGate\_AdversarialDemo -v}.
+
+\begin{table}[t]
+  \centering
+  \small
+  \caption{%
+    Reproducible adversarial demonstration of the load-time license gate (C1).
+    Starting from an admitted baseline, each row applies one manifest mutation and
+    records the runtime's verdict and (abbreviated) diagnostic.  Reproducible via
+    \texttt{go test ./internal/registry -run TestGate\_AdversarialDemo -v}
+    (\texttt{internal/registry/gate\_demo\_test.go}); the long digest is abbreviated
+    with \(\dots\) and the temporary weight path is shown as \texttt{<model.onnx>}.%
+  }
+  \label{tab:gate}
+  \begin{tabular}{lp{2.6cm}p{6.0cm}}
+    \toprule
+    \textbf{Condition} & \textbf{Manifest change} & \textbf{Gate outcome} \\
+    \midrule
+    Baseline &
+      permissive license \mbox{+} correct SHA-256 \mbox{+} audited source &
+      \textbf{ADMITTED}: \texttt{license=Apache-2.0}, sha256 bound to bytes, source under
+      audited prefix \\[4pt]
+
+    Relabel license &
+      \texttt{license = AGPL-3.0} &
+      \textbf{REFUSED (license)}: \texttt{license "AGPL-3.0" is not allowed --- only
+      permissive licenses accepted (Apache-2.0/MIT/BSD); AGPL is strictly forbidden} \\[4pt]
+
+    Byte-swap weights &
+      weights \(\neq\) declared SHA-256 &
+      \textbf{REFUSED (hash)}: \texttt{sha256 mismatch for <model.onnx>: manifest declares
+      aaaa\(\dots\)aaaa but file is 0b4895d0\(\dots\)29bb57 --- refusing to load (the
+      declared license is bound to the audited bytes)} \\[4pt]
+
+    Wrong origin &
+      \texttt{source\_url} outside allowlist &
+      \textbf{REFUSED (source)}: \texttt{source\_url
+      "https://random-mirror.example.com/x.onnx" is not under any audited prefix in the
+      verified-source allowlist} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
 \subsection{Manifest Specification}
 \label{sec:catalog:manifest}
 

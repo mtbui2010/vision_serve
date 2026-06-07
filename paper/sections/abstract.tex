@@ -13,7 +13,7 @@ allowlist---a gap that build-time SCA scanners, deploy-time Kubernetes admission
 and model signing structurally do not cover. We further characterize the CV serving-overhead
 crossover: on identical ONNX, the single Go binary scales to roughly $8\times$ a GIL-bound
 FastAPI+ONNX~Runtime baseline's peak goodput (695 vs.\ 85~rps for MobileNetV3-Small at
-concurrency~64), while being slower per request at low load ($\sim$78\,ms vs.\ $\sim$15\,ms at
+concurrency~64), while being slower per request at low load ($\sim$57\,ms vs.\ $\sim$16\,ms at
 concurrency~1). A latency decomposition shows the per-request cost is pure-Go JPEG decode and
 resize, not the GPU (ORT~Run $<$1\,ms; JPEG decode $\sim$19\,ms); when clients submit a
 pre-decoded tensor (skipping server-side image decode), VisionServe matches a default

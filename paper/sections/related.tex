@@ -102,7 +102,10 @@ check. This is the one axis on which VisionServe is genuinely uncontested.
 
 \paragraph{Supply-chain license compliance, and why the loader is the missing enforcement point.}
 The motivation for a load-time gate is empirical: declared model licenses are
-frequently absent or wrong. Auditing 124{,}278 dataset$\to$model$\to$application
+frequently absent or wrong. Stalnaker et al.~\cite{stalnaker2025huggingface}, in the
+largest documentation audit of Hugging Face to date, find that only 37.8\% of models
+declare licensing in a standardized, machine-readable form at all.
+Auditing 124{,}278 dataset$\to$model$\to$application
 chains, Jewitt et al.~\cite{jewitt2026permissivewashing} find that 95.8\% of
 models lack the required license text, only 3.2\% satisfy both the license-text
 and copyright requirements, and just 5.75\% of downstream applications preserve a
@@ -110,7 +113,21 @@ compliant model notice. A companion audit of 1.6M
 models~\cite{jewitt2025licensedrift} finds that 35.5\% of
 model$\to$application transitions strip restrictive clauses, relicensing copyleft
 work as permissive. A declared license string therefore cannot be trusted alone.
-Existing tooling addresses license and provenance at two points, \emph{neither of
+ML-license \emph{analysis} is itself an active research area, and we do not claim
+license-awareness or AGPL detection as unstudied. ModelGo~\cite{duan2024modelgo} is
+the canonical tool for ML license analysis, encoding license rules and ontological
+reasoning to flag rights-granting and compatibility issues across an ML workflow; its
+follow-up~\cite{duan2026stolengpl} contributes the MG Analyzer and observes that
+AGPL-3.0 proliferates yet is circumventable via the deployment boundary, and
+LiAgent~\cite{wang2026liagent} applies an LLM agent to ecosystem-level compatibility
+analysis. Crucially, all of these \emph{analyze and warn}: they produce a report or a
+compatibility verdict for a human or a CI policy to act on, offline. None of them
+\emph{enforces} a decision inside a running serving system. The distinguishing locus of
+VisionServe is precisely this: it converts license policy from an offline/CI-time
+\emph{audit} into \emph{inline admission control}---a hard-failing registry gate that
+refuses to load a non-permissive model at serve time, in the binary. The novelty we claim
+is the enforcement locus (serve/registry time), not license-awareness per se.
+Existing operational tooling addresses license and provenance at two points, \emph{neither of
 which is the model loader}. Build-/CI-time software-composition-analysis scanners
 (ScanCode, FOSSology, Snyk) scan source dependency trees and emit reports and
 SBOMs, leaving the decision to a human or policy file; they do not gate weights at
@@ -154,10 +171,12 @@ OpenVINO Model Server; ``single-binary'' is shared with llama.cpp; and
 ``multi-EP'' is shared with every ORT- or OpenVINO-based system because it
 \emph{is} the underlying runtime's provider set.
 What remains genuinely uncontested is the \textbf{load-time
-permissive-license gate}: VisionServe is, to our knowledge, the only
-CV-native server that validates each model's declared license against an
-allowlist (Apache-2.0 / MIT / BSD families) at load time and rejects anything
-else, while no other system performs this check and Roboflow ships copyleft
+permissive-license gate}: while prior ML-license tooling
+\emph{analyzes and warns} offline~\cite{duan2024modelgo,duan2026stolengpl,wang2026liagent},
+VisionServe is, to our knowledge, the first model-serving system to \emph{enforce}
+license policy as inline admission control---validating each model's declared license
+against an allowlist (Apache-2.0 / MIT / BSD families) at load time and hard-rejecting
+anything else---while no other CV server performs this check and Roboflow ships copyleft
 models by default.
 Accordingly, we frame VisionServe's contribution as the \emph{combination}
 rather than any single axis: a single self-contained Go binary

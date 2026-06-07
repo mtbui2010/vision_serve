@@ -17,7 +17,25 @@
       "Bash(bin/visionserve list)",
       "Bash(bin/visionserve list *)",
       "Bash(./bin/visionserve ps)",
-      "Bash(bin/visionserve ps)"
+      "Bash(bin/visionserve ps)",
+      "Bash(./bin/visionserve ps *)",
+      "Bash(visionserve list)",
+      "Bash(visionserve list *)",
+      "Bash(visionserve ps)",
+      "Bash(visionserve ps *)",
+      "Bash(visionserve version)",
+      "Bash(./bin/visionserve version)",
+      "Bash(bin/visionserve version)",
+      "Bash(visionserve run *)",
+      "Bash(./bin/visionserve run *)",
+      "Bash(bin/visionserve run *)",
+      "Bash(visionserve pull *)",
+      "Bash(./bin/visionserve pull *)",
+      "Bash(bin/visionserve pull *)",
+      "Bash(go build *)",
+      "Bash(hf download *)",
+      "Bash(hf models *)",
+      "Bash(docker info)"
     ]
   }
 }

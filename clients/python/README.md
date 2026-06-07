@@ -53,6 +53,96 @@ for d in res.detections:
 print([m.name for m in c.ps()])    # currently loaded models
 ```
 
+## CLI
+
+Installing the package registers a `visionserve` console command. Like the SDK it is a
+thin **HTTP client** — it runs no inference itself, it just talks to a running
+VisionServe server (the Go binary `visionserve serve`, default `http://localhost:11435`).
+The bare command needs only the standard library; `--save` (annotated images)
+additionally needs Pillow:
+
+```bash
+pip install visionserve            # CLI works with stdlib only
+pip install 'visionserve[images]'  # add Pillow for --save
+```
+
+Commands:
+
+| Command | Description |
+| --- | --- |
+| `visionserve predict <model> <image> [flags]` | Run a prediction; JSON to stdout |
+| `visionserve list` (aliases `models`, `ls`) | List available models |
+| `visionserve ps` | List currently loaded models |
+| `visionserve load <model>` | Load a model into memory |
+| `visionserve unload <model>` (alias `rm`) | Unload a model |
+| `visionserve health` | Server health check |
+
+Global flags (accepted **before or after** the subcommand):
+
+| Flag | Description |
+| --- | --- |
+| `--host <url>` | Server base URL (default `http://localhost:11435`) |
+| `--timeout <sec>` | Per-request timeout in seconds (default `120`) |
+| `--version`, `-h`/`--help` | Print version / help |
+
+`predict` flags:
+
+| Flag | Description |
+| --- | --- |
+| `--prompt "<text>"` | Open-vocab text prompt, e.g. `"cat. remote."` (GroundingDINO / Grounded-SAM / grasp-gd) |
+| `--box x,y,w,h` | SAM box prompt(s) in ORIGINAL image pixels; multiple boxes separated by `;` |
+| `--point x,y[,l]` | SAM point prompt(s); label `1`=fg, `0`=bg; multiple separated by `;` |
+| `--min-size PCT` / `--max-size PCT` | Drop objects whose bbox area is below/above PCT% of the image (e.g. `0.1`, `90`) |
+| `--gripper-min PX` / `--gripper-max PX` | Grasp models only: jaw-opening bounds in original-image pixels |
+| `--save` | Save an annotated image, auto-named `<stem>.python.<model>.<task>.png` |
+| `--save-as PATH` | Save the annotated image to this exact path (extension picks the format) |
+| `--alpha FLOAT` | Mask overlay opacity for `--save` (0..1, default `0.45`) |
+| `--max-grasps-per-object N` | For grasp results, draw at most N grasps per object (`<=0` = all; default `3`) |
+| `--compact` | Print result JSON on a single line (default: pretty-printed) |
+| `--quiet` | Suppress the stderr summary line |
+
+`list` / `ps` accept `--json` to print JSON instead of a table.
+
+### Output
+
+`predict` prints the unified result as JSON to **stdout** (pipe-friendly; field names
+match the server wire schema, e.g. `class`, with empty arrays omitted). A one-line
+summary goes to **stderr**:
+
+```
+predict: model=rf-detr task=detection device=gpu:0  client=42.1ms server=12.3ms  (12 detections)
+```
+
+Here `client` is the wall-clock time around the `predict()` HTTP round-trip and `server`
+is the server's `duration_ms` (inference only). Both are captured **before** the image is
+drawn or saved, so visualization cost never inflates the reported latency. The `--save`
+filename `<stem>.python.<model>.<task>.png` embeds the client type (`python`), so outputs
+from the Python/JS/Go CLIs for the same image never collide.
+
+### Examples
+
+```bash
+# Start the server first (Go binary):
+visionserve serve &
+
+# Detection -> JSON on stdout, summary on stderr
+visionserve predict rf-detr cat.jpg
+
+# Open-vocab + save annotated image (auto-named cat.python.grounding-dino.open_vocab.png)
+visionserve predict grounding-dino cat.jpg --prompt "cat. remote." --save
+
+# Box-prompted segmentation, explicit output path
+visionserve predict mobile-sam dog.jpg --box 50,40,200,180 --save-as dog_masks.png
+
+# Open-vocab grasps, remote server, top-1 grasp per object
+visionserve --host http://10.0.0.5:11435 predict grasp-gd bin.jpg --prompt "mug." --max-grasps-per-object 1 --save
+
+# Registry / memory management
+visionserve list
+visionserve ps
+visionserve load rf-detr
+```
+
 ## Public API
 
 ### `Client(host="http://localhost:11435", timeout=120)`

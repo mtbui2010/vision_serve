@@ -350,6 +350,13 @@ filtering, NMS, top-k, sort, group-by-class, and `get_depth_at_detection` /
 [`clients/python/README.md`](clients/python/README.md#post-processing) and
 [`clients/js/README.md`](clients/js/README.md#post-processing).
 
+> **Client CLIs.** Both clients also ship a command-line `predict` verb that mirrors
+> the Go binary's, but over HTTP against a running server:
+> - **Python:** `pip install visionserve` → `visionserve predict <model> <image>`
+>   (see [`clients/python/README.md`](clients/python/README.md))
+> - **JS:** `npx visionserve predict <model> <image>`
+>   (see [`clients/js/README.md`](clients/js/README.md))
+
 ### 7. Run with Docker
 
 Pre-built images on Docker Hub: [`mtbui2010/visionserve`](https://hub.docker.com/r/mtbui2010/visionserve)
@@ -469,7 +476,22 @@ Use the [curl](#5-call-the-api-with-curl), [Python](#6-infer-from-python), or
 
 #### One-shot inference (no server)
 
-`visionserve run` loads + infers in-process and exits, useful for scripting:
+`visionserve run <model> <image>` (alias: `visionserve predict <model> <image>`)
+loads + infers in-process and exits, useful for scripting. It prints the unified
+result JSON to stdout and a one-line summary to stderr (model/task/device, plus
+`client` = wall-clock around the inference call and `server` = inference-only
+`duration_ms` — both exclude image draw/save):
+
+```
+predict: model=rf-detr task=detection device=gpu:0  client=42.1ms server=12.3ms  (12 detections, 0 masks, 0 grasps)
+```
+
+Save an annotated image with `--save` (auto-named `<stem>.go.<model>.<task>.png`,
+where the `go` segment distinguishes it from the Python/JS client outputs
+`<stem>.python…` / `<stem>.js…`) or `--save-as <file>` (exact path; `.png`/`.jpg`
+picks the format). `--out <file>` is kept as a back-compat alias of `--save-as`.
+The other flags (`--prompt`, `--box`, `--point`, `--min-size`, `--max-size`,
+`--models`) are unchanged.
 
 ```bash
 # Detection
@@ -478,6 +500,14 @@ docker run --rm --gpus all \
   -v "$PWD/image.jpg:/img.jpg:ro" \
   mtbui2010/visionserve:latest \
   run rf-detr /img.jpg
+
+# Detection + save an auto-named annotated image (image.go.rf-detr.detection.png)
+docker run --rm --gpus all \
+  -v visionserve:/root/.models \
+  -v "$PWD/image.jpg:/img.jpg:ro" \
+  -v "$PWD:/out" -w /out \
+  mtbui2010/visionserve:latest \
+  run rf-detr /img.jpg --save
 
 # Segmentation with a box prompt
 docker run --rm --gpus all \

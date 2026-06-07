@@ -103,6 +103,92 @@ class Result {
 (`1` = inside the mask); `Mask.toMask2D(width, height)` returns a `boolean[][]`. Pass the
 **original** image width/height the mask was produced against.
 
+## CLI
+
+Installing the package globally (or running it via `npx`) exposes a `visionserve`
+command — a thin HTTP client over the same REST API. It does **not** run inference; it
+talks to a running VisionServe server (the Go binary `visionserve serve`, default
+`http://localhost:11435`). Zero runtime dependencies (built-in `fetch`/`FormData`),
+**Node >= 18**.
+
+```bash
+npm install -g visionserve   # adds the `visionserve` command
+# or run without installing:
+npx visionserve --help
+```
+
+### Commands
+
+| Command | Aliases | Description |
+|---------|---------|-------------|
+| `predict <model> <image> [flags]` | `run` | Run a model on an image, print the unified result as JSON |
+| `list` | `models`, `ls` | List available models |
+| `ps` | | List loaded models |
+| `load <model>` | | Load a model into memory |
+| `unload <model>` | `rm` | Unload a model |
+| `health` | | Check server health |
+
+### Global flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--host <url>` | `http://localhost:11435` | Server base URL |
+| `--timeout <sec>` | `120` | Per-request timeout in seconds |
+| `-h`, `--help` | | Show help |
+| `--version` | | Print the client version |
+
+`list` and `ps` also accept `--json`.
+
+### `predict` flags
+
+| Flag | Description |
+|------|-------------|
+| `--prompt "<text>"` | Open-vocab text prompt, e.g. `"cat. remote."` (GroundingDINO / grasp-gd) |
+| `--box x,y,w,h` | SAM box prompt(s) in **original** image pixels; multiple separated by `;` |
+| `--point x,y[,l]` | SAM point prompt(s); label `1`=fg, `0`=bg; multiple separated by `;` |
+| `--min-size PCT` / `--max-size PCT` | Drop objects whose bbox area is below/above PCT% of the image (applied **client-side**; requires a PNG/JPEG so the image size can be read) |
+| `--save` | Save an annotated SVG with an auto name `<stem>.js.<model>.<task>.svg` |
+| `--save-as PATH` | Save the annotated SVG to this exact path |
+| `--compact` | Print result JSON on a single line (default: pretty) |
+| `--quiet` | Suppress the stderr summary line |
+
+Notes:
+
+- The JS client does **not** support `--gripper-min`/`--gripper-max` (those are Python/Go
+  only).
+- `--save` writes an **SVG**, not a raster. The source image is embedded as a base64
+  background so the SVG is viewable standalone. The overlay draws detections, masks, and
+  classifications but **not** grasp glyphs — for grasp models the grasp data is in the JSON
+  output (a note is printed to stderr).
+- Image-size sniffing supports **PNG and JPEG only**; if the size can't be determined,
+  `--save` is skipped with a warning.
+
+### Output
+
+`predict` prints the unified result as JSON to **stdout** (pipe-friendly; field names
+match the server wire schema: `class`, empty arrays omitted, includes `grasps` and
+`device`). A one-line summary goes to **stderr**:
+
+```
+predict: model=rf-detr task=detection device=gpu:0  client=42.1ms server=12.3ms  (12 detections)
+```
+
+where `client` is the wall-clock time around the `predict()` round-trip and `server` is
+the server's `duration_ms` (inference only). Both are measured **before** the SVG is built
+or saved. The auto filename is `<stem>.<client_type>.<model>.<task>.svg` with `client_type`
+`js`, so Python/JS/Go outputs never collide.
+
+### Examples
+
+```bash
+# Start the server (Go binary) first, then:
+npx visionserve predict rf-detr cat.jpg
+npx visionserve predict grounding-dino cat.jpg --prompt "cat. remote." --save
+npx visionserve predict mobile-sam dog.jpg --box 50,40,200,180 --save-as dog.svg
+npx visionserve --host http://10.0.0.5:11435 list --json
+npx visionserve ps
+```
+
 ## Post-processing
 
 All methods return a **new** `Result`; the original is not modified.

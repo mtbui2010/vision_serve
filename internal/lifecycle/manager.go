@@ -7,6 +7,9 @@ package lifecycle
 import (
 	"fmt"
 	"image"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -128,6 +131,12 @@ func (m *Manager) Load(name string) error {
 		if ps, ok := mdl.(models.PoolSizer); ok {
 			poolSizes = ps.PoolSizes()
 		}
+		// VS_POOL_OVERRIDE forces every role's pool size (eval pool×concurrency sweep).
+		if ov := poolOverride(); ov > 0 {
+			for _, role := range mdl.Roles() {
+				poolSizes[role] = ov
+			}
+		}
 		engines := map[string]engine.Runnable{}
 		for _, role := range mdl.Roles() {
 			path, ok := filesAbs[role]
@@ -162,11 +171,31 @@ func (m *Manager) Load(name string) error {
 		}
 		sess = newPipelineSession(man.Name, task, mdl, engines, idle, now)
 	case models.Model:
-		eng, err := engine.NewSession(man.ModelFilePath(), nilIfEmpty(mdl.InputName()), mdl.OutputNames(), providers)
-		if err != nil {
-			return err
+		inName, outNames := nilIfEmpty(mdl.InputName()), mdl.OutputNames()
+		var run engine.Runnable
+		if ov := poolOverride(); ov > 1 {
+			// VS_POOL_OVERRIDE>1: wrap N identical sessions in a pool so a single-session
+			// (classification/detection) model can serve inferences concurrently (eval sweep).
+			sessions := make([]*engine.Session, ov)
+			for i := range sessions {
+				s, err := engine.NewSession(man.ModelFilePath(), inName, outNames, providers)
+				if err != nil {
+					for j := 0; j < i; j++ {
+						_ = sessions[j].Close()
+					}
+					return err
+				}
+				sessions[i] = s
+			}
+			run = engine.NewSessionPool(sessions)
+		} else {
+			eng, err := engine.NewSession(man.ModelFilePath(), inName, outNames, providers)
+			if err != nil {
+				return err
+			}
+			run = eng
 		}
-		sess = newSimpleSession(man.Name, task, mdl, eng, idle, now)
+		sess = newSimpleSession(man.Name, task, mdl, run, idle, now)
 	default:
 		return fmt.Errorf("lifecycle: model %q implements neither Model nor PipelineModel", name)
 	}
@@ -303,4 +332,20 @@ func nilIfEmpty(s string) []string {
 		return nil
 	}
 	return []string{s}
+}
+
+// poolOverride reads VS_POOL_OVERRIDE (an integer >= 1) to force the per-role ONNX
+// session-pool size at load, overriding a model's built-in PoolSizes (and giving
+// single-session models a pool). It exists for the pool×concurrency evaluation sweep;
+// unset or invalid returns 0 (no override — keep model defaults).
+func poolOverride() int {
+	v := strings.TrimSpace(os.Getenv("VS_POOL_OVERRIDE"))
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return 0
+	}
+	return n
 }

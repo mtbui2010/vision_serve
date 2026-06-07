@@ -158,7 +158,7 @@ docker-edge: ## Build the edge image (arm64, CPU only) — alias for docker-arm
 DOCKER_HUB_USER ?= mtbui2010
 # PUSH_VERSION is the tag of the already-built local image (e.g. v0.1.2).
 # Override at the command line if needed: make push-docker PUSH_VERSION=v0.2.0
-PUSH_VERSION    ?= v0.1.4
+PUSH_VERSION    ?= v0.1.5
 
 push-docker: ## Tag and push CPU + GPU images to Docker Hub (DOCKER_HUB_USER=mtbui2010)
 	@echo "=== Tagging images for Docker Hub ($(DOCKER_HUB_USER)) ==="

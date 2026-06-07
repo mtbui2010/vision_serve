@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"image"
 	"os"
+	"path/filepath"
+	"strings"
+	"time"
 
 	// register image decoders
 	_ "image/jpeg"
@@ -20,12 +23,31 @@ import (
 	"visionserve/pkg/api"
 )
 
+// clientType labels images this (Go) CLI saves, so an auto-named output never
+// collides with one written by the Python or JS client for the same image+model.
+const clientType = "go"
+
+// autoName builds a self-describing output filename: <stem>.go.<model>.<task>.<ext>.
+func autoName(imagePath, model, task, ext string) string {
+	base := filepath.Base(imagePath)
+	stem := strings.TrimSuffix(base, filepath.Ext(base))
+	if stem == "" {
+		stem = "image"
+	}
+	if task == "" {
+		task = "result"
+	}
+	return fmt.Sprintf("%s.%s.%s.%s.%s", stem, clientType, model, task, ext)
+}
+
 // runRun: visionserve run <model> <image> — load + predict + print JSON to stdout.
 // Runs in-process (does NOT require a running server) — this is the end-to-end MVP flow.
 func runRun(args []string) error {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	modelsFlag := fs.String("models", "", "model registry directory")
-	outFlag := fs.String("out", "", "save the image with drawn bboxes/masks to a file (.png/.jpg extension selects the format)")
+	saveFlag := fs.Bool("save", false, "save an annotated image with an auto name <stem>.go.<model>.<task>.png")
+	saveAsFlag := fs.String("save-as", "", "save the annotated image to this exact path (.png/.jpg extension selects the format)")
+	outFlag := fs.String("out", "", "alias of --save-as (kept for back-compat)")
 	promptFlag := fs.String("prompt", "", "text prompt for open-vocab models, e.g. \"cat. remote.\" (GroundingDINO / Grounded-SAM)")
 	boxFlag := fs.String("box", "", "box prompt(s) for SAM, \"x,y,w,h\" (multiple separated by ';')")
 	pointFlag := fs.String("point", "", "point prompt(s) for SAM, \"x,y[,label]\" (label 1=fg 0=bg; multiple separated by ';')")
@@ -77,23 +99,48 @@ func runRun(args []string) error {
 	mgr := lifecycle.NewManager(reg)
 	defer mgr.Close()
 
+	// Time ONLY the inference call (client wall-clock). The server's own
+	// inference-only measurement is reported separately as res.DurationMs. Both
+	// are captured BEFORE any image is drawn/saved, so visualization never
+	// inflates the reported latency.
+	clientStart := time.Now()
 	res, err := mgr.PredictPrompt(modelName, img, prompt)
 	if err != nil {
 		return err
 	}
+	clientMs := float64(time.Since(clientStart).Microseconds()) / 1000.0
 
 	if *minSizeFlag > 0 || *maxSizeFlag > 0 {
 		res = api.FilterBySizePct(res, *minSizeFlag, *maxSizeFlag, img.Bounds().Dx(), img.Bounds().Dy())
 	}
 
+	// Resolve the output path: --save-as / --out (explicit) take precedence; a
+	// bare --save auto-names <stem>.go.<model>.<task>.png.
+	outPath := *saveAsFlag
+	if outPath == "" {
+		outPath = *outFlag
+	}
+	if outPath == "" && *saveFlag {
+		outPath = autoName(imagePath, modelName, string(res.Task), "png")
+	}
+
 	// Optional: draw boxes + mask overlays onto the image and save it (demo/visualization).
-	// Pure Go, no cgo.
-	if *outFlag != "" {
+	// Pure Go, no cgo. NOT counted in the durations reported above.
+	if outPath != "" {
 		annotated := imageproc.DrawResult(img, res)
-		if err := imaging.Save(annotated, *outFlag); err != nil {
-			return fmt.Errorf("failed to save result image %s: %w", *outFlag, err)
+		if err := imaging.Save(annotated, outPath); err != nil {
+			return fmt.Errorf("failed to save result image %s: %w", outPath, err)
 		}
-		fmt.Fprintf(os.Stderr, "saved image: %s (%d detections, %d masks)\n", *outFlag, len(res.Detections), len(res.Masks))
+	}
+
+	device := res.Device
+	if device == "" {
+		device = "?"
+	}
+	fmt.Fprintf(os.Stderr, "predict: model=%s task=%s device=%s  client=%.1fms server=%.1fms  (%d detections, %d masks, %d grasps)\n",
+		res.Model, res.Task, device, clientMs, res.DurationMs, len(res.Detections), len(res.Masks), len(res.Grasps))
+	if outPath != "" {
+		fmt.Fprintf(os.Stderr, "saved: %s\n", outPath)
 	}
 
 	enc := json.NewEncoder(os.Stdout)
