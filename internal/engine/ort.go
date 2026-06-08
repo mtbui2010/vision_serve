@@ -112,41 +112,57 @@ func NewSession(modelPath string, inputNames, outputNames []string, providers []
 		}
 	}
 
-	opts, err := ort.NewSessionOptions()
-	if err != nil {
-		return nil, fmt.Errorf("engine: failed to create SessionOptions: %w", err)
-	}
-	defer opts.Destroy()
-
-	// ORT C++ prints RED errors to stderr when a GPU provider (TensorRT/CUDA) cannot load its libs
-	// (e.g. libnvinfer/libcudnn missing on a CPU-only host). This is NORMAL fallback behavior
-	// (TensorRT→CUDA→CPU) but it is confusing. We redirect fd 2 around session creation:
-	// if the session is created SUCCESSFULLY (after fallback) -> swallow the noise; if it FAILS
-	// -> reprint everything so we don't hide the real error.
+	// Try each EP in priority order, creating the session with that single EP appended.
+	// If session creation FAILS (not just a missing lib, but the EP cannot build/partition
+	// this specific graph — e.g. TensorRT rejecting the MobileSAM decoder's Float shape
+	// tensor `orig_im_size`), fall back to the NEXT EP in the chain instead of failing the
+	// whole load. CPU is always the last candidate, so a session is always created.
+	//
+	// ORT prints RED errors to stderr while an EP fails over. On eventual success we swallow
+	// that noise (it is normal fallback); if ALL EPs are exhausted we reprint the last error.
+	candidates := availableProviders(providers)
 	if Trace {
-		fmt.Fprintf(os.Stderr, "engine: [trace] creating session for %s — requested EPs: %s\n",
-			filepath.Base(modelPath), providerNames(providers))
+		fmt.Fprintf(os.Stderr, "engine: [trace] creating session for %s — EP chain: %s\n",
+			filepath.Base(modelPath), providerNames(candidates))
 	}
 
 	var sess *ort.DynamicAdvancedSession
 	var activeEP Provider
-	captured, runErr := captureStderr(func() error {
-		activeEP = appendProviders(opts, providers)
-		var e error
-		sess, e = ort.NewDynamicAdvancedSession(modelPath, inputNames, outputNames, opts)
-		return e
-	})
-	if runErr != nil {
-		if captured != "" {
-			fmt.Fprint(os.Stderr, captured) // real error: restore ORT's original log
+	var lastErr error
+	var lastCaptured string
+	for _, ep := range candidates {
+		opts, err := ort.NewSessionOptions()
+		if err != nil {
+			return nil, fmt.Errorf("engine: failed to create SessionOptions: %w", err)
 		}
-		return nil, fmt.Errorf("engine: failed to create session for %s: %w", modelPath, runErr)
+		var s *ort.DynamicAdvancedSession
+		captured, runErr := captureStderr(func() error {
+			applyProvider(opts, ep)
+			var e error
+			s, e = ort.NewDynamicAdvancedSession(modelPath, inputNames, outputNames, opts)
+			return e
+		})
+		opts.Destroy()
+		if runErr == nil {
+			sess, activeEP = s, ep
+			if Trace && captured != "" {
+				fmt.Fprintf(os.Stderr, "engine: [trace] ORT messages for %s on %s:\n%s",
+					filepath.Base(modelPath), providerNames([]Provider{ep}), captured)
+			}
+			break
+		}
+		lastErr, lastCaptured = runErr, captured
+		if Trace {
+			fmt.Fprintf(os.Stderr, "engine: [trace] EP %s failed for %s (%v) — falling back to next EP\n",
+				providerNames([]Provider{ep}), filepath.Base(modelPath), runErr)
+		}
 	}
-	if Trace && captured != "" {
-		// On success we normally swallow ORT's red EP-fallback noise; under trace, show it
-		// so EP load failures (e.g. "libcudnn.so.9: cannot open") are visible.
-		fmt.Fprintf(os.Stderr, "engine: [trace] ORT messages for %s (EP fallback is normal if a GPU lib is missing):\n%s",
-			filepath.Base(modelPath), captured)
+	if sess == nil {
+		if lastCaptured != "" {
+			fmt.Fprint(os.Stderr, lastCaptured) // real error: restore ORT's original log
+		}
+		return nil, fmt.Errorf("engine: failed to create session for %s (all EPs exhausted): %w",
+			filepath.Base(modelPath), lastErr)
 	}
 	return &Session{sess: sess, inputNames: inputNames, outputNames: outputNames, activeEP: activeEP}, nil
 }
@@ -173,44 +189,52 @@ func providerNames(providers []Provider) string {
 	return strings.Join(names, " → ")
 }
 
-// appendProviders adds the EPs in priority order and returns the first one whose
-// libraries were available (= the EP that will actually run inference).
-// CPU is ORT's built-in fallback and is always available.
-func appendProviders(opts *ort.SessionOptions, providers []Provider) Provider {
+// availableProviders filters the requested chain to EPs worth attempting, preserving order:
+// it drops TensorRT when libnvinfer.so.10 is absent (loading the TRT provider lib without it
+// causes a hard C abort: dlopen → libnvinfer missing → SIGABRT), and guarantees CPU is the
+// final candidate so a session can always be created.
+func availableProviders(providers []Provider) []Provider {
+	out := make([]Provider, 0, len(providers)+1)
+	seenCPU := false
 	for _, p := range providers {
-		switch p {
-		case ProviderTensorRT:
-			// Guard: skip TRT entirely if libnvinfer.so.10 is absent.
-			// Without this check, loading libonnxruntime_providers_tensorrt.so
-			// causes a hard C abort (dlopen → libnvinfer missing → SIGABRT).
-			if !TRTAvailable() {
-				continue
-			}
-			if trt, err := ort.NewTensorRTProviderOptions(); err == nil {
-				_ = opts.AppendExecutionProviderTensorRT(trt)
-				trt.Destroy()
-				return p
-			}
-		case ProviderCUDA:
-			if cuda, err := ort.NewCUDAProviderOptions(); err == nil {
-				_ = opts.AppendExecutionProviderCUDA(cuda)
-				cuda.Destroy()
-				return p
-			}
-		case ProviderCoreML:
-			_ = opts.AppendExecutionProviderCoreML(0)
-			return p
-		case ProviderDirectML:
-			_ = opts.AppendExecutionProviderDirectML(0)
-			return p
-		case ProviderOpenVINO:
-			_ = opts.AppendExecutionProviderOpenVINO(map[string]string{})
-			return p
-		case ProviderCPU:
-			return p
+		if p == ProviderTensorRT && !TRTAvailable() {
+			continue
 		}
+		if p == ProviderCPU {
+			seenCPU = true
+		}
+		out = append(out, p)
 	}
-	return ProviderCPU
+	if !seenCPU {
+		out = append(out, ProviderCPU)
+	}
+	return out
+}
+
+// applyProvider appends exactly ONE execution provider to opts. CPU needs no append
+// (ORT's built-in default); callers attempt providers one at a time so a per-graph EP
+// failure can fall back to the next candidate (see NewSession).
+func applyProvider(opts *ort.SessionOptions, p Provider) {
+	switch p {
+	case ProviderTensorRT:
+		if trt, err := ort.NewTensorRTProviderOptions(); err == nil {
+			_ = opts.AppendExecutionProviderTensorRT(trt)
+			trt.Destroy()
+		}
+	case ProviderCUDA:
+		if cuda, err := ort.NewCUDAProviderOptions(); err == nil {
+			_ = opts.AppendExecutionProviderCUDA(cuda)
+			cuda.Destroy()
+		}
+	case ProviderCoreML:
+		_ = opts.AppendExecutionProviderCoreML(0)
+	case ProviderDirectML:
+		_ = opts.AppendExecutionProviderDirectML(0)
+	case ProviderOpenVINO:
+		_ = opts.AppendExecutionProviderOpenVINO(map[string]string{})
+	case ProviderCPU:
+		// ORT built-in; nothing to append.
+	}
 }
 
 // Run runs inference: takes input tensors (in the model's input order) and returns the

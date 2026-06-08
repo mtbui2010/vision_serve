@@ -34,6 +34,7 @@ needed for:
   - [SCRFD / OCR](#scrfd--ocr)
   - [Grasp detection](#grasp-detection)
 - [Post-processing](#post-processing)
+  - [Grasp post-processing](#grasp-post-processing)
   - [Size filtering](#size-filtering----resultfilter_by_size)
   - [Visualization](#visualization----draw--resultvisualize)
 - [Script examples](#examples)
@@ -359,7 +360,7 @@ if target:
     print("best grasp:", target.x, target.y, target.theta)
 ```
 
-`select_target_grasp(grasps, *, cls=None, gripper_min=None, gripper_max=None, target_point=None, weights=None)` ranks candidates by quality (and optionally proximity to a 2D pixel) and returns the top `Grasp` or `None`. For 3D target-distance selection (camera → object), pass `depth_result`, `intrinsics` (`CameraIntrinsics`), and `target_distance` in metres.
+See [Grasp post-processing](#grasp-post-processing) below for the full selection and filtering API.
 
 ## Post-processing
 
@@ -406,6 +407,147 @@ for det, d in zip(result.detections, depths):
 `visionserve.postprocess` or the top-level `visionserve` package) returns
 `List[Optional[float]]` — one depth value per detection/mask, or `None` when
 the box falls outside the depth map. `mode` is `"median"` (default) or `"mean"`.
+
+### Grasp post-processing
+
+All grasp post-processing helpers are importable from `visionserve` or
+`visionserve.postprocess`.
+
+#### `Grasp` fields and helpers
+
+```python
+g = res.grasps[0]
+
+# Robot-ready pose as a flat list
+print(g.pose)              # [x, y, width, theta]  — for robot control
+
+# Jaw-contact points
+print(g.contacts())        # [[x0, y0], [x1, y1]]  — nested
+print(g.contacts_flat())   # [x0, y0, x1, y1]      — flat, ready for ROS/serial
+```
+
+#### `result.filter_grasps(max_per_object)`
+
+Limit the number of grasps per detected object — keeps the `max_per_object`
+highest-quality grasps inside each detection/mask bbox. Also available as a
+parameter to `predict()`.
+
+```python
+# Via predict() — applied immediately after the server response:
+res = c.predict("grasp-gd", "bin.jpg", prompt="mug.", max_grasps_per_object=3)
+
+# Or on an existing result:
+res = res.filter_grasps(max_per_object=3)   # None keeps all
+```
+
+#### `select_target_grasp()`
+
+Pick the single best grasp for execution. Candidates are first filtered by class
+and gripper-width feasibility, then scored on one or more criteria (each
+normalised to `[0, 1]`):
+
+| Criterion | Keyword | Description |
+|-----------|---------|-------------|
+| `quality` | — | Analytic grasp quality score (default when nothing else is set) |
+| `near` | `target_point=(x, y)` | 2D pixel distance from grasp centre to a target pixel — nearest wins |
+| `distance` | `target_distance=d` | True 3D camera→grasp Euclidean distance (Gaussian centred on `target_distance`); needs `depth_result` + `intrinsics` |
+| `width` | — | Preference for a mid-range jaw opening within `[gripper_min, gripper_max]` |
+
+By default the most-specific available criterion is used (`distance > near > quality`).
+Pass `weights={"quality": 0.5, "near": 0.5}` for a weighted composite.
+
+```python
+from visionserve import select_target_grasp, CameraIntrinsics
+
+res = c.predict("grasp-gd", "bin.jpg", prompt="mug.", max_grasps_per_object=3)
+
+# 1. By quality alone (default)
+target = select_target_grasp(res.grasps)
+
+# 2. Prefer grasps near a pixel (e.g. robot workspace centre)
+target = select_target_grasp(res.grasps, target_point=(320, 240))
+
+# 3. Prefer grasps at a specific 3D distance (needs depth model)
+depth = c.predict("depth-anything-v2", "bin.jpg")
+K = CameraIntrinsics(fx=600, fy=600, cx=320, cy=240)
+target = select_target_grasp(
+    res.grasps,
+    target_distance=0.55,       # metres
+    depth_result=depth,
+    intrinsics=K,
+)
+
+# 4. Filter by class + gripper bounds, weighted composite
+target = select_target_grasp(
+    res.grasps,
+    cls="mug",
+    gripper_min=20, gripper_max=150,
+    target_point=(320, 240),
+    weights={"quality": 0.4, "near": 0.6},
+)
+
+if target:
+    print(target.pose)           # [x, y, width, theta]
+    print(target.contacts_flat())# [x0, y0, x1, y1]
+```
+
+`return_index=True` returns `(grasp_or_None, index)` into the original list.
+
+#### `select_target_object()`
+
+For pipelines that need to pick ONE object first (e.g. "closest mug") before
+computing grasps, use `select_target_object()`:
+
+```python
+from visionserve import select_target_object
+
+det = c.predict("rf-detr", "scene.jpg")
+obj, idx = select_target_object(
+    det, cls="cup",
+    near_point="center",          # or (x, y) pixel
+    image_size=(1280, 720),
+    return_index=True,
+)
+```
+
+Same scoring criteria as `select_target_grasp` but operates on `Detection` /
+`Mask` objects using `conf`, `area`, `near`, and `distance`.
+
+#### `grasp_distances()` / `object_distances()`
+
+True Euclidean camera→grasp (or camera→object) distance, computed by sampling the
+depth map at each grasp centre and back-projecting through the camera intrinsics.
+
+```python
+from visionserve import grasp_distances, object_distances, CameraIntrinsics
+
+K = CameraIntrinsics(fx=600, fy=600, cx=320, cy=240)
+depth = c.predict("depth-anything-v2", "scene.jpg")
+
+# Per-grasp distances (metres)
+dists = grasp_distances(depth, res.grasps, K)
+for g, d in zip(res.grasps, dists):
+    print(f"grasp ({g.x:.0f},{g.y:.0f}) → {d:.2f}m" if d else "no depth")
+
+# Per-object distances
+odists = object_distances(depth, det, K)
+```
+
+#### Visualization with target grasp highlighted
+
+```python
+from visionserve import draw, select_target_grasp
+
+res = c.predict("grasp-gd", "bin.jpg", prompt="mug.", max_grasps_per_object=3)
+target = select_target_grasp(res.grasps)
+
+# All grasps drawn in quality colour; target drawn in red on top
+annotated = draw(res, "bin.jpg", target_grasp=target)
+annotated.save("out.png")
+
+# Or via result.visualize():
+res.visualize("bin.jpg", target_grasp=target).save("out.png")
+```
 
 ### Size filtering — `Result.filter_by_size()`
 

@@ -107,6 +107,14 @@ type Entry struct {
 	// write a manifest whose files: block contains these role→relative-path pairs
 	// (relative to <modelsDir>/<name>/). Dependencies are checked first.
 	VirtualFiles map[string]string
+
+	// Grasp-pipeline fields (architecture "grasp").
+	// Detector is the optional box-stage model name ("rf-detr", "grounding-dino", …).
+	// Empty means class-agnostic (whole-image automask, no detector session).
+	Detector  string
+	Segmenter string  // mask backbone; default "mobile-sam" when empty
+	GripperMin float64 // default parallel-jaw opening lower bound in original-image px
+	GripperMax float64 // default parallel-jaw opening upper bound in original-image px
 }
 
 // builtin is the curated catalog. Keep entries permissive-only.
@@ -259,6 +267,85 @@ var builtin = []Entry{
 		ConfThreshold:     0.3,
 		TextThreshold:     0.25,
 		MaxDetections:     300,
+		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		Verified:          true,
+	},
+	{
+		Name:         "grasp",
+		Task:         "grasp",
+		License:      "Apache-2.0",
+		Architecture: "grasp",
+		Description:  "Grasp (class-agnostic) — MobileSAM automask → analytic mask2grasp. No detector; grasps cover every object.",
+		Dependencies: []string{"mobile-sam"},
+		Segmenter:    "mobile-sam",
+		GripperMin:   10,
+		GripperMax:   150,
+		VirtualFiles: map[string]string{
+			"encoder": "../mobile-sam/mobile_sam_encoder.onnx",
+			"decoder": "../mobile-sam/mobile_sam_decoder_single.onnx",
+		},
+		InputWidth:        1024,
+		InputHeight:       1024,
+		InputLayout:       "NCHW",
+		Letterbox:         false,
+		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		Verified:          true,
+	},
+	{
+		Name:         "grasp-gd",
+		Task:         "grasp",
+		License:      "Apache-2.0",
+		Architecture: "grasp",
+		Description:  "Grasp (open-vocab) — GroundingDINO text → boxes → MobileSAM masks → analytic mask2grasp. Requires a text prompt.",
+		Dependencies: []string{"grounding-dino", "mobile-sam"},
+		Detector:     "grounding-dino",
+		Segmenter:    "mobile-sam",
+		GripperMin:   10,
+		GripperMax:   150,
+		VirtualFiles: map[string]string{
+			"det":     "../grounding-dino/model.onnx",
+			"encoder": "../mobile-sam/mobile_sam_encoder.onnx",
+			"decoder": "../mobile-sam/mobile_sam_decoder_single.onnx",
+		},
+		InputWidth:        800,
+		InputHeight:       800,
+		InputLayout:       "NCHW",
+		Letterbox:         false,
+		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		ConfThreshold:     0.3,
+		TextThreshold:     0.25,
+		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		Verified:          true,
+	},
+	{
+		Name:         "grasp-rfdetr",
+		Task:         "grasp",
+		License:      "Apache-2.0",
+		Architecture: "grasp",
+		Description:  "Grasp (class-aware COCO-80) — RF-DETR detect → MobileSAM segment → analytic mask2grasp.",
+		Dependencies: []string{"rf-detr", "mobile-sam"},
+		Detector:     "rf-detr",
+		Segmenter:    "mobile-sam",
+		GripperMin:   10,
+		GripperMax:   150,
+		VirtualFiles: map[string]string{
+			"det":     "../rf-detr/rf-detr-base.onnx",
+			"encoder": "../mobile-sam/mobile_sam_encoder.onnx",
+			"decoder": "../mobile-sam/mobile_sam_decoder_single.onnx",
+		},
+		InputWidth:        560,
+		InputHeight:       560,
+		InputLayout:       "NCHW",
+		Letterbox:         true,
+		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		PostprocessType:   "detr",
+		BoxFormat:         "cxcywh",
+		ConfThreshold:     0.5,
+		MaxDetections:     300,
+		LabelsFile:        "../rf-detr/coco91.txt",
 		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
 		IdleUnloadSeconds: 300,
 		Verified:          true,

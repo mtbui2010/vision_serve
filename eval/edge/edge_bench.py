@@ -224,7 +224,7 @@ def main():
                 nvpmodel=nvpmodel_mode(), ort_dylib=os.getenv("ORT_DYLIB_PATH", "?"),
                 visionserve_ep=os.getenv("VISIONSERVE_EP", "(manifest default)"),
                 images=paths, box=args.box, duration_s=args.duration,
-                utc=datetime.datetime.utcnow().isoformat() + "Z")
+                utc=datetime.datetime.now(datetime.timezone.utc).isoformat())
     with open(args.out + ".meta.json", "w") as f:
         json.dump(meta, f, indent=2)
 

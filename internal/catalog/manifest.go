@@ -26,6 +26,12 @@ func (e Entry) RenderManifest() string {
 	if e.Architecture != "" {
 		fmt.Fprintf(&b, "architecture: %s\n", e.Architecture)
 	}
+	if e.Detector != "" {
+		fmt.Fprintf(&b, "detector: %s\n", e.Detector)
+	}
+	if e.Segmenter != "" {
+		fmt.Fprintf(&b, "segmenter: %s\n", e.Segmenter)
+	}
 
 	// model_file (single-file) vs files: map (multi-session or virtual).
 	if len(e.VirtualFiles) > 0 {
@@ -76,6 +82,17 @@ func (e Entry) RenderManifest() string {
 	}
 	if e.MaxDetections > 0 {
 		fmt.Fprintf(&b, "  max_detections: %d\n", e.MaxDetections)
+	}
+
+	// grasp block (only when gripper bounds are set).
+	if e.GripperMin > 0 || e.GripperMax > 0 {
+		b.WriteString("\ngrasp:\n")
+		if e.GripperMin > 0 {
+			fmt.Fprintf(&b, "  gripper_min: %g\n", e.GripperMin)
+		}
+		if e.GripperMax > 0 {
+			fmt.Fprintf(&b, "  gripper_max: %g\n", e.GripperMax)
+		}
 	}
 
 	if e.LabelsFile != "" {
