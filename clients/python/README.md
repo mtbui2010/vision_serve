@@ -154,7 +154,7 @@ visionserve load rf-detr
 | `load(model)` | `POST /api/load` | `{"model", "state"}` |
 | `unload(model)` | `POST /api/unload` | `{"model", "state"}` |
 | `ps()` | `GET /api/models` (filtered) | loaded `list[ModelInfo]` |
-| `predict(model, image, *, prompt=None, box=None, point=None, min_size=0, max_size=0)` | `POST /api/predict` | `Result` |
+| `predict(model, image, *, prompt=None, box=None, point=None, min_size=0, max_size=0, gripper_min=None, gripper_max=None)` | `POST /api/predict` | `Result` |
 
 `min_size` / `max_size` filter by bounding-box area as a **percentage of the image area** (0–100; `0` = no limit). Example: `min_size=0.5` keeps only objects covering at least 0.5% of the image. The conversion to absolute pixels is done server-side using the uploaded image dimensions.
 
@@ -169,6 +169,7 @@ Prompts (serialized to the server's string format):
 - `box`: `[x, y, w, h]` or a list of boxes → `"x,y,w,h"` joined by `;`.
 - `point`: `[x, y]` / `[x, y, label]` or a list (label 1=fg, 0=bg) → `"x,y[,label]"` joined by `;`.
 - `prompt`: free text, e.g. `"cat. remote."`.
+- `gripper_min` / `gripper_max`: grasp models only — jaw-opening bounds in **original-image pixels** (e.g. `gripper_min=20, gripper_max=150`). Server filters out grasps outside the range.
 
 ### Result types
 
@@ -176,14 +177,24 @@ Prompts (serialized to the server's string format):
 Detection(bbox: list[float], cls: str, conf: float)       # bbox = [x, y, w, h], original px
 Mask(rle: str, bbox: list[float], conf: float)
 Classification(cls: str, conf: float)                      # top-K prediction
+Grasp(
+    x: float, y: float,       # grasp center in ORIGINAL image pixels
+    theta: float,             # in-plane gripper-closing angle in radians
+    width: float,             # jaw opening in ORIGINAL image pixels
+    quality: float,           # analytic grasp score in [0, 1]
+    cls: str = "",            # object class label ("" = class-agnostic)
+    conf: float = 0.0,        # detector confidence (0.0 = class-agnostic)
+)
 Result(
     task, model, duration_ms,
     detections: list[Detection],
     masks: list[Mask],
     classifications: list[Classification],                 # task="classification"
+    grasps: list[Grasp],                                   # task="grasp"
     depth_map: list[float] | None,                         # task="depth", row-major H×W
     depth_width: int | None,
     depth_height: int | None,
+    embeddings: list[list[float]],                         # task="embedding" (CLIP)
 )
 ```
 
@@ -219,6 +230,58 @@ res = c.predict("efficientnet-b0", "img.jpg")
 for cls_pred in res.classifications:
     print(cls_pred.cls, round(cls_pred.conf, 3))
 ```
+
+For image embeddings (CLIP), `embeddings` is a list of 512-d float vectors:
+
+```python
+res = c.predict("clip", "img.jpg")
+vec = res.embeddings[0]          # list[float], length 512
+import numpy as np
+v = np.array(vec)
+v /= np.linalg.norm(v)           # L2-normalize before cosine similarity
+```
+
+For face detection (SCRFD), results come back as `detections` with 5 keypoints encoded
+in the `bbox` field extensions (see server schema). Basic usage mirrors RF-DETR:
+
+```python
+res = c.predict("scrfd", "photo.jpg")
+for d in res.detections:
+    print(d.cls, round(d.conf, 3), d.bbox)   # cls="face", bbox=[x,y,w,h]
+```
+
+For OCR (PaddleOCR), text regions come back as `detections` and recognized strings in
+`cls`:
+
+```python
+res = c.predict("paddle-ocr", "doc.jpg")
+for d in res.detections:
+    print(d.cls, round(d.conf, 3), d.bbox)   # cls = recognized text
+```
+
+For planar grasp detection, results come back in `grasps`:
+
+```python
+# Class-agnostic — whole-image automask → grasps
+res = c.predict("grasp", "bin.jpg", gripper_min=20, gripper_max=150)
+for g in res.grasps:
+    print(f"q={g.quality:.3f}  x={g.x:.1f} y={g.y:.1f}  θ={g.theta:.3f}  w={g.width:.1f}")
+
+# Class-aware — text-prompted detector → per-object grasps
+res = c.predict("grasp-gd", "table.jpg", prompt="mug. bottle.",
+                gripper_min=20, gripper_max=150)
+for g in res.grasps:
+    print(g.cls, round(g.quality, 3), g.contacts())  # contacts() → [[x0,y0],[x1,y1]]
+
+# Pick the best grasp for a target class / pixel
+from visionserve import select_target_grasp
+target = select_target_grasp(res.grasps, cls="mug",
+                              gripper_min=20, gripper_max=150)
+if target:
+    print("best grasp:", target.x, target.y, target.theta)
+```
+
+`select_target_grasp(grasps, *, cls=None, gripper_min=None, gripper_max=None, target_point=None, weights=None)` ranks candidates by quality (and optionally proximity to a 2D pixel) and returns the top `Grasp` or `None`. For 3D target-distance selection (camera → object), pass `depth_result`, `intrinsics` (`CameraIntrinsics`), and `target_distance` in metres.
 
 ## Post-processing
 
@@ -315,6 +378,11 @@ What gets drawn per task:
 | `segmentation` | Semi-transparent mask overlays + bbox outlines + confidence |
 | `classification` | Top-K `"class conf%"` text lines in top-left corner |
 | `depth` | Turbo colormap image (blue=near → red=far) — replaces original |
+| `grasp` | Grasp lines (jaw contacts) + center dot + quality; pass `max_grasps_per_object=N` to limit crowding |
+
+```python
+annotated = draw(res, "bin.jpg", max_grasps_per_object=3)
+```
 
 ## Examples
 

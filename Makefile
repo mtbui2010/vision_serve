@@ -38,7 +38,7 @@ TEXENV ?= texpdf
 ORT_DYLIB_PATH ?= $(shell find $(HOME) /usr/local/lib /usr/lib -name 'libonnxruntime.so*' 2>/dev/null | grep -v node_modules | grep -E 'onnxruntime/capi.*\.so\.[0-9]' | head -1)
 
 .PHONY: all build install run serve list ps rm pull demo terminate test fmt vet tidy lint clean \
-        build-linux-arm64 docker docker-edge pypi help pdf paper-clean \
+        build-linux-arm64 docker docker-edge pypi help pdf paper-clean clear-image \
         push-docker push-docker-arm push-docker-next-version
 
 all: build ## Default target: build
@@ -155,10 +155,20 @@ docker-arm: ## Build the Jetson/arm64 image (ORT_SOURCE=jetson for CUDA+TRT EP)
 docker-edge: ## Build the edge image (arm64, CPU only) — alias for docker-arm
 	$(MAKE) docker-arm
 
+clear-image: ## Remove ALL local visionserve docker images (local + Docker Hub tags)
+	@ids=$$(docker images --filter 'reference=visionserve' --filter 'reference=*/visionserve' -q | sort -u); \
+	if [ -z "$$ids" ]; then \
+		echo "clear-image: no visionserve images found"; \
+	else \
+		echo "clear-image: removing visionserve image(s):"; \
+		docker images --filter 'reference=visionserve' --filter 'reference=*/visionserve'; \
+		docker rmi -f $$ids; \
+	fi
+
 DOCKER_HUB_USER ?= mtbui2010
 # PUSH_VERSION is the tag of the already-built local image (e.g. v0.1.2).
 # Override at the command line if needed: make push-docker PUSH_VERSION=v0.2.0
-PUSH_VERSION    ?= v0.1.5
+PUSH_VERSION    ?= v0.1.6
 
 push-docker: ## Tag and push CPU + GPU images to Docker Hub (DOCKER_HUB_USER=mtbui2010)
 	@echo "=== Tagging images for Docker Hub ($(DOCKER_HUB_USER)) ==="

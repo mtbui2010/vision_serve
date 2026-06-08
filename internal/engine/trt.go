@@ -51,9 +51,12 @@ func findTRTLib() (string, bool) {
 		}
 	}
 
-	// 2. Common system paths (Debian/Ubuntu x86 + CUDA/TRT standard locations).
+	// 2. Common system paths (Debian/Ubuntu multiarch + CUDA/TRT standard locations).
+	//    Both x86_64 and aarch64 multiarch dirs are listed so TRT is auto-detected on
+	//    Jetson (the primary edge target), where libnvinfer.so.10 lives under aarch64.
 	dirs = append(dirs,
 		"/usr/lib/x86_64-linux-gnu",
+		"/usr/lib/aarch64-linux-gnu",
 		"/usr/local/lib",
 		"/usr/lib",
 		"/usr/local/cuda/lib64",

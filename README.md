@@ -24,6 +24,29 @@ commercial, edge, and closed deployments.
 > download (no HuggingFace source). **Python** and **JavaScript/TypeScript** clients, a
 > Docker server image, and Ollama-style `pull` from HuggingFace are included.
 
+## Contents
+
+- [Architecture](#architecture)
+- [Quickstart](#quickstart)
+  - [1 · Build](#1-build)
+  - [2 · ONNX Runtime + GPU](#2-onnx-runtime--gpu)
+  - [3 · Run a command (in-process)](#3-run-a-single-command-in-process-no-server)
+  - [4 · Run the server](#4-run-the-server)
+  - [5 · curl API](#5-call-the-api-with-curl)
+  - [6 · Python client](#6-infer-from-python)
+  - [6b · JS / TS client](#6b-infer-from-javascript--typescript)
+  - [7 · Docker](#7-run-with-docker)
+  - [JSON output schema](#sample-json-output-detection)
+- [Supported models](#supported-models)
+- [Model selection guide](#model-selection-guide)
+- [Hardware support](#hardware-support)
+- [Performance](#performance)
+- [Licensing discipline](#licensing-discipline)
+- [Adding a new model](#adding-a-new-model)
+- [Roadmap](#roadmap)
+- [Citation](#citation)
+- [License](#license)
+
 ---
 
 ## Architecture

@@ -33,6 +33,10 @@
       "Bash(./bin/visionserve pull *)",
       "Bash(bin/visionserve pull *)",
       "Bash(go build *)",
+      "Bash(go test *)",
+      "Bash(/home/trung/go-sdk/go/bin/go build *)",
+      "Bash(/home/trung/go-sdk/go/bin/go test *)",
+      "Bash(docker image inspect *)",
       "Bash(hf download *)",
       "Bash(hf models *)",
       "Bash(docker info)"
