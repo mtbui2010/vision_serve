@@ -14,6 +14,31 @@ needed for:
 - passing `numpy.ndarray` / `PIL.Image` images to `predict()`, and
 - decoding masks with `Mask.to_ndarray()`.
 
+## Contents
+
+- [Install](#install)
+- [Run the server](#run-the-server-first)
+- [Quickstart](#quickstart)
+- [CLI](#cli)
+  - [Output](#output)
+  - [Examples](#examples-1)
+- [Public API](#public-api)
+  - [Image inputs](#image-inputs)
+  - [Result types](#result-types)
+  - [Detection](#detection)
+  - [Segmentation](#segmentation)
+  - [Open-vocab / Grounded-SAM](#open-vocab--grounded-sam)
+  - [Depth estimation](#depth-estimation)
+  - [Classification](#classification)
+  - [CLIP embeddings](#clip-embeddings)
+  - [SCRFD / OCR](#scrfd--ocr)
+  - [Grasp detection](#grasp-detection)
+- [Post-processing](#post-processing)
+  - [Size filtering](#size-filtering----resultfilter_by_size)
+  - [Visualization](#visualization----draw--resultvisualize)
+- [Script examples](#examples)
+- [Tests](#tests)
+
 ## Install
 
 ```bash
@@ -158,12 +183,36 @@ visionserve load rf-detr
 
 `min_size` / `max_size` filter by bounding-box area as a **percentage of the image area** (0–100; `0` = no limit). Example: `min_size=0.5` keeps only objects covering at least 0.5% of the image. The conversion to absolute pixels is done server-side using the uploaded image dimensions.
 
-`predict()` `image` accepts:
-- `str` / `os.PathLike` — a path to an image file,
-- `bytes` — already-encoded image (PNG/JPEG), sent verbatim,
-- `PIL.Image.Image` — encoded to PNG client-side,
-- `numpy.ndarray` — `HWC` uint8 (or float in `[0,1]` → scaled to uint8); grayscale
-  `(H, W)` is promoted to RGB. Encoded to PNG client-side.
+### Image inputs
+
+`predict(model, image, ...)` accepts four image types — choose whichever fits your pipeline:
+
+```python
+from visionserve import Client
+from PIL import Image
+import numpy as np
+
+c = Client()
+
+# 1. File path (str or os.PathLike) — simplest
+res = c.predict("rf-detr", "photo.jpg")
+
+# 2. PIL.Image — e.g. after augmentation or crop
+pil_img = Image.open("photo.jpg")
+res = c.predict("rf-detr", pil_img)
+
+# 3. numpy ndarray — HWC uint8 (H×W×3), or float [0,1] scaled to uint8 automatically
+arr = np.array(pil_img)           # shape (H, W, 3), dtype uint8
+res = c.predict("rf-detr", arr)
+
+# 4. raw bytes — already-encoded PNG/JPEG, sent verbatim
+with open("photo.jpg", "rb") as f:
+    raw = f.read()
+res = c.predict("rf-detr", raw)
+```
+
+Grayscale `(H, W)` ndarrays are automatically promoted to RGB. Float arrays in `[0, 1]`
+are scaled to `uint8`. Encoded to PNG client-side before upload.
 
 Prompts (serialized to the server's string format):
 - `box`: `[x, y, w, h]` or a list of boxes → `"x,y,w,h"` joined by `;`.
@@ -202,62 +251,91 @@ Result(
 uncompressed RLE into a boolean `(height, width)` array (requires numpy). It is the
 exact inverse of the server's encoder.
 
+### Detection
+
+```python
+# RF-DETR (COCO) or RT-DETR
+res = c.predict("rf-detr", "photo.jpg")
+for d in res.detections:
+    print(d.cls, round(d.conf, 3), d.bbox)   # bbox = [x, y, w, h] in original px
+```
+
+### Segmentation
+
 ```python
 # Box-prompted segmentation
-res = c.predict("mobile-sam", "img.jpg", box=[50, 40, 120, 90])
 from PIL import Image
+res = c.predict("mobile-sam", "img.jpg", box=[50, 40, 120, 90])
 w, h = Image.open("img.jpg").size
-mask = res.masks[0].to_ndarray(width=w, height=h)   # bool (h, w)
+mask = res.masks[0].to_ndarray(width=w, height=h)   # bool (h, w) numpy array
 
 # No-prompt → Automatic Mask Generator (segment everything, ~256 masks)
 res = c.predict("mobile-sam", "img.jpg")
 for m in res.masks:
     print(m.bbox, round(m.conf, 3))
+
+# EfficientSAM and SAM2 — same prompt interface
+res = c.predict("efficient-sam", "img.jpg", box=[50, 40, 120, 90])
+res = c.predict("sam2", "img.jpg", box=[50, 40, 120, 90])
 ```
 
-For depth maps, reshape `depth_map` using `depth_width` / `depth_height`:
+### Open-vocab / Grounded-SAM
+
+```python
+# GroundingDINO — text → boxes
+res = c.predict("grounding-dino", "img.jpg", prompt="cat. remote.")
+for d in res.detections:
+    print(d.cls, round(d.conf, 3), d.bbox)
+
+# Grounded-SAM — text → boxes → masks
+res = c.predict("grounded-sam", "img.jpg", prompt="cat. remote.")
+print([d.cls for d in res.detections], "→", len(res.masks), "masks")
+```
+
+### Depth estimation
 
 ```python
 import numpy as np
 res = c.predict("depth-anything-v2", "img.jpg")
 depth = np.array(res.depth_map).reshape(res.depth_height, res.depth_width)
+# or MiDaS (faster, 256×256)
+res = c.predict("midas", "img.jpg")
 ```
 
-For classification, iterate `classifications` (already sorted by confidence descending):
+### Classification
 
 ```python
 res = c.predict("efficientnet-b0", "img.jpg")
 for cls_pred in res.classifications:
     print(cls_pred.cls, round(cls_pred.conf, 3))
+# or MobileNetV3 (lighter)
+res = c.predict("mobilenet-v3", "img.jpg")
 ```
 
-For image embeddings (CLIP), `embeddings` is a list of 512-d float vectors:
+### CLIP embeddings
 
 ```python
-res = c.predict("clip", "img.jpg")
-vec = res.embeddings[0]          # list[float], length 512
 import numpy as np
-v = np.array(vec)
-v /= np.linalg.norm(v)           # L2-normalize before cosine similarity
+res = c.predict("clip", "img.jpg")
+vec = np.array(res.embeddings[0])     # shape (512,)
+vec /= np.linalg.norm(vec)            # L2-normalize before cosine similarity
 ```
 
-For face detection (SCRFD), results come back as `detections` with 5 keypoints encoded
-in the `bbox` field extensions (see server schema). Basic usage mirrors RF-DETR:
+### SCRFD / OCR
 
 ```python
+# Face detection — detections with cls="face" and 5 keypoints in the bbox extensions
 res = c.predict("scrfd", "photo.jpg")
 for d in res.detections:
-    print(d.cls, round(d.conf, 3), d.bbox)   # cls="face", bbox=[x,y,w,h]
-```
+    print(d.cls, round(d.conf, 3), d.bbox)
 
-For OCR (PaddleOCR), text regions come back as `detections` and recognized strings in
-`cls`:
-
-```python
+# OCR — text regions as detections; cls = recognized text string
 res = c.predict("paddle-ocr", "doc.jpg")
 for d in res.detections:
-    print(d.cls, round(d.conf, 3), d.bbox)   # cls = recognized text
+    print(d.cls, round(d.conf, 3), d.bbox)
 ```
+
+### Grasp detection
 
 For planar grasp detection, results come back in `grasps`:
 

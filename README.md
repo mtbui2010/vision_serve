@@ -243,6 +243,8 @@ curl -s -H 'Content-Type: application/json' \
 
 ### 6. Infer from Python
 
+> **Full docs:** [clients/python/README.md](clients/python/README.md)
+
 A small client library lives in [`clients/python/`](clients/python/). It accepts a file
 path, a `PIL.Image`, a `numpy.ndarray`, or raw `bytes`, and parses the unified `Result`.
 
@@ -309,6 +311,8 @@ res.visualize("image.jpg").save("out.jpg")
 ```
 
 ### 6b. Infer from JavaScript / TypeScript
+
+> **Full docs:** [clients/js/README.md](clients/js/README.md)
 
 A sibling client lives in [`clients/js/`](clients/js/) with the same API as the Python
 one. It has **zero runtime dependencies** (uses built-in `fetch`/`FormData`/`Blob`) and

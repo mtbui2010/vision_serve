@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"os"
 	"strings"
 )
 
@@ -49,6 +50,14 @@ func DeviceString(ep Provider) string {
 // It always ensures CPU is present at the end of the chain so both edge and server can run.
 // Important for edge: try TensorRT → CUDA → CPU.
 func ResolveProviders(prefer []string) ([]Provider, error) {
+	// VISIONSERVE_EP overrides the manifest's runtime.prefer chain. Intended for
+	// edge EP×device benchmarking (force a single execution provider per run), e.g.
+	// VISIONSERVE_EP=cpu, =cuda, or =tensorrt. CPU is still appended as the final
+	// fallback below, so an unavailable GPU EP degrades gracefully rather than failing.
+	if ov := strings.TrimSpace(os.Getenv("VISIONSERVE_EP")); ov != "" {
+		prefer = strings.Split(ov, ",")
+	}
+
 	seen := map[Provider]bool{}
 	out := make([]Provider, 0, len(prefer)+1)
 	for _, p := range prefer {

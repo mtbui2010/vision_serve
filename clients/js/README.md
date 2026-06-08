@@ -8,6 +8,27 @@ only built-in globals (`fetch`, `FormData`, `Blob`), so it has **zero runtime
 dependencies** and runs on **Node >= 18** and in modern browsers. (Passing a file *path*
 to `predict()` uses `node:fs` and is Node-only; in the browser pass bytes or a `Blob`.)
 
+## Contents
+
+- [Install](#install)
+- [Usage](#usage)
+  - [Image inputs](#image-inputs)
+  - [Prompt options](#prompt-options-opts)
+  - [Detection](#detection)
+  - [Segmentation](#segmentation)
+  - [Open-vocab / Grounded-SAM](#open-vocab--grounded-sam)
+  - [Depth estimation](#depth-estimation)
+  - [Classification](#classification)
+  - [CLIP embeddings](#clip-embeddings)
+  - [Grasp detection](#grasp-detection)
+  - [Result schema](#result-schema)
+- [CLI](#cli)
+- [Post-processing](#post-processing)
+- [Size filtering](#size-filtering)
+- [Visualization](#visualization)
+- [Other API](#other-api)
+- [Develop](#develop)
+
 ## Install
 
 ```bash
@@ -26,47 +47,113 @@ make serve                       # listens on :11435
 
 ```ts
 import { Client } from "visionserve";
-
 const client = new Client("http://localhost:11435");
-
-// Detection — RF-DETR or RT-DETR
-const det = await client.predict("rf-detr", "image.jpg");
-for (const d of det.detections) {
-  console.log(d.cls, d.conf.toFixed(3), d.bbox); // bbox = [x, y, w, h] in original pixels
-}
-
-// Segmentation — box prompt (original-image coords)
-const seg = await client.predict("mobile-sam", "image.jpg", { box: [34, 58, 120, 240] });
-const flat = seg.masks[0]?.toMask(640, 480); // row-major Uint8Array, 1 = inside mask
-
-// Segmentation — no prompt → Automatic Mask Generator (segment everything)
-const amg = await client.predict("mobile-sam", "image.jpg");
-console.log(`found ${amg.masks.length} masks`);
-
-// Open-vocab segmentation — Grounded-SAM (text → boxes → masks)
-const gs = await client.predict("grounded-sam", "image.jpg", { prompt: "cat. remote." });
-console.log(gs.detections.map((d) => d.cls), "→", gs.masks.length, "masks");
-
-// Depth estimation
-const dep = await client.predict("depth-anything-v2", "image.jpg");
-// dep.depthMap is a Float32Array of length dep.depthWidth * dep.depthHeight
-
-// Classification — top-K ImageNet predictions
-const cls = await client.predict("efficientnet-b0", "image.jpg");
-for (const c of cls.classifications) {
-  console.log(c.cls, c.conf.toFixed(3));
-}
 ```
 
 ### Image inputs
 
-`predict(model, image, opts?)` accepts:
+`predict(model, image, opts?)` accepts three image types — choose whichever fits your
+pipeline:
 
-| Input | Notes |
-|-------|-------|
-| `string` | path to an image file on disk (Node only) |
-| `Uint8Array` / `ArrayBuffer` | already-encoded image bytes (PNG/JPEG) |
-| `Blob` | e.g. from a browser `<input type="file">` or `fetch` |
+```ts
+import fs from "node:fs";
+
+// 1. File path — simplest (Node only)
+const res = await client.predict("rf-detr", "photo.jpg");
+
+// 2. Uint8Array / ArrayBuffer — already-encoded PNG/JPEG bytes (Node + browser)
+const bytes = new Uint8Array(fs.readFileSync("photo.jpg"));
+const res2 = await client.predict("rf-detr", bytes);
+
+// 3. Blob — from browser <input> or fetch (browser + Node)
+const blob = await fetch("photo.jpg").then((r) => r.blob());
+const res3 = await client.predict("rf-detr", blob);
+```
+
+`ArrayBuffer` is also accepted and behaves identically to `Uint8Array`.
+
+### Detection
+
+```ts
+// RF-DETR (COCO-80) or RT-DETR
+const det = await client.predict("rf-detr", "photo.jpg");
+for (const d of det.detections) {
+  console.log(d.cls, d.conf.toFixed(3), d.bbox); // bbox = [x, y, w, h] in original pixels
+}
+```
+
+### Segmentation
+
+```ts
+// Box-prompted — decode the column-major RLE mask
+const seg = await client.predict("mobile-sam", "photo.jpg", { box: [34, 58, 120, 240] });
+const mask = seg.masks[0]?.toMask(640, 480);    // row-major Uint8Array; 1 = inside mask
+const mask2d = seg.masks[0]?.toMask2D(640, 480); // boolean[][]
+
+// No prompt → Automatic Mask Generator (segment everything)
+const amg = await client.predict("mobile-sam", "photo.jpg");
+console.log(`found ${amg.masks.length} masks`);
+
+// EfficientSAM and SAM2 — same interface
+const seg2 = await client.predict("efficient-sam", "photo.jpg", { box: [34, 58, 120, 240] });
+```
+
+### Open-vocab / Grounded-SAM
+
+```ts
+// GroundingDINO — text → boxes
+const gd = await client.predict("grounding-dino", "photo.jpg", { prompt: "cat. remote." });
+for (const d of gd.detections) console.log(d.cls, d.conf.toFixed(3), d.bbox);
+
+// Grounded-SAM — text → boxes → masks
+const gs = await client.predict("grounded-sam", "photo.jpg", { prompt: "cat. remote." });
+console.log(gs.detections.map((d) => d.cls), "→", gs.masks.length, "masks");
+```
+
+### Depth estimation
+
+```ts
+const dep = await client.predict("depth-anything-v2", "photo.jpg");
+// dep.depthMap is a Float32Array, length = dep.depthWidth × dep.depthHeight
+const depth2d: number[][] = [];
+for (let y = 0; y < dep.depthHeight; y++) {
+  depth2d.push(Array.from(dep.depthMap.slice(y * dep.depthWidth, (y + 1) * dep.depthWidth)));
+}
+```
+
+### Classification
+
+```ts
+const cls = await client.predict("efficientnet-b0", "photo.jpg");
+for (const c of cls.classifications) console.log(c.cls, c.conf.toFixed(3));
+```
+
+### CLIP embeddings
+
+```ts
+const emb = await client.predict("clip", "photo.jpg");
+// emb.embeddings[0] is a number[] of length 512
+const vec = emb.embeddings[0];
+const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0));
+const unit = vec.map((v) => v / norm);  // L2-normalize before cosine similarity
+```
+
+### Grasp detection
+
+```ts
+// Class-agnostic grasps (whole image)
+const grasp = await client.predict("grasp", "bin.jpg");
+for (const g of grasp.grasps) {
+  console.log(`q=${g.quality.toFixed(3)}  x=${g.x.toFixed(1)} y=${g.y.toFixed(1)}`
+            + `  θ=${g.theta.toFixed(3)}  w=${g.width.toFixed(1)}`);
+}
+
+// Class-aware grasps — text-prompted detector (grasp-gd)
+const graspGd = await client.predict("grasp-gd", "table.jpg", { prompt: "mug. bottle." });
+for (const g of graspGd.grasps) console.log(g.cls, g.quality.toFixed(3));
+```
+
+`Result.grasps` is `Grasp[]` where each `Grasp` has `{ x, y, theta, width, quality, cls, conf }`.
 
 ### Prompt options (`opts`)
 
@@ -86,15 +173,17 @@ Every task returns the same unified `Result`:
 ```ts
 class Result {
   task: string;                  // "detection" | "segmentation" | "open_vocab" |
-                                 // "depth" | "classification" | "embed" | ...
+                                 // "depth" | "classification" | "embedding" | "grasp" | ...
   model: string;
+  device: string;                // "cpu" | "gpu:0" | "gpu:0+trt"
   detections: Detection[];       // { bbox: [x,y,w,h], cls: string, conf: number }
   masks: Mask[];                 // { rle, bbox, conf } — column-major RLE
   classifications: Classification[]; // { cls: string, conf: number } — top-K
-  depthMap: number[];            // flat row-major float array, size depthWidth×depthHeight
+  grasps: Grasp[];               // { x, y, theta, width, quality, cls, conf }
+  depthMap: Float32Array;        // flat row-major, length depthWidth×depthHeight
   depthWidth: number;
   depthHeight: number;
-  embeddings: number[][];        // one embedding vector per image
+  embeddings: number[][];        // one 512-d vector per image (CLIP)
   durationMs: number;
 }
 ```
