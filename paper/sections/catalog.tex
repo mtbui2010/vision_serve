@@ -5,11 +5,11 @@
 \subsection{Task Types}
 \label{sec:catalog:tasks}
 
-VisionServe organises its model portfolio around six computer-vision task types.
+VisionServe organises its model portfolio around seven computer-vision task types.
 Table~\ref{tab:task-types} defines each type, states the expected input and output
 contract, and names representative models currently registered in the system.
 
-\begin{table}[t]
+\begin{table*}[t]
   \centering
   \small
   \caption{Task types supported by VisionServe.}
@@ -54,20 +54,30 @@ contract, and names representative models currently registered in the system.
       Extract a compact, semantically rich embedding vector suitable for
       retrieval, zero-shot classification, or downstream ML pipelines.
       &
-      CLIP ViT-B/32 \\
+      CLIP ViT-B/32 \\[4pt]
+
+    \texttt{grasp}         & image $\to$ grasps &
+      Synthesise planar parallel-jaw grasps ($(x,y,\theta,\text{width},\text{quality})$ in
+      original-image coordinates) from a segmentation mask via a pure-Go analytic
+      antipodal force-closure search (no extra ONNX weights).  Class-agnostic
+      (whole-image automask) or class-aware (detector $\to$ mask $\to$ grasp).
+      &
+      grasp, grasp-rfdetr, grasp-gd \\
     \bottomrule
   \end{tabular}
-\end{table}
+\end{table*}
 
 \subsection{Model Inventory}
 \label{sec:catalog:inventory}
 
-Table~\ref{tab:model-inventory} enumerates all 16 models in the current VisionServe
+Table~\ref{tab:model-inventory} enumerates all 19 models in the current VisionServe
 registry.  Each model is distributed as one or more ONNX files; multi-session models
-(MobileSAM, EfficientSAM, SAM2, Grounded-SAM) use the \texttt{PipelineModel} interface
-and declare a \texttt{files:} role map in their manifest.
+(MobileSAM, EfficientSAM, SAM2, Grounded-SAM, and the grasp pipelines) use the
+\texttt{PipelineModel} interface and declare a \texttt{files:} role map in their manifest.
+The three grasp pipelines reuse the segmentation/detection weights of sibling models and add
+no new ONNX file: the grasp synthesis itself is a pure-Go analytic stage.
 
-\begin{table}[t]
+\begin{table*}[t]
   \centering
   \small
   \caption{%
@@ -90,23 +100,36 @@ and declare a \texttt{files:} role map in their manifest.
     \texttt{efficient-sam}    & segmentation  & Apache-2.0 & ViT-S/16 encoder with masked-image pretraining \\
     \texttt{sam2}             & segmentation  & Apache-2.0 & Hiera-Tiny image/video encoder + SAM2 decoder \\
     \texttt{nano-sam}$^\dagger$& segmentation & Apache-2.0 & ResNet-18 distilled SAM encoder \\
-    \texttt{grounded-sam}$^\dagger$ & segmentation & Apache-2.0 & GroundingDINO boxes $\to$ MobileSAM masks (composite) \\
+    \texttt{grounded-sam}    & open\_vocab    & Apache-2.0 & GroundingDINO boxes $\to$ MobileSAM masks (composite) \\
     \texttt{midas}            & depth         & MIT        & DPT-Hybrid (ViT-H + dense prediction transformer) \\
     \texttt{depth-anything-v2}$^\dagger$ & depth & Apache-2.0 & ViT-S teacher-student depth foundation model \\
     \texttt{efficientnet-b0}  & classification& Apache-2.0 & EfficientNet-B0 compound-scaled CNN \\
     \texttt{mobilenet-v3}     & classification& Apache-2.0 & MobileNetV3-Large depthwise-separable CNN \\
     \texttt{clip}             & embed         & MIT        & CLIP ViT-B/32 vision encoder (image side only) \\
+    \texttt{grasp}            & grasp         & Apache-2.0 & MobileSAM automask $\to$ pure-Go analytic grasps (class-agnostic) \\
+    \texttt{grasp-rfdetr}     & grasp         & Apache-2.0 & RF-DETR boxes $\to$ MobileSAM $\to$ analytic grasps (class-aware) \\
+    \texttt{grasp-gd}         & grasp         & Apache-2.0 & GroundingDINO boxes $\to$ MobileSAM $\to$ analytic grasps (text-prompted) \\
     \bottomrule
   \end{tabular}
-\end{table}
+\end{table*}
 
 \noindent
-Four models are currently pending benchmark runs: \texttt{rt-detr} and
-\texttt{depth-anything-v2} require authenticated HuggingFace downloads;
-\texttt{nano-sam} requires a manual ONNX export; and \texttt{grounded-sam} is a
-composite pipeline whose end-to-end latency depends on the individual
-GroundingDINO and MobileSAM sessions.  Benchmark results for these models
-will be added in a future revision.
+Three models marked $\dagger$ remain pending: \texttt{rt-detr} and
+\texttt{depth-anything-v2} require authenticated HuggingFace downloads, and
+\texttt{nano-sam} requires a manual ONNX export.  All four grasp/composite pipelines
+(\texttt{grasp}, \texttt{grasp-rfdetr}, \texttt{grounded-sam}, \texttt{grasp-gd}) are now
+benchmarked (Section~\ref{sec:eval:latency}); the two GroundingDINO-based pipelines are
+serialized for concurrency-safety (a fixed \texttt{SA\_ONSTACK} crash, Section~\ref{sec:limitations})
+and are reported single-stream.
+
+\paragraph{Grasp and license discipline.}
+The grasp capability also illustrates why the license gate (C1) is load-bearing rather than
+decorative.  In selecting a grasp method we rejected the most accurate learned grasp
+models, GQ-CNN / FC-GQ-CNN (Dex-Net), under a UC~Berkeley ``educational, research, and
+not-for-profit'' license, because that non-commercial bar is incompatible with
+VisionServe's permissive, commercial-friendly stance, as AGPL is.  The shipped path
+instead pairs a permissive MobileSAM mask with a clean-room pure-Go analytic synthesizer (no
+weights, no license at all), so the seventh task adds capability without adding license risk.
 
 \subsection{License Safety}
 \label{sec:catalog:license}
@@ -114,12 +137,12 @@ will be added in a future revision.
 Open-source computer-vision models carry heterogeneous licenses, and the distinction
 between permissive and copyleft licenses has material consequences for downstream
 deployments.  The most prominent example is the Ultralytics YOLO family
-\cite{ultralytics2023yolo}, which is released under the \emph{GNU Affero General
-Public License v3.0} (AGPL-3.0) \cite{agpllicense}.  AGPL-3.0 extends the GPL copyleft
-to networked services: any software that \emph{uses} AGPL code and provides access to
-users over a network must release its \emph{entire} source under AGPL-3.0.  As a result,
+\cite{ultralytics2023yolo}, which is released under the GNU Affero General
+Public License v3.0 (AGPL-3.0) \cite{agpllicense}.  AGPL-3.0 extends the GPL copyleft
+to networked services: any software that uses AGPL code and provides access to
+users over a network must release its entire source under AGPL-3.0.  As a result,
 integrating a single AGPL model into an inference server would virally relicense the
-server — and every product built on it — under AGPL-3.0.  This is incompatible with
+server (and every product built on it) under AGPL-3.0.  This is incompatible with
 closed-source, proprietary, or commercial deployments; the only escape is a separate
 commercial license negotiated with the copyright holder.
 
@@ -128,7 +151,7 @@ VisionServe enforces an allowlist of permissive licenses
 in the registry parser at process startup \cite{apachelicense}.  Any model manifest
 that declares a \texttt{license} field outside this allowlist causes the server to
 abort with a clear error message, preventing accidental integration of copyleft models.
-Critically, this check is implemented in code, not merely documented: the manifest
+This check is implemented in code, not merely documented: the manifest
 \texttt{license} field is a required string, and the parser rejects absent or
 non-allowlisted values before any ONNX session is initialised.  This design choice is
 deliberate: because VisionServe is itself Apache-2.0 and targets edge deployments in
@@ -136,7 +159,7 @@ commercial and closed-source products, its permissive character must be preserve
 every model it ships.
 
 \paragraph{Threat model.}
-We scope the license gate (contribution~C1) explicitly, since its value depends on
+We scope the license gate (contribution~C1), since its value depends on
 stating both what it defends against and what it cannot.
 \emph{In scope.}  The gate is designed to prevent four failure modes at the moment the
 runtime loads model weights:
@@ -145,10 +168,13 @@ permissive deployment;
 (ii)~``permissive-washing'' or license drift, where a model's restrictive license is
 silently dropped or relabelled as permissive on the way into the deployment;
 (iii)~tampered or swapped weight bytes that no longer correspond to the audited model
-(a content mismatch); and
-(iv)~weights pulled from an unvetted origin.
+(a content mismatch);
+(iv)~weights pulled from an unvetted origin; and
+(v)~a manifest relabelled by its author with a permissive-but-wrong license that diverges from
+the maintainer-audited upstream (caught by the provenance ledger, which the allowlist alone
+cannot detect because the wrong label is itself permissive).
 \emph{Mechanism.}  Enforcement is entirely offline, in a single binary, and consists of
-three bound checks applied at load time.
+four bound checks applied at load time.
 First, the declared \texttt{license} field must be in the permissive allowlist
 (\texttt{Apache-2.0}/\texttt{MIT}/\texttt{BSD}); the registry parser
 (\texttt{Manifest.validate()}) refuses any other value before a session is created.
@@ -156,19 +182,28 @@ Second, the SHA-256 digest of the weight bytes must equal the digest declared in
 manifest (\texttt{Manifest.VerifyWeights()}); a mismatch refuses the load.
 Third, when a verified-source allowlist is supplied, the manifest's \texttt{source\_url}
 must fall under an audited prefix.
-Together these checks \emph{bind} a declared-permissive license to specific audited bytes
-obtained from an audited origin, closing the relabelling and wrong-origin holes without
-any network call.
-\emph{Out of scope.}  The gate \emph{trusts the declared license string}: it enforces a
-license \emph{policy}, but does not semantically verify that the declared license matches
-the model's true legal status.  A model that is deliberately mislabelled at its audited
-upstream---for example, a genuinely AGPL model relabelled \texttt{Apache-2.0} at the
-origin whose bytes and \texttt{source\_url} are internally consistent---is therefore
-\emph{not} caught: the SHA-256 and source binding mitigate \emph{substitution} (swapped
-bytes, wrong mirror), not \emph{upstream mislabelling}.  We accordingly frame~C1 as
-load-time license-\emph{policy} enforcement, hardened by content-hashing and a
-verified-source pin, and explicitly \emph{not} as a machine-checkable license guarantee
-or a license oracle.
+Fourth, the check that closes the upstream-relabelling hole for the curated
+catalog: in the opt-in verified mode the contributor-declared license must equal the
+license recorded for that \texttt{source\_url} prefix in a \emph{maintainer-audited
+license-provenance ledger} (\texttt{Manifest.VerifyLicenseProvenance()}).  The ledger is a
+separate in-binary table in which a maintainer records, per audited upstream, the SPDX license
+they verified by reading the upstream's actual LICENSE file, the URL of that file, and its
+SHA-256 as evidence.  Because contributors edit manifests and maintainers edit the ledger, the
+two authorities are separated: a pull request that flips a manifest's \texttt{license} to
+sneak in a copyleft model is refused by a record the PR author does not control.  Together these
+checks bind a declared-permissive license to specific audited bytes, an audited origin,
+and an independent audited record of the upstream's true license, without any network call.
+\emph{Out of scope.}  The allowlist and SHA-256/source pins alone still trust the declared
+license string and mitigate only substitution (swapped bytes, wrong mirror), not
+upstream mislabelling; the ledger removes that residue for the shipped catalog by
+cross-checking against an independent human audit.  What remains out of scope is genuine: the
+ledger's ground truth is a one-time human audit of the upstream LICENSE file (a re-audit detects
+later divergence via the pinned LICENSE-file hash, but an upstream mislabelled at audit
+time is not caught), and it covers only audited upstreams, not arbitrary un-audited uploads, for
+which a universal license oracle is impossible.  We therefore frame~C1 as load-time
+license-policy enforcement, hardened by content-hashing, a verified-source pin, and an
+audited provenance ledger: strong for the curated catalog, and not a
+machine-checkable license guarantee for arbitrary models.
 \emph{Why existing layers do not cover it.}  As discussed in
 Section~\ref{sec:related}, build-time software-composition-analysis scanners
 (ScanCode, FOSSology, Snyk) operate on source dependency trees and emit reports, not a
@@ -177,21 +212,22 @@ Gatekeeper, Sigstore policy-controller) verify container-image signatures at pod
 admission, i.e.\ container integrity, not a license policy over model weights; and model
 signing (OpenSSF/Sigstore) proves signer identity and byte integrity, not license policy.
 None of these enforces a license policy at the moment the runtime loads model weights,
-offline---which is precisely the gap~C1 fills.
+offline, which is the gap~C1 fills.
 
 \paragraph{Adversarial demonstration.}
-To show that the gate \emph{actually refuses} bad models rather than merely documenting an
+To show that the gate refuses bad models rather than merely documenting an
 intent to, Table~\ref{tab:gate} reports a reproducible adversarial demonstration.
 Starting from a baseline manifest (permissive license, correct SHA-256, audited source)
-that is \emph{admitted}, we apply one adversarial mutation at a time and record the gate's
-verdict.  Each mutation maps to one of the three bound checks above, and each is refused
-with the runtime's own diagnostic message.  The four cases are exercised by the test
+that is admitted, we apply one adversarial mutation at a time and record the gate's
+verdict.  Each mutation maps to one of the four bound checks above, and each is refused
+with the runtime's own diagnostic message.  The six cases are exercised by the test
 \texttt{TestGate\_AdversarialDemo}; the transcript is reproducible via
 \texttt{go test ./internal/registry -run TestGate\_AdversarialDemo -v}.
 
 \begin{table}[t]
   \centering
-  \small
+  \footnotesize
+  \setlength{\tabcolsep}{3pt}
   \caption{%
     Reproducible adversarial demonstration of the load-time license gate (C1).
     Starting from an admitted baseline, each row applies one manifest mutation and
@@ -201,7 +237,7 @@ with the runtime's own diagnostic message.  The four cases are exercised by the 
     with \(\dots\) and the temporary weight path is shown as \texttt{<model.onnx>}.%
   }
   \label{tab:gate}
-  \begin{tabular}{lp{2.6cm}p{6.0cm}}
+  \begin{tabular}{p{1.2cm}p{1.5cm}p{5.4cm}}
     \toprule
     \textbf{Condition} & \textbf{Manifest change} & \textbf{Gate outcome} \\
     \midrule
@@ -224,8 +260,19 @@ with the runtime's own diagnostic message.  The four cases are exercised by the 
     Wrong origin &
       \texttt{source\_url} outside allowlist &
       \textbf{REFUSED (source)}: \texttt{source\_url
-      "https://random-mirror.example.com/x.onnx" is not under any audited prefix in the
-      verified-source allowlist} \\
+      "https://random-mirror.\allowbreak example.com/x.onnx" is not under any audited prefix in the
+      verified-source allowlist} \\[4pt]
+
+    Relabel vs.\ ledger &
+      permissive but \texttt{license=MIT} where ledger says \texttt{Apache-2.0} &
+      \textbf{REFUSED (ledger)}: \texttt{declared license "MIT" does not match the
+      maintainer-audited upstream license "Apache-2.0" \dots\ (manifest may be mislabeled or
+      relicensed)}; the allowlist cannot catch this (MIT is permissive), only the ledger does \\[4pt]
+
+    Un-audited upstream &
+      \texttt{source\_url} with no ledger entry &
+      \textbf{REFUSED (ledger)}: \texttt{\dots\ has no maintainer-audited license-ledger entry
+      (verified mode requires an audited upstream)} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -246,11 +293,13 @@ request the correct session from \texttt{lifecycle.Manager}.
 
 The following listing shows a representative manifest for \texttt{rf-detr-nano}:
 
-\begin{lstlisting}[language=yaml, caption={Sample manifest: \texttt{rf-detr-nano}.},
+\begin{lstlisting}[language=yaml, float=tbp, caption={Sample manifest: \texttt{rf-detr-nano}.},
                    label={lst:manifest}]
 name: rf-detr-nano
 task: detection
 license: Apache-2.0
+source_url: https://huggingface.co/PierreMarieCurie/.../rf-detr-nano.onnx
+sha256: 3fcbba0f...be67abb2   # binds license to these exact bytes (verified mode)
 
 execution_providers:
   - tensorrt

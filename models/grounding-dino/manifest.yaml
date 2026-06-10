@@ -8,6 +8,10 @@ license: Apache-2.0
 architecture: grounding-dino
 
 # Single ONNX graph (role "model"). The BERT vocab.txt sits next to it (loaded in Go).
+source_url: https://huggingface.co/onnx-community/grounding-dino-tiny-ONNX/resolve/main/onnx/model.onnx
+sha256:
+  model: 267c8b00d269dc2dda0d8592812d3027abd5fb59f1cabf8e3d56f8fdf07f68ec
+
 files:
   model: model.onnx
 

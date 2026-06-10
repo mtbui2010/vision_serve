@@ -18,18 +18,18 @@ that results are reproducible across machines without a TensorRT installation.
 The ONNX format and runtime are described in \cite{onnx2019}.
 
 \paragraph{Benchmark protocols.}
-We use \emph{two} distinct protocols, and are careful throughout not to conflate
+We use two distinct protocols and do not conflate
 them.
-\emph{(a) Per-model single-stream latency} (Table~\ref{tab:benchmark}): for each
+(a) Per-model single-stream latency (Table~\ref{tab:benchmark}): for each
 model, five warm-up requests were issued and discarded to ensure the ONNX session
 was fully initialised and any JIT optimisation passes had completed; twenty timed
-requests were then issued \emph{sequentially} from a single-threaded HTTP client over
+requests were then issued sequentially from a single-threaded HTTP client over
 the loopback interface (\texttt{localhost:11435}), and all p50/p95 figures in
 Table~\ref{tab:benchmark} are reported over these 20 requests.  The RPS column of
-Table~\ref{tab:benchmark} is therefore a \emph{single-stream} rate (the reciprocal of
-mean end-to-end latency at concurrency~1), and is \emph{not} a saturated-throughput
+Table~\ref{tab:benchmark} is therefore a single-stream rate (the reciprocal of
+mean end-to-end latency at concurrency~1), and is not a saturated-throughput
 number.
-\emph{(b) Concurrency-sweep throughput} (Tables~\ref{tab:crossover} and
+(b) Concurrency-sweep throughput (Tables~\ref{tab:crossover} and
 \ref{tab:tensorin}): the crossover and peak-goodput results were obtained with the
 closed-loop load-generation harness (\texttt{eval/loadgen/sweep\_openloop.py}), which
 holds a fixed number of in-flight requests $C$ and records completed-request rate and
@@ -39,22 +39,22 @@ otherwise, throughput results use this harness with the same JPEG input
 
 \paragraph{Metrics.}
 \begin{itemize}
-  \item \textbf{p50 / p95} — 50th and 95th percentile of \emph{end-to-end HTTP
-    latency} (wall-clock time from client send to response received), in milliseconds.
+  \item \textbf{p50 / p95}: 50th and 95th percentile of end-to-end HTTP
+    latency (wall-clock time from client send to response received), in milliseconds.
     This includes HTTP serialisation, Go image decoding and preprocessing, ONNX
     inference, postprocessing, and JSON serialisation.
-  \item \textbf{srv\_p50} — 50th percentile of \emph{server-side inference latency},
+  \item \textbf{srv\_p50}: 50th percentile of server-side inference latency,
     defined as the time spent exclusively inside ONNX session \texttt{Run} calls.
     This isolates pure tensor-computation cost from Go-layer overhead.
-  \item \textbf{RPS} — \emph{single-stream} rate in requests per second at batch
+  \item \textbf{RPS}: single-stream rate in requests per second at batch
     size~1, derived from the mean end-to-end latency under protocol~(a).  This is the
-    throughput of one sequential client, \emph{not} the saturated throughput; the
+    throughput of one sequential client, not the saturated throughput; the
     latter is measured separately by the concurrency sweep
     (Section~\ref{sec:eval:python}).
-  \item \textbf{VRAM (MB)} — peak GPU memory as reported by \texttt{nvidia-smi
+  \item \textbf{VRAM (MB)}: peak GPU memory as reported by \texttt{nvidia-smi
     --query-compute-apps} at inference time, after the session is warm.
-  \item \textbf{ONNX (MB)} — size of the ONNX model file(s) on disk.
-  \item \textbf{Cold-start (s)} — elapsed time from process start (before any request)
+  \item \textbf{ONNX (MB)}: size of the ONNX model file(s) on disk.
+  \item \textbf{Cold-start (s)}: elapsed time from process start (before any request)
     to the completion of the first successful inference, measuring model load from disk,
     ONNX session initialisation, and provider graph optimisation.
 \end{itemize}
@@ -64,18 +64,21 @@ One subtlety governs every VisionServe-vs-baseline comparison below.  VisionServ
 internal \texttt{duration\_ms} counter spans preprocess~+~ORT~Run~+~postprocess, whereas
 the FastAPI+ONNX-Runtime baseline's server-side timer covers ORT~Run only (it excludes
 its own Pillow decode and tensor marshalling).  The two \texttt{duration\_ms} values are
-therefore \emph{not} directly comparable, and we never compare them as raw server-side
+therefore not directly comparable, so we do not compare them as raw server-side
 numbers.  All head-to-head latency and throughput figures use instead the
-\emph{client-measured end-to-end} time (HdrHistogram, measured by the load generator
+client-measured end-to-end time (HdrHistogram, measured by the load generator
 outside both servers), which charges every system for its full decode$\to$infer$\to$
-respond pipeline on the identical wire input — the only apples-to-apples metric.
+respond pipeline on the identical wire input, the only apples-to-apples metric.
 
 \subsection{Latency and Throughput}
 \label{sec:eval:latency}
 
-Table~\ref{tab:benchmark} reports the full benchmark results for all 12 models with
-available measurements, sorted by p50 latency ascending.  A horizontal rule separates
-lightweight models (p50 $<$ 100~ms) from heavier models (p50 $\geq$ 100~ms).
+Table~\ref{tab:benchmark} reports the full benchmark results for the 12 single-model
+entries with available single-stream measurements, sorted by p50 latency ascending.  A
+horizontal rule separates lightweight models (p50 $<$ 100~ms) from heavier models
+(p50 $\geq$ 100~ms).  These 12 entries plus the four grasp/composite pipelines benchmarked
+later in this section give 16 of the 19 registered models measured (the remaining three,
+rt-detr, depth-anything-v2, and nano-sam, are pending).
 
 \begin{table*}[t]
   \centering
@@ -85,8 +88,9 @@ lightweight models (p50 $<$ 100~ms) from heavier models (p50 $\geq$ 100~ms).
     20 timed requests after 5 warm-up discards.
     Sorted by p50 ascending; horizontal rule separates lightweight ($<$100~ms)
     from heavy ($\geq$100~ms) models.
-    Four models (rt-detr, depth-anything-v2, nano-sam, grounded-sam) are
-    not yet benchmarked and are omitted.%
+    Four models are omitted from this single-stream latency table: rt-detr,
+    depth-anything-v2, and nano-sam are pending, while grounded-sam is a composite
+    pipeline benchmarked separately later in this section.%
   }
   \label{tab:benchmark}
   \begin{tabular}{llrrrrrrr}
@@ -114,8 +118,8 @@ lightweight models (p50 $<$ 100~ms) from heavier models (p50 $\geq$ 100~ms).
 \end{table*}
 
 \paragraph{Classification and embedding.}
-The three lightest models — CLIP \cite{radford2021clip}, MobileNetV3
-\cite{howard2019mobilenetv3}, and EfficientNet-B0 \cite{tan2019efficientnet} — achieve
+The three lightest models (CLIP \cite{radford2021clip}, MobileNetV3
+\cite{howard2019mobilenetv3}, and EfficientNet-B0 \cite{tan2019efficientnet}) achieve
 p50 latencies of 33--40~ms and sustain 23--28~RPS.  Their \texttt{srv\_p50} values of
 12--21~ms reveal that ONNX inference itself is very fast; the remaining 15--20~ms is
 dominated by Go-side JPEG decoding, tensor allocation, and JSON serialisation.  These
@@ -134,7 +138,7 @@ text-detection preprocessing suited to document images.
 
 \paragraph{Segmentation.}
 The three segmentation models require 161--242~ms p50 owing to their encoder--decoder
-architectures.  Notably, \texttt{srv\_p50} is very close to the total p50 for all three
+architectures.  Here \texttt{srv\_p50} is very close to the total p50 for all three
 (138~ms vs.\ 161~ms for MobileSAM \cite{zhang2023mobilesam}; 158~ms vs.\ 181~ms for
 EfficientSAM \cite{xiong2023efficientsam}; 222~ms vs.\ 242~ms for SAM2
 \cite{ravi2024sam2}), confirming that inference dominates and Go overhead is negligible
@@ -150,6 +154,37 @@ confirms that the dual-encoder (Swin-T image + BERT text) computation accounts f
 nearly the entire latency.  At 1.7~RPS it is unsuitable for high-frame-rate video,
 but practical for query-driven image analysis.
 
+\paragraph{Grasp synthesis.}
+The class-agnostic \texttt{grasp} pipeline is the heaviest path in the catalog, at a warm p50 of
+$\sim$4.1\,s (closed-loop $C{=}1$; throughput rises from 0.23 to 0.75\,rps as concurrency
+overlaps decode, \texttt{errors}=0; $\sim$5.9\,GB VRAM, $\sim$5\,s cold-start).  The cost is
+not the grasp math (the pure-Go analytic synthesizer adds no ONNX session) but the
+whole-image automask front-end, which issues 256 MobileSAM decoder calls over a $16{\times}16$
+prompt grid to find every object before any grasp is computed.  The class-aware variants avoid this by segmenting only detected boxes, trading
+exhaustiveness for an order-of-magnitude fewer decoder calls: \texttt{grasp-rfdetr} (RF-DETR boxes
+$\to$ MobileSAM $\to$ analytic grasp) runs at a warm p50 of 469\,ms at $C{=}1$ and scales cleanly
+to 5.7\,rps at $C{=}4$ with \texttt{errors}=0.  The point of the benchmark is that a seventh,
+robotics-oriented capability drops into the same single binary and unified \texttt{Result} schema
+with zero new inference weights.
+
+\paragraph{Composite GroundingDINO pipelines (and a concurrency bug we found and fixed).}
+The two pipelines that chain GroundingDINO with MobileSAM are functionally correct single-stream:
+\texttt{grounded-sam} (text $\to$ box $\to$ mask) runs at a warm single-stream p50 of $\sim$0.93\,s
+(8 detections, 4 masks; $\sim$19\,s cold-start for the 719\,MB model), and \texttt{grasp-gd}
+(text $\to$ box $\to$ analytic grasp) at $\sim$0.78\,s.  Initially both failed under
+concurrent in-flight load: the GroundingDINO graph plus the chained MobileSAM decoder pool issue
+many concurrent cgo ONNX~Runtime calls, which intermittently aborted the process with a Go-runtime
+fatal (\texttt{non-Go code set up signal handler without SA\_ONSTACK}) from the ORT/CUDA native
+layer.  We fixed this by serializing whole GroundingDINO pipelines with a shared mutex
+(\texttt{groundingdino.PipelineMu}): \texttt{grounding-dino}, \texttt{grounded-sam}, and
+\texttt{grasp-gd} now run one request at a time, while \texttt{grasp-rfdetr} (no GroundingDINO,
+already concurrency-clean, \texttt{errors}=0) stays fully concurrent.  After the fix a controlled
+$C{=}4$ concurrent stress returns 23/24 requests successfully with no crash (versus all-errors
+before).  The trade-off is that these heavy, low-QPS pipelines run
+serialized, so their concurrent throughput equals the single-stream rate; lifting it would
+need per-request session isolation or an \texttt{SA\_ONSTACK}-safe ORT thread configuration
+(Section~\ref{sec:limitations}).
+
 \paragraph{Tensor input: isolating the decode deficit.}
 The end-to-end results above charge VisionServe for server-side image decode and
 preprocessing on every request.  To isolate the runtime from that cost, we added a
@@ -159,22 +194,22 @@ NVIDIA Triton serving the same MobileNetV3-Small ONNX.  Table~\ref{tab:tensorin}
 reports closed-loop throughput and latency on the A6000.  With a pre-decoded tensor,
 VisionServe's single-request latency drops to a p50 of 8.1~ms (min 3.4~ms) at 118~rps,
 versus 12.7~rps / 57~ms for the JPEG-in path, and its concurrency-64 peak of 563~rps
-essentially matches a \emph{default-configuration} Triton (HTTP front end, a single
+essentially matches a default-configuration Triton (HTTP front end, a single
 model instance, no dynamic batching), which peaks at $\sim$549~rps with a comparable
 2.9~ms single-request floor.  In the no-decode regime the two runtimes are therefore
 within measurement noise (peak 563 vs.\ 549~rps; min 3.4 vs.\ 2.9~ms), indicating that
 VisionServe's earlier low-load deficit was attributable to server-side image decode
-rather than the ONNX serving path itself.  We stress that the Triton figure is its
+rather than the ONNX serving path itself.  The Triton figure is its
 out-of-the-box default; enabling dynamic batching or multiple instances would raise
-Triton's ceiling, and we do not claim parity against a tuned Triton deployment.
+Triton's ceiling, and these results do not establish parity against a tuned Triton deployment.
 
 \paragraph{The decode-parallelization twist.}
-Counter-intuitively, VisionServe's \emph{JPEG-in} peak goodput (695~rps,
-Table~\ref{tab:crossover}) exceeds its \emph{tensor-in} peak (563~rps).  Pure-Go JPEG decode is CPU-heavy but
+VisionServe's JPEG-in peak goodput (695~rps,
+Table~\ref{tab:crossover}) exceeds its tensor-in peak (563~rps).  Pure-Go JPEG decode is CPU-heavy but
 embarrassingly parallel across goroutines and cores, so under concurrency the decode
 work overlaps with GPU inference and the server saturates more work overall.  The
 tensor-in path removes that parallel CPU work and becomes GPU-mutex- and HTTP-bound,
-exactly like Triton---which is precisely why its ceiling converges with Triton's rather
+like Triton, which is why its ceiling converges with Triton's rather
 than exceeding it.  On the client side, the choice of wire format dominates round-trip
 cost from an \texttt{np.ndarray}: a raw tensor submission measures $\sim$8~ms end to end,
 versus $\sim$64~ms for a JPEG round-trip and $\sim$136~ms for PNG.
@@ -200,9 +235,6 @@ versus $\sim$64~ms for a JPEG round-trip and $\sim$136~ms for PNG.
     Triton (default config) & 214  & 2.9  & 549 \\
     \bottomrule
   \end{tabular}
-  % All cells measured (closed-loop, HdrHistogram). VS JPEG-in peak (695) is the
-  % concurrency-64 figure also reported in Table~\ref{tab:benchmark}. Triton peak 549
-  % is at C=16 (declines to 524 at C=64 under default config).
 \end{table}
 
 \subsection{Cold-Start Analysis}
@@ -283,35 +315,35 @@ therefore a one-time penalty per process lifetime, not per request.
 \subsection{Comparison with a Python Baseline}
 \label{sec:eval:python}
 
-Mainstream CV model-serving stacks are built around Python runtimes — most commonly
+Mainstream CV model-serving stacks are built around Python runtimes, most commonly
 Flask or FastAPI fronting a PyTorch \texttt{model.forward()} call, or higher-level
 frameworks such as TorchServe \cite{pytorch2023torchserve} and BentoML.  To make a
 fair, like-for-like comparison we measured a FastAPI+ONNX-Runtime baseline directly:
-the \emph{same} MobileNetV3-Small and EfficientNet-B0 ONNX files, the same CUDA
+the same MobileNetV3-Small and EfficientNet-B0 ONNX files, the same CUDA
 Execution Provider, the same A6000 host, and the same load generator and JPEG input as
-VisionServe.  The baseline is the deployed default — a single \texttt{uvicorn} worker
-with one ONNX Runtime session (\texttt{SESSION\_POOL=1}) — so that any concurrency
+VisionServe.  The baseline is the deployed default, a single \texttt{uvicorn} worker
+with one ONNX Runtime session (\texttt{SESSION\_POOL=1}), so that any concurrency
 result is scoped to the GIL-bound CPython configuration most teams actually ship, not a
 hand-tuned multi-process deployment.  VisionServe ran on GPU\,2 and the baseline on
 GPU\,3 of the same node; all rows reported below recorded \texttt{errors}=0.
 
 \paragraph{The crossover.}
 Table~\ref{tab:crossover} reports the closed-loop concurrency sweep for MobileNetV3-Small.
-The two systems exhibit a clean \emph{crossover}.  At low concurrency the Python baseline
-is faster per request — at $C{=}1$ its end-to-end p50 is 16.1\,ms versus VisionServe's
-57.2\,ms — and it correspondingly delivers higher single-client throughput (66.0 vs.\
+The two systems exhibit a clean crossover.  At low concurrency the Python baseline
+is faster per request (at $C{=}1$ its end-to-end p50 is 16.1\,ms versus VisionServe's
+57.2\,ms) and it correspondingly delivers higher single-client throughput (66.0 vs.\
 12.7\,rps).  Computing $\Delta(C)=\text{rps}_{\text{VS}}-\text{rps}_{\text{FastAPI}}$ and
 locating the zero-crossing places the crossover at $C^\star\!\approx\!4$ for both
 MobileNetV3-Small ($\Delta$ flips from $-1.8$ at $C{=}4$ to $+114.9$ at $C{=}8$) and
 EfficientNet-B0 ($C^\star\!\approx\!4.4$).  Above the crossover VisionServe pulls away
-sharply: at $C{=}64$ it sustains 694.6\,rps against the baseline's 84.6\,rps — a
+sharply: at $C{=}64$ it sustains 694.6\,rps against the baseline's 84.6\,rps, a
 $\sim$8$\times$ peak-goodput advantage on identical ONNX.  EfficientNet-B0 follows the
 same shape, with VisionServe reaching 510\,rps against the baseline's 76.6\,rps at $C{=}64$.
 The baseline never scales: its throughput is essentially flat ($\sim$66$\to$87\,rps,
 peaking at $C{=}8$) and its latency degrades catastrophically with load (p50 climbs from
 16\,ms at $C{=}1$ to 755\,ms at $C{=}64$), because a single \texttt{uvicorn} worker with
 one ONNX session is GIL- and single-session-bound and cannot use additional in-flight
-requests.  Because the \emph{same} 64-way client drove VisionServe to 695\,rps, the
+requests.  Because the same 64-way client drove VisionServe to 695\,rps, the
 baseline's $\sim$85\,rps plateau is a real server-side limit, not a client artefact;
 VisionServe's own ceiling may be higher still under a native (non-Python) load generator,
 so these figures are conservative for VisionServe.
@@ -319,6 +351,7 @@ so these figures are conservative for VisionServe.
 \begin{table}[t]
   \centering
   \small
+  \setlength{\tabcolsep}{3pt}
   \caption{%
     Closed-loop concurrency sweep, MobileNetV3-Small, same ONNX / CUDA EP / A6000 /
     JPEG input for both systems.  $C$ = client concurrency; rps = completed-request
@@ -349,16 +382,16 @@ so these figures are conservative for VisionServe.
 \end{table}
 
 \paragraph{Why VisionServe loses at low load (and why it is not the GPU).}
-We state the low-load regression plainly rather than hiding it: at $C{=}1$ VisionServe is
+At $C{=}1$ VisionServe is
 $\sim$3.6$\times$ slower per request than the FastAPI baseline (p50 57.2 vs.\ 16.1\,ms;
 min 25.9 vs.\ 10.9\,ms).  A latency decomposition (Table~\ref{tab:benchmark}'s
 \texttt{srv\_p50}, corroborated by a standalone Go benchmark of the decode/preprocess
-stages) shows this cost is \emph{not} the GPU.  On this host the ONNX Runtime
+stages) shows this cost is not the GPU.  On this host the ONNX Runtime
 \texttt{Run} call is under 1\,ms, ImageNet resize+normalise is $\sim$3.6\,ms, and the
-dominant term is pure-Go JPEG decode (\texttt{image/jpeg}) at $\sim$19.2\,ms — which
-alone accounts for VisionServe's $\sim$25.9\,ms $C{=}1$ \emph{min} latency.  The baseline
+dominant term is pure-Go JPEG decode (\texttt{image/jpeg}) at $\sim$19.2\,ms, which
+alone accounts for VisionServe's $\sim$25.9\,ms $C{=}1$ min latency.  The baseline
 is faster per request only because Pillow decodes via libjpeg-turbo (SIMD), a few
-milliseconds.  Crucially, the same property that costs VisionServe at $C{=}1$ is what wins
+milliseconds.  The same property that costs VisionServe at $C{=}1$ is what wins
 under load: pure-Go decode is CPU-heavy but embarrassingly parallel across goroutines and
 the host's 48 cores, so as $C$ rises the decode work overlaps inference and aggregate
 throughput climbs, whereas the GIL-bound single-worker baseline cannot parallelise.  This
@@ -370,25 +403,25 @@ silently take the cgo win.
 
 \paragraph{Concurrency model: where the parallelism actually comes from.}
 The scaling above is enabled by Go goroutines and OS threads with no process-level
-interpreter lock, but we are careful not to overstate the runtime: a single ONNX Runtime
+interpreter lock, with one caveat about the runtime: a single ONNX Runtime
 session in VisionServe is itself mutex-serialised (\texttt{engine.Session.Run} holds a
 per-session lock), so concurrent requests routed to the same session run one at a time,
 just as a GIL would serialise them.  At $C{=}64$ the observed scaling therefore comes
-overwhelmingly from parallel \emph{decode and preprocess} across cores overlapping a
+overwhelmingly from parallel decode and preprocess across cores overlapping a
 sub-millisecond, mutex-serialised GPU \texttt{Run}, not from parallel inference.  Genuine
-intra-process inference parallelism is available through the per-role \emph{session pool}
+intra-process inference parallelism is available through the per-role session pool
 (\texttt{engine.SessionPool}): when a role is configured with a pool size $>1$, the
 \texttt{lifecycle.Manager} holds several identical sessions and dispatches each request to
 the first free one, so up to $N$ inferences proceed without a shared lock.  The pool size
 is configurable per role (via the \texttt{VS\_POOL\_OVERRIDE} load-time setting) and
 defaults to~1; the image-input sweeps above use that default, so the 8$\times$ JPEG-in result
-is achieved \emph{without} multi-session inference.  This is appropriate: in the image-input
+is achieved without multi-session inference.  This is appropriate: in the image-input
 regime the bottleneck is the (already core-parallel) Go decode/preprocess, not the
-mutex-serialised \texttt{Run}, so pooling cannot help there.  Pooling matters precisely in the
-\emph{tensor-input} regime, where decode is absent and the per-session \texttt{Run} mutex
-\emph{is} the ceiling.  Table~\ref{tab:pool} confirms this: sweeping the pool size on the
-tensor-in path lifts peak goodput from 718\,rps at pool~1 to 1438\,rps at pool~4 --- a
-2.0$\times$ gain from removing the mutex serialisation --- with diminishing returns by pool~8
+mutex-serialised \texttt{Run}, so pooling cannot help there.  Pooling matters in the
+tensor-input regime, where decode is absent and the per-session \texttt{Run} mutex
+is the ceiling.  Table~\ref{tab:pool} confirms this: sweeping the pool size on the
+tensor-in path lifts peak goodput from 718\,rps at pool~1 to 1438\,rps at pool~4 (a
+2.0$\times$ gain from removing the mutex serialisation) with diminishing returns by pool~8
 (1653\,rps) as GPU compute itself saturates.  This both validates the mutex analysis and shows
 the serialisation is configurable away exactly when inference, not decode, is the limit.
 
@@ -422,26 +455,26 @@ Closed-loop peak goodput rewards a system for absorbing a backlog; an open-loop,
 constant-offered-rate view under a latency SLO is the stricter test.
 Table~\ref{tab:openloop} sweeps the offered rate on MobileNetV3-Small under HdrHistogram
 timing.  Under a p50~$<$~50\,ms target, the FastAPI baseline holds $\sim$50\,rps
-(p50~$<$~20\,ms) and then \emph{collapses} abruptly at an offered 100\,rps, where its p50
+(p50~$<$~20\,ms) and then collapses abruptly at an offered 100\,rps, where its p50
 jumps to $\sim$6.3\,s and goodput falls to $\sim$62\,rps; it refuses connections beyond an
 offered $\sim$600\,rps.  VisionServe instead holds $\sim$200\,rps at p50~$\sim$31\,ms with
 zero errors, degrading only past 400\,rps (where its p50 of 805\,ms breaches the SLO).  So
 under the same SLO VisionServe sustains roughly 4$\times$ the baseline's load with no errors
 where the baseline begins dropping connections.
 
-We are deliberately self-critical about the \emph{tail}, however: VisionServe's open-loop
+The tail merits scrutiny, however: VisionServe's open-loop
 p99.9 is already heavy inside this nominally-healthy regime (658\,ms at an offered 100\,rps,
-909\,ms at 200\,rps), even while its p50 stays at $\sim$30\,ms and \texttt{errors}=0.  We do
-not believe this tail reflects a server limit.  Most likely it is an artefact of the
+909\,ms at 200\,rps), even while its p50 stays at $\sim$30\,ms and \texttt{errors}=0.  This
+tail likely does not reflect a server limit.  It is most likely an artefact of the
 pure-Python load generator's own scheduling jitter, coordinated omission, and garbage
-collection rather than the server: the \emph{same} VisionServe build reaches 695\,rps in the
+collection rather than the server: the same VisionServe build reaches 695\,rps in the
 closed-loop run (Table~\ref{tab:crossover}) with a p99 of only $\sim$108\,ms at $C{=}64$, and
 the open-loop goodput plateaus at $\sim$390\,rps — exactly coinciding with the pure-Python
 client's measured throughput cap.  To settle this we re-measured the open-loop tail with
 \texttt{vegeta}, a native Go coordinated-omission-correct generator that is not subject to the
 Python client's cap.  The native measurement confirms the diagnosis: on the image-input path
 VisionServe sustains an offered 400\,rps at 100\,\% success with a p99.9 of only \textbf{71\,ms}
-(p50~39\,ms) --- against the pure-Python client's 909\,ms p99.9 at a \emph{lower} 200\,rps ---
+(p50~39\,ms), against the pure-Python client's 909\,ms p99.9 at a lower 200\,rps,
 and the server's true knee appears near 600\,rps, where p99.9 rises to $\sim$1.8\,s as the
 decode pipeline saturates.  The earlier heavy p99.9 was therefore a client artefact, exactly as
 suspected: under a native generator VisionServe's image-input tail is in fact well-behaved up to
@@ -452,6 +485,7 @@ client was understated.  The offered-$\geq$800\,rps baseline ``goodput'' rows ar
 \begin{table}[t]
   \centering
   \small
+  \setlength{\tabcolsep}{3pt}
   \caption{%
     Open-loop constant-offered-rate sweep, MobileNetV3-Small, same ONNX / CUDA EP / A6000 /
     JPEG input for both systems, HdrHistogram timing.  Rows are restricted to the valid SLO
@@ -478,10 +512,6 @@ client was understated.  The offered-$\geq$800\,rps baseline ``goodput'' rows ar
   \end{tabular}
   \\[2pt]
   {\footnotesize $^{\dagger}$collapsed (p50 in seconds); SLO violated.}
-  % All cells verbatim from eval/results/pareto_mobilenet-v3_{visionserve,fastapi-ort}.csv
-  % (offered_rate, goodput_rps, p50_ms, p99.9_ms). VS@400 p50 805ms = above 50ms SLO,
-  % saturating; offered>=600 VS goodput plateaus ~390 (Python CLIENT cap, omitted).
-  % FastAPI offered>=600 rows have errors=6669..21000 (100% fast-failed) -> excluded.
 \end{table}
 
 \paragraph{Cold-start, lifecycle, and footprint.}
@@ -496,6 +526,106 @@ VRAM ($-34\%$).  For heavyweight, inference-dominated models such as GroundingDI
 approach is most beneficial in the lightweight and medium-latency regime (33--78\,ms models)
 where decode and dispatch are a significant fraction of total latency.
 
+\paragraph{Scoping the 8$\times$: a multi-process baseline.}
+The crossover above is against the deployed default (one \texttt{uvicorn} worker).  To
+test how much of the 8$\times$ survives a properly scaled Python baseline, we
+swept the same FastAPI+ORT server at 1, 2, 4, and 8 \texttt{uvicorn} worker processes
+(each a separate interpreter with its own ONNX session, sidestepping the GIL).
+Table~\ref{tab:workers} reports peak goodput.  The 8$\times$ advantage is specific to the
+single-worker default: at 8 workers the baseline reaches 585\,rps, within $\sim$11\% of
+VisionServe's 652\,rps in the same sweep, rough parity.  The reading is therefore not
+``8$\times$ faster than Python'' but rather that a single untuned Go binary matches an
+eight-process Python deployment, without the $\sim$8$\times$ process-memory cost (each worker
+carries its own interpreter and ONNX session; cf.\ the footprint result below) and without
+having to choose a worker count.
+
+\begin{table}[t]
+  \centering
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \caption{%
+    Peak goodput vs.\ a \emph{multi-process} FastAPI+ORT baseline (MobileNetV3-Small, A6000,
+    closed-loop over $C\in\{1,8,32,64\}$, \texttt{errors}=0).  The 8$\times$ holds only against
+    the single-worker default; an 8-worker baseline reaches rough parity.%
+  }
+  \label{tab:workers}
+  \begin{tabular}{lrr}
+    \toprule
+    \textbf{System} & \textbf{Peak rps} & \textbf{VS\,$\div$\,this} \\
+    \midrule
+    VisionServe (1 Go process)              & 651.9 & 1.0$\times$ \\
+    FastAPI+ORT, 1 worker (default)         &  86.1 & 7.6$\times$ \\
+    FastAPI+ORT, 2 workers                  & 169.2 & 3.9$\times$ \\
+    FastAPI+ORT, 4 workers                  & 309.1 & 2.1$\times$ \\
+    FastAPI+ORT, 8 workers                  & 585.1 & 1.1$\times$ \\
+    \bottomrule
+  \end{tabular}
+  % eval/results/d1_{visionserve,fastapi-ort-w{1,2,4,8}}_mobilenet-v3.csv (peak rps_measured).
+\end{table}
+
+\paragraph{A heavier model: the advantage narrows with compute.}
+The crossover was shown on a tiny classifier; does it generalise?  We repeated the sweep for
+RF-DETR-Nano (a detection transformer, $384{\times}384$).  VisionServe peaks at 189\,rps,
+3.1$\times$ the single-worker baseline (60\,rps), but a 4-worker baseline reaches
+213\,rps, slightly exceeding VisionServe.  This is consistent with our thesis: the Go edge
+comes from parallel pure-Go decode, whose relative weight shrinks as GPU compute
+grows.  The heavier the model, the more both systems become GPU-bound and the smaller the
+serving-layer advantage; the single-binary win is largest for light, decode-bound models and
+narrows for compute-heavy ones.  We report this rather than restricting the claim to the one model
+where it is largest.
+
+\subsection{Edge: Device\texttimes EP Matrix on Jetson AGX Orin}
+\label{sec:eval:edge}
+
+The results above run on a datacenter A6000.  To validate the edge claim on real hardware, we
+measured a device\texttimes execution-provider matrix on an NVIDIA Jetson AGX Orin: four
+light/medium models across \{CPU, CUDA, TensorRT\} at client concurrency $C\in\{1,8\}$, with the
+same closed-loop harness, at the MAXN power mode (clocks pinned via
+\texttt{nvpmodel}\,+\,\texttt{jetson\_clocks}).  Per-inference energy is integrated from the
+on-board power rails (\texttt{tegrastats}).  Table~\ref{tab:edge} reports saturated throughput at
+$C{=}8$ and per-inference energy.
+
+\begin{table}[t]
+  \centering
+  \small
+  \caption{%
+    Jetson AGX Orin (MAXN) device\texttimes EP matrix: saturated throughput (rps at $C{=}8$) and
+    per-inference energy (mJ/inf at $C{=}8$) per model across CPU, CUDA, and TensorRT.  Same
+    closed-loop harness as the A6000 runs; clocks pinned.%
+  }
+  \label{tab:edge}
+  \begin{tabular}{llrrr}
+    \toprule
+    \textbf{Model} & \textbf{Metric} & \textbf{CPU} & \textbf{CUDA} & \textbf{TensorRT} \\
+    \midrule
+    \texttt{mobilenet-v3}    & rps    & 96.8   & 264.9 & 293.5 \\
+                             & mJ/inf & 208.7  & 76.7  & 67.7  \\
+    \texttt{efficientnet-b0} & rps    & 39.6   & 209.0 & 276.3 \\
+                             & mJ/inf & 524.5  & 119.6 & 88.2  \\
+    \texttt{rf-detr-nano}    & rps    & 5.6    & 72.9  & 112.9 \\
+                             & mJ/inf & 4135.6 & 466.8 & 338.4 \\
+    \texttt{mobile-sam}$^{\dagger}$ & rps & 1.6 & 11.5  & 24.0  \\
+                             & mJ/inf & 14108.4 & 2865.0 & 1655.5 \\
+    \bottomrule
+  \end{tabular}
+  \\[2pt]
+  {\footnotesize $^{\dagger}$mobile-sam TensorRT = encoder on TRT, decoder on CUDA (the SAM
+  decoder graph is not TRT-compatible: its \texttt{orig\_im\_size} is a float shape tensor);
+  measured with a fixed-size frame.}
+\end{table}
+
+Three findings.  (i) The heavier the model, the more the edge accelerator matters.  For
+the tiny classifier the GPU is only $\sim$3$\times$ CPU (96.8$\to$293.5\,rps), but for the real
+detector RF-DETR-Nano, TensorRT delivers $\sim$20$\times$ the CPU throughput (5.6$\to$112.9\,rps)
+and $\sim$12$\times$ better energy efficiency (338 vs.\ 4136\,mJ/inf); CPU-only is a non-starter
+for real models on this device.  (ii) TensorRT is fastest and most efficient at a cost: a
+one-time engine cold-build of 26--62\,s (vs.\ $\sim$2.6--4.4\,s for CUDA) and $\sim$2--3$\times$
+the RSS of CUDA, a real trade-off.  (iii) At low load CPU $\approx$ GPU for tiny
+nets (mobilenet-v3 at $C{=}1$: 39.9 CPU vs.\ 45.4 CUDA vs.\ 49.3 TRT\,rps), the same
+decode-bound ``beyond inference'' regime as on the A6000, now reproduced on edge.  The same
+single binary drives all three providers via the manifest's \texttt{tensorrt}\,$\to$\,\texttt{cuda}
+\,$\to$\,\texttt{cpu} fallback with no reconfiguration.
+
 \subsection{Accuracy Reference}
 \label{sec:eval:accuracy}
 
@@ -507,6 +637,7 @@ cause small deviations from the figures reported on the original PyTorch checkpo
 \begin{table}[t]
   \centering
   \small
+  \setlength{\tabcolsep}{4pt}
   \caption{%
     Published accuracy metrics for models in the VisionServe catalog.
     All figures are from the original papers; VisionServe's ONNX exports

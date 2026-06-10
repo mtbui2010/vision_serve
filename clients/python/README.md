@@ -180,9 +180,11 @@ visionserve load rf-detr
 | `load(model)` | `POST /api/load` | `{"model", "state"}` |
 | `unload(model)` | `POST /api/unload` | `{"model", "state"}` |
 | `ps()` | `GET /api/models` (filtered) | loaded `list[ModelInfo]` |
-| `predict(model, image, *, prompt=None, box=None, point=None, min_size=0, max_size=0, gripper_min=None, gripper_max=None)` | `POST /api/predict` | `Result` |
+| `predict(model, image, *, prompt=None, box=None, point=None, box_threshold=None, text_threshold=None, min_size=0, max_size=0, gripper_min=None, gripper_max=None)` | `POST /api/predict` | `Result` |
 
 `min_size` / `max_size` filter by bounding-box area as a **percentage of the image area** (0–100; `0` = no limit). Example: `min_size=0.5` keeps only objects covering at least 0.5% of the image. The conversion to absolute pixels is done server-side using the uploaded image dimensions.
+
+`box_threshold` / `text_threshold` are **GroundingDINO** tuning knobs (`grounding-dino`, `grounded-sam`, `grasp-gd`); `None` = use the server manifest/default. `box_threshold` is the query-score cutoff that filters detections; `text_threshold` controls how many prompt tokens are kept in each label. Lowering `text_threshold` keeps more words per label — e.g. `"canned coffee"` instead of just `"coffee"`. See [Open-vocab / Grounded-SAM](#open-vocab--grounded-sam).
 
 ### Image inputs
 
@@ -218,7 +220,8 @@ are scaled to `uint8`. Encoded to PNG client-side before upload.
 Prompts (serialized to the server's string format):
 - `box`: `[x, y, w, h]` or a list of boxes → `"x,y,w,h"` joined by `;`.
 - `point`: `[x, y]` / `[x, y, label]` or a list (label 1=fg, 0=bg) → `"x,y[,label]"` joined by `;`.
-- `prompt`: free text, e.g. `"cat. remote."`.
+- `prompt`: free text, e.g. `"cat. remote."`. The client normalizes `,` and `|` to the GroundingDINO phrase separator `.` and appends a trailing `.` if missing.
+- `box_threshold` / `text_threshold`: GroundingDINO thresholds (open-vocab models). `text_threshold` lower → richer per-detection labels; see [Open-vocab / Grounded-SAM](#open-vocab--grounded-sam).
 - `gripper_min` / `gripper_max`: grasp models only — jaw-opening bounds in **original-image pixels** (e.g. `gripper_min=20, gripper_max=150`). Server filters out grasps outside the range.
 
 ### Result types
@@ -292,6 +295,28 @@ for d in res.detections:
 res = c.predict("grounded-sam", "img.jpg", prompt="cat. remote.")
 print([d.cls for d in res.detections], "→", len(res.masks), "masks")
 ```
+
+**Tuning thresholds** — `box_threshold` filters detections by query score; `text_threshold`
+controls how many prompt tokens land in each label. GroundingDINO only keeps tokens whose
+per-box probability exceeds `text_threshold`, so adjectives often drop out at the default
+(`0.25`), leaving just the noun. Lower it to keep the full phrase:
+
+```python
+# Default text_threshold (0.25): the adjective is dropped → label "coffee"
+res = c.predict("grounding-dino", "coffee.jpg", prompt="canned coffee")
+print(sorted({d.cls for d in res.detections}))      # ['coffee']
+
+# Lower text_threshold keeps more tokens → label "canned coffee"
+res = c.predict("grounding-dino", "coffee.jpg", prompt="canned coffee", text_threshold=0.15)
+print(sorted({d.cls for d in res.detections}))      # ['canned coffee']
+
+# box_threshold raises/lowers the detection cutoff (fewer/more boxes)
+res = c.predict("grounding-dino", "coffee.jpg", prompt="canned coffee",
+                box_threshold=0.35, text_threshold=0.15)
+```
+
+Both apply to `grounding-dino`, `grounded-sam`, and `grasp-gd`. `None` (default) defers to
+the model's manifest value.
 
 ### Depth estimation
 

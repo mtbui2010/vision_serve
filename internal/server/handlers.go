@@ -211,6 +211,7 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 		// Per-request predict options threaded to the model (the grasp model reads them).
 		prompt.MinSize, prompt.MaxSize = req.MinSize, req.MaxSize
 		prompt.GripperMin, prompt.GripperMax = req.GripperMin, req.GripperMax
+		prompt.BoxThresh, prompt.TextThresh = req.BoxThreshold, req.TextThreshold
 		return req.Model, img, prompt, req.MinSize, req.MaxSize, nil
 	}
 
@@ -241,7 +242,11 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 	// grasp gripper bounds (px); ignore parse errors (default 0 = manifest default)
 	gripperMin, _ := strconv.ParseFloat(r.FormValue("gripper_min"), 64)
 	gripperMax, _ := strconv.ParseFloat(r.FormValue("gripper_max"), 64)
+	// GroundingDINO threshold overrides; ignore parse errors (default 0 = manifest/default)
+	boxThresh, _ := strconv.ParseFloat(r.FormValue("box_threshold"), 64)
+	textThresh, _ := strconv.ParseFloat(r.FormValue("text_threshold"), 64)
 	prompt.MinSize, prompt.MaxSize = minSize, maxSize
 	prompt.GripperMin, prompt.GripperMax = gripperMin, gripperMax
+	prompt.BoxThresh, prompt.TextThresh = boxThresh, textThresh
 	return model, img, prompt, minSize, maxSize, nil
 }

@@ -11,9 +11,9 @@ Clients send a \texttt{POST /api/predict} request carrying an image (base64
 or multipart) together with a task identifier, a model name, and an optional
 prompt; the server returns a JSON object conforming to the unified
 \texttt{Result} schema described in Section~\ref{sec:design:result}.
-The same endpoint handles all six supported task types --- detection,
-segmentation, open-vocabulary detection, classification, depth estimation, and
-embedding --- so no client-side multiplexing is required.
+The same endpoint handles all seven task types: detection,
+segmentation, open-vocabulary detection, classification, depth estimation,
+embedding, and planar grasp synthesis. No client-side multiplexing is required.
 
 Internally the server is composed of four coordinating subsystems: a
 \emph{model registry} that resolves model names and validates manifests at
@@ -21,17 +21,23 @@ startup, a \emph{lifecycle manager} that owns all ONNX Runtime sessions, an
 \emph{inference engine} that drives the pre-process/infer/post-process
 pipeline, and a \emph{router/handler} layer that parses requests and serialises
 responses.
-All heavy resources (GPU memory, session handles) are allocated during startup
-and reused across requests; no resource allocation occurs in the request hot
+All heavy resources, such as GPU memory and session handles, are allocated during startup
+and reused across requests, so no resource allocation occurs in the request hot
 path.
 
-\begin{figure}[t]
+\begin{figure*}[t]
   \centering
   \begin{tikzpicture}[
       font=\small,
       node distance=0.55cm and 0.9cm,
       box/.style={draw, rounded corners=3pt, minimum width=2.2cm,
                   minimum height=0.65cm, align=center, fill=blue!6},
+      gatebox/.style={draw=red!70!black, line width=1pt,
+                  rounded corners=3pt, minimum width=2.2cm,
+                  minimum height=0.65cm, align=center, fill=red!12},
+      callout/.style={draw=red!70!black, dashed, rounded corners=3pt,
+                  inner sep=4pt, align=center, font=\footnotesize,
+                  fill=red!4},
       ebox/.style={draw, rounded corners=3pt, minimum width=2.2cm,
                    minimum height=0.65cm, align=center, fill=orange!10},
       mbox/.style={draw, rounded corners=3pt, minimum width=2.0cm,
@@ -48,7 +54,7 @@ path.
   %% Server internals group
   \node[box, right=1.0cm of client] (router)  {Router / Handler};
   \node[box, right=0.8cm of router] (engine)  {Engine};
-  \node[box, above=0.5cm of engine] (registry){Registry};
+  \node[gatebox, above=0.5cm of engine] (registry){Registry\\\textbf{License Gate}};
   \node[box, below=0.5cm of engine] (lifecycle){Lifecycle\\Manager};
 
   \begin{scope}[on background layer]
@@ -79,6 +85,11 @@ path.
   \draw[arr] (client)   -- node[above,font=\footnotesize]{POST} (router);
   \draw[arr] (router)   -- (engine);
   \draw[arr] (registry) -- (engine);
+
+  %% Contribution callout for the load-time license gate
+  \node[callout, above left=0.45cm and -0.2cm of registry] (gatenote)
+        {load-time license policy:\\allowlist + sha256 + ledger};
+  \draw[dashed, red!70!black] (gatenote) -- (registry.north west);
   \draw[arr] (lifecycle)-- (engine);
   \draw[arr] (engine)   -- (ort);
   \draw[arr,gray!70] (ort) -- (ep1);
@@ -93,9 +104,13 @@ path.
            Solid arrows denote data flow; dashed arrows denote ownership or
            interface delegation.
            The Lifecycle Manager owns all ONNX sessions and is the sole
-           gateway between model logic and the ONNX Runtime.}
+           gateway between model logic and the ONNX Runtime.
+           The Registry (highlighted) enforces the load-time license gate
+           --- the paper's primary contribution --- validating each model's
+           license against the permissive allowlist and, in verified mode,
+           binding license to sha256, source, and provenance ledger.}
   \label{fig:architecture}
-\end{figure}
+\end{figure*}
 
 \subsection{Model Registry and Manifest}
 \label{sec:design:registry}
@@ -103,22 +118,22 @@ path.
 Every model is described by a YAML manifest that declares all metadata
 necessary for startup validation and session creation.
 The mandatory fields are: \texttt{name} (unique identifier),
-\texttt{task} (one of the six supported task types),
+\texttt{task} (one of the seven task types),
 \texttt{license} (SPDX identifier),
 \texttt{execution\_providers} (ordered list of preferred EPs),
 preprocessing parameters (input resolution, normalisation statistics, and
 letterbox strategy), and either a single \texttt{model\_file} path for
 single-session models or a \texttt{files} map from role names to file paths
 for multi-session models.
-Roles are string keys agreed upon between the manifest and the model package:
-for example, MobileSAM declares \texttt{encoder} and \texttt{decoder} roles;
-Grounded-SAM declares \texttt{det}, \texttt{encoder}, and \texttt{decoder}.
+Roles are string keys agreed upon between the manifest and the model package.
+For example, MobileSAM declares \texttt{encoder} and \texttt{decoder} roles,
+while Grounded-SAM declares \texttt{det}, \texttt{encoder}, and \texttt{decoder}.
 
 At startup the registry parser reads every manifest in the model directory and
 enforces the license allowlist: only \texttt{Apache-2.0}, \texttt{MIT}, and
 BSD variants are accepted.
-Any manifest bearing a non-allowlisted license --- including AGPL-3.0, as
-carried by Ultralytics YOLO~\cite{ultralytics2023yolo,agpllicense} --- is
+Any manifest bearing a non-allowlisted license, including AGPL-3.0 as
+carried by Ultralytics YOLO~\cite{ultralytics2023yolo,agpllicense}, is
 rejected with a descriptive error before any session is created.
 This approach provides a strong audit boundary: downstream adopters can trust
 that every model loaded by VisionServe carries a permissive license, regardless
@@ -127,7 +142,7 @@ of where the ONNX file was sourced.
 \subsection{Lifecycle Management}
 \label{sec:design:lifecycle}
 
-ONNX Runtime sessions are expensive GPU resources: each session allocates
+ONNX Runtime sessions are expensive GPU resources. Each session allocates
 device memory proportional to model weight size and holds an execution context
 that spans the full session lifetime.
 Creating sessions on demand inside request handlers would cause repeated
@@ -159,8 +174,8 @@ from the lifecycle manager, feeds the preprocessed tensor, collects the raw
 output tensors, and calls \texttt{Postprocess}.
 Model packages contain no inference code; they contain only numerical
 transformations on image data and model output arrays.
-This split keeps model packages testable in isolation --- unit tests exercise
-pre/postprocess without an ONNX session --- and keeps the hot path in the
+This split keeps model packages testable in isolation, since unit tests exercise
+pre/postprocess without an ONNX session, and it keeps the hot path in the
 engine, where batching and concurrency controls can be applied uniformly.
 
 \textbf{PipelineModel} is the interface for models that require a
@@ -173,16 +188,16 @@ The \texttt{Runner} gateway exposes a single method \texttt{Run(role, tensor)
 ([]Tensor, error)} that dispatches to the lifecycle manager by role name;
 the pipeline model calls \texttt{Runner.Run} once per session in its chain and
 assembles the final result.
-Critically, the pipeline model never creates or frees sessions; it merely
+The pipeline model never creates or frees sessions; it only
 names them.
-This design supports arbitrarily deep chains --- GroundingDINO boxes flowing
-into the MobileSAM encoder then decoder in Grounded-SAM --- without any
+This design supports arbitrarily deep chains, such as GroundingDINO boxes flowing
+into the MobileSAM encoder then decoder in Grounded-SAM, without any
 special-casing in the core engine.
 
 \subsection{Unified Result Schema}
 \label{sec:design:result}
 
-All six task types return a single \texttt{Result} struct:
+All seven task types return a single \texttt{Result} struct:
 \begin{center}
 \small
 \texttt{Result\{task, model, Detections, Masks, Classifications,}\\
@@ -190,9 +205,9 @@ All six task types return a single \texttt{Result} struct:
 \end{center}
 Fields irrelevant to a given task are null or empty.
 \texttt{Detection} carries a \texttt{BBox} in the format \([x, y, w, h]\) in
-\emph{original image coordinates}: the postprocess step uses the
-\texttt{PreprocessMeta} produced during preprocessing --- which records the
-original image dimensions and any letterbox padding offsets --- to map model-
+original image coordinates. The postprocess step uses the
+\texttt{PreprocessMeta} produced during preprocessing, which records the
+original image dimensions and any letterbox padding offsets, to map model-
 space coordinates back to pixel-space before populating the result.
 This mapping is done once, inside \texttt{Postprocess}, so no consumer of
 \texttt{Result} ever needs to account for scaling or padding.
@@ -219,7 +234,7 @@ is unavailable in the current ORT build, it is silently skipped and the next
 is tried.
 CPU is always appended as the final fallback regardless of what the manifest
 declares, so inference always succeeds on any host.
-The allowlisted EPs are: \texttt{tensorrt}, \texttt{cuda}, \texttt{coreml},
+The allowlisted EPs are \texttt{tensorrt}, \texttt{cuda}, \texttt{coreml},
 \texttt{directml}, \texttt{openvino}, and \texttt{cpu}; any EP name not in
 this set is rejected at manifest parse time to prevent misconfiguration.
 The fallback chain is fully transparent: the \texttt{Result} struct records

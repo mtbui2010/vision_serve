@@ -64,6 +64,10 @@ type graspModel struct {
 	det     detector             // optional; nil => class-agnostic
 	gripMin float64              // manifest gripper defaults (px); 0 => core default
 	gripMax float64
+	// serialize is true only for the GroundingDINO detector variant (grasp-gd), which must
+	// run one whole pipeline at a time (see groundingdino.PipelineMu). grasp-rfdetr and the
+	// class-agnostic automask path stay fully concurrent.
+	serialize bool
 }
 
 // New builds the grasp model. The segmenter (MobileSAM) is constructed from the
@@ -100,6 +104,9 @@ func New(cfg models.Config) (models.Base, error) {
 			return nil, err
 		}
 		g.det = det
+		if name == "grounding-dino" {
+			g.serialize = true // GroundingDINO pipeline must be serialized (see PipelineMu)
+		}
 	}
 	return g, nil
 }
@@ -165,6 +172,10 @@ type bitmapSegmenter interface {
 // → grasp per mask (class/conf inherited from the detection). Without a detector:
 // automask → size-filter → grasp per mask (class-agnostic).
 func (g *graspModel) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
+	if g.serialize {
+		groundingdino.PipelineMu.Lock()
+		defer groundingdino.PipelineMu.Unlock()
+	}
 	params := g.graspParams(prompt)
 	w, h := img.Bounds().Dx(), img.Bounds().Dy()
 	var res models.Result
@@ -356,7 +367,15 @@ func (d *gdinoDetector) detect(img image.Image, prompt models.Prompt, r models.R
 	run := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
 		return r.Run(roleDet, inputs)
 	}
-	return groundingdino.Detect(img, prompt.Text, d.tok, run, r.OutputNames(roleDet), d.box, d.text)
+	// Per-request threshold overrides (>0) take precedence over the manifest-derived defaults.
+	box, text := d.box, d.text
+	if prompt.BoxThresh > 0 {
+		box = prompt.BoxThresh
+	}
+	if prompt.TextThresh > 0 {
+		text = prompt.TextThresh
+	}
+	return groundingdino.Detect(img, prompt.Text, d.tok, run, r.OutputNames(roleDet), box, text)
 }
 
 // --- helpers ---

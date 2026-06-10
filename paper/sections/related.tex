@@ -37,19 +37,19 @@ dependencies and are likewise out of scope for a single low-SWaP device.
 The serving-overhead regime we study is established but underexplored for CV.
 AbouElhamayed et al.~\cite{abouelhamayed2024beyond} show that for CV DNNs,
 non-inference overhead reaches up to 56\% of end-to-end latency and $\sim$80\% of
-throughput---i.e.\ the serving layer, not the GPU, governs goodput for small
+throughput: the serving layer, not the GPU, governs goodput for small
 models, which is exactly our regime. The lean-versus-heavy trade-off is likewise
-known to be load-dependent: Ali~\cite{ali2026fastapitriton} reports a lean FastAPI
+known to be load-dependent. Ali~\cite{ali2026fastapitriton} reports a lean FastAPI
 server at p50 22\,ms under low load while a batching-oriented Triton reaches
-780~rps at scale---lean wins at low load, heavy wins at scale. Our contribution is
+780~rps at scale, so lean wins at low load and heavy wins at scale. Our contribution is
 not to re-discover this trade-off but to resolve the CV-specific crossover
 concurrency on identical ONNX and to localize the overhead
-(Section~\ref{sec:eval}), reporting honestly where the single Go binary loses
+(Section~\ref{sec:eval}), reporting where the single Go binary loses
 (per-request latency at low load).
 
 \paragraph{Single-binary and C++ no-Python serving (the precedent we build on).}
 VisionServe's ``single compiled binary, no Python runtime'' packaging is
-\emph{not} novel, and we do not claim it as such. The canonical precedent is
+not novel, and we do not claim it as such. The canonical precedent is
 llama.cpp~\cite{llamacpp}, which ships a single statically-linkable C/C++
 binary with zero Python dependencies and a CPU+CUDA/Metal/Vulkan backend set;
 it established the ``download one binary and serve locally'' pattern that
@@ -60,25 +60,25 @@ Python runtime requirement at inference time.
 Microsoft's ONNX Runtime Server~\cite{ortserver} and Intel's OpenVINO Model
 Server~\cite{openvinoms} are both C++ servers that are embeddable via a C/C++
 API without a Python interpreter.
-We therefore explicitly \textbf{concede the ``No-Python'' and ``single-binary''
+We therefore \textbf{concede the ``No-Python'' and ``single-binary''
 axes to prior art}: llama.cpp already demonstrates the single-static-binary,
 zero-Python form factor, and several C++ servers above are Python-free.
 VisionServe's contribution is not inventing this form factor but bringing it,
 in a memory-safe Go binary, to the multi-task, prompted, multi-session
-\emph{computer-vision} setting under a license-enforcement policy.
+computer-vision setting under a license-enforcement policy.
 
 \paragraph{Computer-vision--native serving and the license question.}
 Several systems are CV-native, so we do not claim that axis as uniquely ours
 either. Roboflow Inference~\cite{roboflowinfer} is a CV-first server with an
-Apache-2.0 core supporting CUDA/TensorRT/CPU and Jetson. Importantly, it is
-\emph{not} a naive copyleft-bundler: Roboflow is a \emph{commercial
-sub-licensor} of Ultralytics, paying for a relicensing agreement so that it may
+Apache-2.0 core supporting CUDA/TensorRT/CPU and Jetson. It is
+not a naive copyleft-bundler: Roboflow is a commercial
+sub-licensor of Ultralytics, paying for a relicensing agreement so that it may
 legally serve YOLO weights through its platform. The contrast with VisionServe
-is therefore not ``compliant vs.\ negligent'' but two opposite \emph{strategies}
-for the same copyleft problem: \emph{pay-to-relicense} (Roboflow buys a
-commercial license to neutralize the AGPL obligation) versus
-\emph{technically-refuse-to-load} (VisionServe makes loading a
-copyleft-declared model impossible by construction). The pay-to-relicense path
+is therefore not ``compliant vs.\ negligent'' but two opposite strategies
+for the same copyleft problem. Roboflow uses pay-to-relicense, buying a
+commercial license to neutralize the AGPL obligation, whereas VisionServe
+takes the technically-refuse-to-load path, making it impossible to load a
+copyleft-declared model. The pay-to-relicense path
 keeps the obligation off the deployer only while the commercial relationship
 holds and does not generalize to the long tail of self-hosted copyleft models;
 the refuse-to-load path is free, offline, and deployer-side.
@@ -94,11 +94,11 @@ architectures but is a library, not a server, and requires importing the
 PyTorch Python stack.
 HuggingFace Hub aggregates many CV models with convenient download APIs, but
 inference requires the Python \texttt{transformers}/\texttt{diffusers} stack,
-and a model's host license is set by the uploader, not verified by the Hub ---
+and a model's host license is set by the uploader, not verified by the Hub:
 a model's mere presence on Hub says nothing about its license.
 Against this field, \textbf{no competitor enforces a permissive-license
 allowlist at model-load time}: Roboflow buys its way out, the rest do not
-check. This is the one axis on which VisionServe is genuinely uncontested.
+check. This is the one axis without a direct competitor among existing systems.
 
 \paragraph{Supply-chain license compliance, and why the loader is the missing enforcement point.}
 The motivation for a load-time gate is empirical: declared model licenses are
@@ -113,30 +113,30 @@ compliant model notice. A companion audit of 1.6M
 models~\cite{jewitt2025licensedrift} finds that 35.5\% of
 model$\to$application transitions strip restrictive clauses, relicensing copyleft
 work as permissive. A declared license string therefore cannot be trusted alone.
-ML-license \emph{analysis} is itself an active research area, and we do not claim
+ML-license analysis is itself an active research area, and we do not claim
 license-awareness or AGPL detection as unstudied. ModelGo~\cite{duan2024modelgo} is
 the canonical tool for ML license analysis, encoding license rules and ontological
 reasoning to flag rights-granting and compatibility issues across an ML workflow; its
 follow-up~\cite{duan2026stolengpl} contributes the MG Analyzer and observes that
 AGPL-3.0 proliferates yet is circumventable via the deployment boundary, and
 LiAgent~\cite{wang2026liagent} applies an LLM agent to ecosystem-level compatibility
-analysis. Crucially, all of these \emph{analyze and warn}: they produce a report or a
+analysis. All of these analyze and warn: they produce a report or a
 compatibility verdict for a human or a CI policy to act on, offline. None of them
-\emph{enforces} a decision inside a running serving system. The distinguishing locus of
-VisionServe is precisely this: it converts license policy from an offline/CI-time
-\emph{audit} into \emph{inline admission control}---a hard-failing registry gate that
+enforces a decision inside a running serving system. VisionServe differs here:
+it converts license policy from an offline/CI-time
+audit into inline admission control, a hard-failing registry gate that
 refuses to load a non-permissive model at serve time, in the binary. The novelty we claim
 is the enforcement locus (serve/registry time), not license-awareness per se.
-Existing operational tooling addresses license and provenance at two points, \emph{neither of
-which is the model loader}. Build-/CI-time software-composition-analysis scanners
+Existing operational tooling addresses license and provenance at two points, neither of
+which is the model loader. Build-/CI-time software-composition-analysis scanners
 (ScanCode, FOSSology, Snyk) scan source dependency trees and emit reports and
 SBOMs, leaving the decision to a human or policy file; they do not gate weights at
 load time. Deploy-time admission controllers (Kyverno, OPA Gatekeeper, Sigstore
 policy-controller) verify container-image signatures at Kubernetes pod
-admission---container integrity and identity, not a license \emph{policy} over
+admission: container integrity and identity, not a license policy over
 model weights. Model signing (OpenSSF/Sigstore) proves who signed and that bytes
-are unmodified---provenance and integrity, not license policy. VisionServe's gate
-is orthogonal and complementary: it moves \emph{license-policy} enforcement into
+are unmodified, that is, provenance and integrity, not license policy. VisionServe's gate
+sits alongside these and completes them: it moves license-policy enforcement into
 the runtime at load time, binding the declared license to sha256 weight bytes and
 an audited \texttt{source\_url}, offline. The regulatory backdrop reinforces the
 need: the EU Cyber Resilience Act mandates machine-readable SBOMs with
@@ -155,7 +155,7 @@ session API.
 VisionServe builds on the \texttt{yalue/onnxruntime\_go} binding and exposes
 ORT's EP selection through a manifest-level priority list.
 We stress that the \textbf{multi-EP / multi-hardware capability is ONNX
-Runtime's, not ours}: VisionServe \emph{inherits} exactly ORT's EP set and
+Runtime's, not ours}: VisionServe inherits exactly ORT's EP set and
 does not add a new backend or accelerator. The same applies to the C++ ORT
 Server and OpenVINO Model Server, which expose the same underlying providers.
 Our contribution on this axis is limited to driving the existing ORT EP
@@ -165,20 +165,20 @@ fallback chain (\texttt{tensorrt}~$\rightarrow$~\texttt{cuda}~$\rightarrow$~
 \paragraph{Positioning: the combination, and the license gate.}
 Table~\ref{tab:related} contrasts these systems along the axes most relevant
 to edge CV deployment, with overclaimed checkmarks from the earlier draft
-corrected. The honest reading is:
-the ``No-Python'' column is shared with llama.cpp, LiteRT, ORT Server, and
+corrected. The picture is as follows.
+The ``No-Python'' column is shared with llama.cpp, LiteRT, ORT Server, and
 OpenVINO Model Server; ``single-binary'' is shared with llama.cpp; and
 ``multi-EP'' is shared with every ORT- or OpenVINO-based system because it
-\emph{is} the underlying runtime's provider set.
-What remains genuinely uncontested is the \textbf{load-time
+is the underlying runtime's provider set.
+What remains without a direct competitor is the \textbf{load-time
 permissive-license gate}: while prior ML-license tooling
-\emph{analyzes and warns} offline~\cite{duan2024modelgo,duan2026stolengpl,wang2026liagent},
-VisionServe is, to our knowledge, the first model-serving system to \emph{enforce}
-license policy as inline admission control---validating each model's declared license
-against an allowlist (Apache-2.0 / MIT / BSD families) at load time and hard-rejecting
-anything else---while no other CV server performs this check and Roboflow ships copyleft
+analyzes and warns offline~\cite{duan2024modelgo,duan2026stolengpl,wang2026liagent},
+VisionServe is, to our knowledge, the first model-serving system to enforce
+license policy as inline admission control. It validates each model's declared license
+against an allowlist (Apache-2.0 / MIT / BSD families) at load time and hard-rejects
+anything else, while no other CV server performs this check and Roboflow ships copyleft
 models by default.
-Accordingly, we frame VisionServe's contribution as the \emph{combination}
+Accordingly, we frame VisionServe's contribution as the combination
 rather than any single axis: a single self-contained Go binary
 $\times$ a CV-native unified \texttt{Result} schema (detections plus
 column-major-RLE masks across detection, segmentation, open-vocabulary
@@ -187,12 +187,12 @@ $\times$ a load-time license-allowlist gate. Each ingredient exists in prior
 art; their conjunction in one Python-free, license-enforcing CV server does
 not.
 
-\begin{table}[h]
+\begin{table*}[t]
   \centering
   \caption{Comparison of inference serving systems. Checkmarks corrected for
   the W7 revision: ``No Python'', ``Single binary'', and ``Multi-EP'' are
-  \emph{not} unique to VisionServe (see text); only the load-time
-  license-allowlist gate is uncontested. ``Multi-EP'' for ORT/OpenVINO-based
+  not unique to VisionServe (see text); only the load-time
+  license-allowlist gate has no direct competitor. ``Multi-EP'' for ORT/OpenVINO-based
   systems denotes the runtime's own provider set, which VisionServe inherits.
   $\sim$ = partial / qualified.}
   \label{tab:related}
@@ -219,4 +219,4 @@ not.
     \textbf{VisionServe} (ours)               & \checkmark & \checkmark & \checkmark & \checkmark & \checkmark & Apache-2.0 \\
     \bottomrule
   \end{tabular}
-\end{table}
+\end{table*}

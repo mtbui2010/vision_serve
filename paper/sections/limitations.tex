@@ -1,4 +1,4 @@
-VisionServe is functional across all six task types with 16 registered models, but
+VisionServe is functional across all seven task types with 19 registered models, but
 several known limitations remain.
 
 \begin{itemize}
@@ -6,7 +6,7 @@ several known limitations remain.
     \item \textbf{Pending model exports.}
           The RT-DETR and Depth-Anything-V2 ONNX exports hosted by
           \texttt{onnx-community} on Hugging Face currently return HTTP 401 and require
-          gated authentication; end-to-end benchmarks for these models are therefore not
+          gated authentication, so end-to-end benchmarks for these models are not
           yet available. NanoSAM~\cite{zhang2023mobilesam} requires a manual ONNX export
           from the NVIDIA-AI-IOT/nanosam repository via Google Drive, which cannot be
           automated in the existing manifest-based download pipeline.
@@ -14,23 +14,23 @@ several known limitations remain.
     \item \textbf{CLIP text encoder deferred.}
           Only the CLIP~\cite{radford2021clip} image encoder is currently implemented.
           Integrating the text encoder requires a byte-pair encoding (BPE) tokenizer,
-          which has been deferred to v2. As a result, zero-shot classification is
-          currently limited to scenarios where text embeddings are precomputed externally
+          which has been deferred to v2. Zero-shot classification is therefore
+          limited to scenarios where text embeddings are precomputed externally
           and supplied as fixed vectors.
 
     \item \textbf{No ROCm execution provider.}
           The \texttt{yalue/onnxruntime\_go} binding does not yet expose the ROCm
-          execution provider. AMD GPU users must therefore fall back to CPU inference,
-          foregoing GPU acceleration on that platform.
+          execution provider. AMD GPU users must fall back to CPU inference and
+          give up GPU acceleration on that platform.
 
     \item \textbf{Simplified automatic mask generation.}
           MobileSAM~\cite{zhang2023mobilesam} supports prompt-free automatic mask
           generation (AMG), but the implementation is a single-resolution approximation
-          of SAM's full pipeline: it tiles the image with a fixed $16\times16$ grid of
+          of SAM's full pipeline. It tiles the image with a fixed $16\times16$ grid of
           foreground point prompts (256 decoder calls sharing one encoder pass), keeps
           masks whose predicted IoU exceeds a fixed threshold ($0.85$) and whose area
           falls within heuristic bounds ($10^{-4}$ to $0.95$ of the image), then
-          deduplicates by greedy pixel-IoU NMS ($0.70$). It does \emph{not} implement
+          deduplicates by greedy pixel-IoU NMS ($0.70$). It does not implement
           SAM's multi-crop / multi-scale AMG, stability-score filtering, or box-NMS
           across crops, so dense small-object recall is lower than the reference
           generator. EfficientSAM~\cite{xiong2023efficientsam} and SAM2~\cite{ravi2024sam2}
@@ -63,16 +63,45 @@ several known limitations remain.
           The throughput crossover (C2) is measured against the deployed-default
           CPython interpreter with the global interpreter lock. Free-threaded (no-GIL)
           Python~3.13 narrows this gap, so the crossover is scoped to GIL-bound CPython
-          and \emph{not} claimed against free-threaded Python.
+          and is not claimed against free-threaded Python.
 
-    \item \textbf{License enforcement trusts the declared license.}
-          The load-time guarantee (C1) is license-\emph{policy} enforcement, hardened by
-          content hashing (sha256) and a verified-source allowlist; it does \emph{not}
-          semantically verify that a model's declared license matches its true legal
-          status. By binding declared license $\leftrightarrow$ weight bytes
-          $\leftrightarrow$ audited source, it mitigates relicensing and
-          permissive-washing, but a deliberately mislabeled upstream license is out of
-          scope of the threat model.
+    \item \textbf{License enforcement is policy, not a universal oracle.}
+          C1 is load-time license-\emph{policy} enforcement. In verified mode it is hardened by
+          content hashing (sha256), a verified-source allowlist, and a maintainer-audited
+          license-provenance ledger that cross-checks the declared license against an independent
+          human audit of the upstream, so a manifest relabelled by a contributor is refused for
+          the curated catalog. What remains out of scope: the ledger's ground truth is a one-time
+          human audit (an upstream mislabelled at audit time is not caught, though the
+          pinned LICENSE-file hash flags later divergence on re-audit), and the guarantee does not
+          extend to arbitrary un-audited uploads. A machine-checkable license oracle for any
+          model is impossible.
+
+    \item \textbf{Multi-process baselines reach parity.}
+          The $\sim$8$\times$ throughput advantage (C2) is against the single-worker
+          \texttt{uvicorn} default. An 8-worker baseline reaches rough parity (585 vs.\ 652\,rps),
+          and a 4-worker baseline already matches VisionServe on the heavier RF-DETR-Nano. The
+          single-binary win is therefore one of efficiency and simplicity (one untuned
+          process vs.\ eight, at a fraction of the memory), largest for light, decode-bound
+          models, not an outright $8\times$ speed advantage over a properly scaled Python
+          deployment.
+
+    \item \textbf{GroundingDINO pipelines run serialized (concurrency fixed, throughput open).}
+          \texttt{grounded-sam} and \texttt{grasp-gd} initially crashed under concurrent load, a
+          cgo/ORT \texttt{SA\_ONSTACK} signal interaction from the GroundingDINO graph plus the
+          MobileSAM decoder pool. We fixed correctness by serializing whole GroundingDINO
+          pipelines with a shared mutex (\texttt{groundingdino.PipelineMu}); a $C{=}4$ stress now
+          passes 23/24 with no crash, and \texttt{grasp-rfdetr} (no GroundingDINO) stays fully
+          concurrent (\texttt{errors}=0). The remaining limitation is throughput: the
+          serialized pipelines do not scale concurrently (their concurrent rate equals the
+          single-stream rate). Per-request session isolation or an \texttt{SA\_ONSTACK}-safe ORT
+          thread configuration to restore concurrency is future work.
+
+    \item \textbf{Edge evaluation covers one device class.}
+          The Jetson AGX Orin device\texttimes EP matrix (Section~\ref{sec:eval:edge}) is measured
+          at only two concurrency levels ($C\in\{1,8\}$) on a single edge device class, and we do
+          not run a Python (FastAPI+ORT) baseline on the Jetson itself (only intra-device
+          CPU/CUDA/TensorRT). Other edge targets (Raspberry Pi-class ARM, Apple Silicon CoreML,
+          Intel OpenVINO) are supported by the fallback chain but not yet benchmarked.
 
     \item \textbf{\texttt{duration\_ms} not directly comparable to the baseline.}
           VisionServe's \texttt{duration\_ms} covers preprocess~+~ORT~+~postprocess,
@@ -82,8 +111,24 @@ several known limitations remain.
 
     \item \textbf{Triton comparison is default-config.}
           The Triton parity result is against an out-of-the-box Triton (HTTP, single
-          model instance, no dynamic batching). A tuned Triton (gRPC + shared memory +
-          dynamic batching) would exceed it; no parity is claimed against a tuned
-          Triton.
+          model instance, no dynamic batching), which peaks at roughly 549\,rps for
+          MobileNetV3-Small in our setup. VisionServe does not claim parity with a
+          tuned Triton (gRPC, shared memory, dynamic batching, multiple model
+          instances), and a tuned Triton would be faster at high concurrency. The
+          direction and rough magnitude of that gap are bounded by published numbers:
+          on a comparable single-model serving workload, dynamic batching has been
+          reported to lift Triton to around 780\,rps at scale~\cite{ali2026fastapitriton},
+          so a tuned configuration plausibly improves on the default by a similar
+          fraction. The advantage comes from well-understood mechanisms: dynamic
+          batching trades per-request latency for aggregate throughput and pays off
+          most under high concurrency, while shared memory and gRPC cut transport
+          overhead per request. Those same mechanisms impose costs that run counter
+          to VisionServe's single-binary edge goal: a Python and container deployment,
+          added tail latency from batch accumulation, and a configuration surface
+          (instance groups, batch windows, transport setup) that must be tuned per
+          model and per device. VisionServe's contribution is orthogonal to that
+          throughput ceiling: a no-decode parity floor that a default server already
+          meets without any of that operational overhead, plus a license gate that
+          such serving stacks do not provide.
 
 \end{itemize}

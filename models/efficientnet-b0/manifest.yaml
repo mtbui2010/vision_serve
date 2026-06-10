@@ -1,4 +1,6 @@
 name: efficientnet-b0
+source_url: https://huggingface.co/onnxmodelzoo/efficientnet_b0_Opset17/resolve/main/efficientnet_b0_Opset17.onnx
+sha256: e76596a2b9e27c7c734c38550859105b43fec926f13447a84dad175eb994068a
 model_file: model.onnx
 architecture: efficientnet
 task: classification

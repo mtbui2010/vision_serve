@@ -98,6 +98,51 @@ func TestGate_AdversarialDemo(t *testing.T) {
 		}
 		t.Logf("REFUSED (source): %v", err)
 	})
+
+	// (D) RELICENSE-vs-LEDGER — declared license is permissive AND on the allowlist, but it does
+	// NOT match the maintainer-audited upstream license recorded in the provenance ledger. The
+	// allowlist alone CANNOT catch this (both are permissive); only the ledger cross-check does.
+	// This is the control that closes the "trust the string the PR author typed" hole. -> REFUSED
+	t.Run("D_ledger_license_mismatch_refused", func(t *testing.T) {
+		dir := t.TempDir()
+		_, digest := writeWeight(t, dir, "model.onnx", []byte("authentic permissive weights"))
+		m := newPermissive(dir)
+		m.SHA256 = SHA256Field{single: digest}
+		// onnxmodelzoo/mobilenet... is audited as Apache-2.0 in the ledger; declare MIT instead.
+		m.License = "MIT" // still on the permissive allowlist — validate() passes!
+		m.SourceURL = "https://huggingface.co/onnxmodelzoo/mobilenet_v3_small_Opset17/resolve/main/x.onnx"
+
+		EnableVerifiedMode()
+		defer DisableVerifiedMode()
+
+		if err := m.validate(); err != nil {
+			t.Fatalf("MIT is permissive, validate() must pass (allowlist cannot catch this): %v", err)
+		}
+		err := m.VerifyWeights()
+		if err == nil || !strings.Contains(err.Error(), "does not match the maintainer-audited") {
+			t.Fatalf("license mismatching the audited ledger must be refused, got: %v", err)
+		}
+		t.Logf("REFUSED (ledger): %v", err)
+	})
+
+	// (E) UNLEDGERED-SOURCE — a source with no maintainer-audited ledger entry is refused in
+	// verified mode (we only serve models whose upstream a human has audited). -> REFUSED
+	t.Run("E_unledgered_source_refused", func(t *testing.T) {
+		dir := t.TempDir()
+		_, digest := writeWeight(t, dir, "model.onnx", []byte("weights from an un-audited upstream"))
+		m := newPermissive(dir)
+		m.SHA256 = SHA256Field{single: digest}
+		m.SourceURL = "https://huggingface.co/some-random-user/unaudited-model/resolve/main/x.onnx"
+
+		EnableVerifiedMode()
+		defer DisableVerifiedMode()
+
+		err := m.VerifyWeights()
+		if err == nil || !strings.Contains(err.Error(), "no maintainer-audited license-ledger entry") {
+			t.Fatalf("un-audited upstream must be refused in verified mode, got: %v", err)
+		}
+		t.Logf("REFUSED (no ledger entry): %v", err)
+	})
 }
 
 // setAllowlist sets the package-global VerifiedSourcePrefixes for a test and returns a

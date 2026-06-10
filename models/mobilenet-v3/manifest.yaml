@@ -1,4 +1,6 @@
 name: mobilenet-v3
+source_url: https://huggingface.co/onnxmodelzoo/mobilenet_v3_small_Opset17/resolve/main/mobilenet_v3_small_Opset17.onnx
+sha256: 9152343d120cf7b03b6b775a5fccd53813cc21891e376060a8edd2dfc0c35193
 model_file: model.onnx
 architecture: mobilenet-v3
 task: classification

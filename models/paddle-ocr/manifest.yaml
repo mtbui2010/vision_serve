@@ -5,6 +5,11 @@ license: Apache-2.0
 
 # Two ONNX graphs (roles). The character set file ppocr_keys_v1.txt must also be
 # present in this directory (loaded at startup for CTC decoding).
+source_url: https://huggingface.co/webnn/PP-OCRv4-ONNX/
+sha256:
+  det: 30a86f5731181461d08021402766601e4302a9b9b9666be8aff402696339cdff
+  rec: 06b3e6af6c59a1ba5d53790ed8c2e4b2de389870b6cf5a97f349f3412cb269c0
+
 files:
   det: det_model.onnx
   rec: rec_model.onnx

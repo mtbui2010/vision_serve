@@ -94,6 +94,11 @@ type PredictJSONRequest struct {
 	// manifest default. A candidate grasp is kept only if gripper_min <= width <= gripper_max.
 	GripperMin float64 `json:"gripper_min,omitempty"`
 	GripperMax float64 `json:"gripper_max,omitempty"`
+	// GroundingDINO threshold overrides (0 = manifest/default). BoxThreshold filters object
+	// queries by score; TextThreshold controls token→label assignment (lower => richer labels,
+	// e.g. "canned coffee" instead of just "coffee"). Used by grounding-dino/grounded-sam/grasp-gd.
+	BoxThreshold  float64 `json:"box_threshold,omitempty"`
+	TextThreshold float64 `json:"text_threshold,omitempty"`
 }
 
 // LoadRequest / UnloadRequest are used by /api/load and /api/unload.

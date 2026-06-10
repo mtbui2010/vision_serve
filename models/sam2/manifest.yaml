@@ -9,6 +9,11 @@ license: Apache-2.0
 
 # Two ONNX graphs (roles). The encoder outputs THREE tensors (multi-scale features).
 # TODO: verify file names match your ONNX export.
+source_url: https://huggingface.co/SharpAI/sam2-hiera-tiny-onnx/
+sha256:
+  encoder: df265cb552475e1b3a6cb57c939e57c95ed849bfc2f985c06efab85d8bca6db9
+  decoder: 63198f1f1e273d8f2f4a9d1baf926e53a01d78dc50e0674640e1513dc00d9927
+
 files:
   encoder: sam2_tiny_encoder.onnx
   decoder: sam2_tiny_decoder.onnx

@@ -1,4 +1,6 @@
 name: scrfd
+source_url: https://huggingface.co/cromsc/scrfd-10g/resolve/main/scrfd_10g_bnkps.onnx
+sha256: 5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91
 model_file: det_10g.onnx
 architecture: scrfd
 task: detection

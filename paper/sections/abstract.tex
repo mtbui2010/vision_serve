@@ -1,24 +1,27 @@
-Open-source model hubs make it trivial to load weights whose declared license cannot be
-trusted: recent audits find that 95.8\% of models lack the required license text and that
-35.5\% of model-to-application transitions silently strip restrictive (copyleft)
-clauses~\cite{jewitt2026permissivewashing,jewitt2025licensedrift}. For a permissively-licensed
-project, loading a single AGPL model virally relicenses the whole
-deployment~\cite{ultralytics2023yolo,agpllicense}. We present \textbf{VisionServe}, a
-single-binary Go inference server that is, to our knowledge, the first inference runtime to
-enforce a permissive-license allowlist \emph{at model-load time}: it binds each model's
-declared license to specific weight bytes (sha256) and an audited \texttt{source\_url},
-entirely offline, and refuses to load anything outside the policy. This is load-time
-license-\emph{policy} enforcement, hardened by content-hashing and a verified-source
-allowlist---a gap that build-time SCA scanners, deploy-time Kubernetes admission controllers,
-and model signing structurally do not cover. We further characterize the CV serving-overhead
-crossover: on identical ONNX, the single Go binary scales to roughly $8\times$ a GIL-bound
-FastAPI+ONNX~Runtime baseline's peak goodput (695 vs.\ 85~rps for MobileNetV3-Small at
-concurrency~64), while being slower per request at low load ($\sim$57\,ms vs.\ $\sim$16\,ms at
-concurrency~1). A latency decomposition shows the per-request cost is pure-Go JPEG decode and
-resize, not the GPU (ORT~Run $<$1\,ms; JPEG decode $\sim$19\,ms); when clients submit a
-pre-decoded tensor (skipping server-side image decode), VisionServe matches a default
-Triton's inference-serving ceiling ($\sim$563 vs.\ $\sim$549~rps) at $\sim$3.4\,ms latency,
-showing that decode---not the runtime---was its only deficit. Export and serving preserve
-accuracy to within 0.5\% Top-1 of commonly-cited references. VisionServe also serves 16
-registered models across 6 CV task types (12 benchmarked). It is released under the
-Apache-2.0 license and is available at \url{https://github.com/}{[repository]}.
+Open-source model hubs let a server load weights whose declared license cannot be trusted:
+recent audits find that 95.8\% of models lack the required license text and that 35.5\% of
+model-to-application transitions silently strip restrictive (copyleft)
+clauses~\cite{jewitt2026permissivewashing,jewitt2025licensedrift}. For a permissively licensed
+project, loading one AGPL model relicenses the whole
+deployment~\cite{ultralytics2023yolo,agpllicense}. We present VisionServe, a single-binary Go
+inference server whose primary contribution is a load-time license-policy gate. At model-load
+time the gate refuses any model whose declared license is outside a permissive allowlist
+(Apache-2.0, MIT, BSD), and in a verified mode it binds each declared license to specific weight
+bytes (sha256), an audited source URL, and a maintainer-audited provenance ledger; a reproducible
+adversarial test shows the gate rejecting relabeled, tampered, and unaudited models. To our
+knowledge no prior inference runtime enforces a license policy at load time. Existing tools either
+analyze and warn at build time or verify container identity at deploy time. The ledger separates
+authority between contributors, who edit manifests, and maintainers, who audit upstreams, so a
+relabeled manifest is rejected by a record its author does not control. The gate is a
+policy-enforcement point, not a license oracle for arbitrary uploads.
+
+Around this gate we build a complete Python-free computer-vision serving stack and measure it on
+an NVIDIA RTX A6000 and a Jetson AGX Orin. On identical ONNX the single Go binary matches an
+eight-process FastAPI+ONNX-Runtime deployment in peak goodput while using a fraction of the
+memory; against the single-worker default that most teams ship it reaches roughly $8\times$ the
+goodput. A latency decomposition attributes the per-request cost to pure-Go JPEG decode rather
+than the GPU (ONNX-Runtime inference under 1\,ms), and with a pre-decoded tensor VisionServe
+matches a default-configuration NVIDIA Triton's serving ceiling. Export and serving preserve
+ImageNet Top-1 accuracy to within 0.5\%. VisionServe serves 19 registered models across seven task
+types, including a pure-Go analytic planar-grasp synthesizer that needs no extra weights, and is
+released under the Apache-2.0 license.

@@ -1,24 +1,16 @@
-\documentclass{article}
+\documentclass[journal]{IEEEtran}
 
-% NeurIPS 2024 style — download neurips_2024.sty from:
-%   https://neurips.cc/Conferences/2024/PaperInformation/StyleFiles
-% or compile on Overleaf (the package is pre-installed there).
-\usepackage[preprint]{neurips_2024}
-
-\usepackage[utf8]{inputenc}
+% IEEE Access uses the standard IEEEtran journal class.
 \usepackage[T1]{fontenc}
 % Map literal Unicode em-dashes to the LaTeX `---` ligature so the source compiles
-% identically under pdflatex (arXiv/IEEE) and the XeTeX engine used by `make pdf`
-% (tectonic). Without this, XeTeX silently drops U+2014 with a legacy Times font.
+% identically under pdflatex and the XeTeX engine used by `make pdf` (tectonic).
 \usepackage{newunicodechar}
 \newunicodechar{—}{---}
-\usepackage{hyperref}
-\usepackage{url}
-\usepackage{booktabs}
 \usepackage{amsmath}
 \usepackage{amsfonts}
-\usepackage{nicefrac}
-\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{multirow}
 \usepackage{xcolor}
 \usepackage{graphicx}
 \usepackage{subcaption}
@@ -27,8 +19,8 @@
 \usetikzlibrary{arrows.meta, positioning, shapes.geometric, fit, backgrounds}
 \usepackage{pgfplots}
 \pgfplotsset{compat=1.18}
-\usepackage{multirow}
-\usepackage{array}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
 
 % YAML is not a built-in listings language — define a minimal dialect.
 \lstdefinelanguage{yaml}{
@@ -48,13 +40,11 @@
 }
 
 % -----------------------------------------------------------------------
-\title{VisionServe: A Lean, License-Safe Inference Server\\for Computer Vision}
+\title{VisionServe: A Lean, License-Safe Inference Server for Computer Vision}
 
-\author{
-  Trung Minh Bui \\
-  Korea Electronics Technology Institute (KETI) \\
-  \texttt{minhtrung@keti.re.kr}
-}
+\author{Trung~Minh~Bui%
+  \thanks{T. M. Bui is with the Korea Electronics Technology Institute (KETI),
+  Seongnam, South Korea (e-mail: minhtrung@keti.re.kr).}}
 
 \begin{document}
 \maketitle
@@ -64,7 +54,14 @@
 \input{sections/abstract}
 \end{abstract}
 
+\begin{IEEEkeywords}
+Computer vision, inference serving, model licensing, software supply chain, edge
+computing, ONNX Runtime, open-vocabulary detection.
+\end{IEEEkeywords}
+
 % -----------------------------------------------------------------------
+\IEEEpeerreviewmaketitle
+
 \section{Introduction}
 \label{sec:intro}
 \input{sections/introduction}
@@ -105,7 +102,7 @@
 \input{sections/conclusion}
 
 % -----------------------------------------------------------------------
-\bibliographystyle{plain}
+\bibliographystyle{IEEEtran}
 \bibliography{references}
 
 \end{document}

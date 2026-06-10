@@ -4,6 +4,8 @@ name: rf-detr-nano
 task: detection
 license: Apache-2.0
 architecture: rf-detr
+source_url: https://huggingface.co/PierreMarieCurie/rf-detr-onnx/resolve/main/rf-detr-nano.onnx
+sha256: 3fcbba0f68bad4939fdf1c38f432783b95691e2869af3be369780aa5be67abb2
 model_file: rf-detr-base.onnx
 
 input:

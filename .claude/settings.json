@@ -6,7 +6,20 @@
       "Bash(nvidia-smi)",
       "Bash(nvidia-smi --query-gpu=*)",
       "Bash(nvidia-smi --query-compute-apps=*)",
+      "Bash(nvidia-smi -L)",
       "Bash(go version *)",
+      "Bash(go version)",
+      "Bash(conda env list)",
+      "Bash(conda info *)",
+      "Bash(conda list)",
+      "Bash(conda list *)",
+      "Bash(pip list)",
+      "Bash(pip list *)",
+      "Bash(pip show *)",
+      "Bash(nvcc --version)",
+      "Bash(go env)",
+      "Bash(go env *)",
+      "Bash(go vet)",
       "Bash(command -v *)",
       "Bash(ldd *)",
       "Bash(curl -s http://localhost:11435/api/health)",
@@ -39,7 +52,11 @@
       "Bash(docker image inspect *)",
       "Bash(hf download *)",
       "Bash(hf models *)",
-      "Bash(docker info)"
+      "Bash(docker info)",
+      "Bash(tegrastats *)",
+      "Bash(tegrastats)",
+      "Bash(dpkg -l)",
+      "Bash(dpkg -l *)"
     ]
   }
 }

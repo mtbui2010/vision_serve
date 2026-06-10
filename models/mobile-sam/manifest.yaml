@@ -8,6 +8,11 @@ architecture: mobile-sam
 
 # Two ONNX graphs (roles). The encoder bakes SAM normalize + pad-to-1024 into the graph
 # and takes a raw HWC 0..255 image; Go only resizes the long side to 1024.
+source_url: https://huggingface.co/Acly/MobileSAM/
+sha256:
+  encoder: 580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749
+  decoder: 93915fc7c993ab9d59ab8c9ccd3bce37f7509c81ab4150a74abd4d2abbd8570d
+
 files:
   encoder: mobile_sam_encoder.onnx
   decoder: mobile_sam_decoder_single.onnx

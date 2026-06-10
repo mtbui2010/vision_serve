@@ -2,6 +2,8 @@ name: rf-detr
 task: detection
 license: Apache-2.0
 architecture: rf-detr               # chọn factory models.New("rf-detr", ...)
+source_url: https://huggingface.co/PierreMarieCurie/rf-detr-onnx/resolve/main/rf-detr-base-coco.onnx
+sha256: b3321965003f11020701987a2de6e3d88f7c9a1298c1a7d4fec2d32e7f179987
 model_file: rf-detr-base-real.onnx  # real weights (103 MB, Apache-2.0); benchmark 2026-06-02
 
 input:

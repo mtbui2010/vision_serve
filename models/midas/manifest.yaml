@@ -1,4 +1,6 @@
 name: midas
+source_url: https://huggingface.co/Heliosoph/midas-small-onnx/resolve/main/midas_v21_small_256.onnx
+sha256: b0a5b3f12625137e626805167907fe0410665bec671685d59daaa2daab19f977
 model_file: midas_v21_small_256.onnx
 architecture: midas
 task: depth

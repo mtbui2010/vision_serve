@@ -1,81 +1,161 @@
+% Fallback: amssymb is not loaded in the preamble, so guarantee \checkmark exists
+% without adding a \usepackage. Renders a small tick via TikZ if undefined.
+\providecommand{\checkmark}{\tikz[scale=0.16]{\draw[line width=0.7pt,line cap=round,line join=round](0,0.45)--(0.35,0)--(1,1);}}
+\begin{figure*}[t]
+\centering
+\begin{tikzpicture}[
+  font=\footnotesize,
+  every node/.style={font=\footnotesize},
+  box/.style={draw, rounded corners=2pt, align=center, inner sep=3pt},
+  modelbox/.style={box, fill=blue!8, minimum width=2.0cm, minimum height=0.42cm},
+  arr/.style={-{Stealth[length=2mm]}, thick},
+]
+% ---- Incoming models (left stack) ----
+\node[modelbox] (m1) {RF-DETR \,\textbf{[Apache-2.0]}};
+\node[modelbox, below=2pt of m1] (m2) {MobileSAM \,\textbf{[MIT]}};
+\node[modelbox, below=2pt of m2, fill=red!8] (m3) {YOLO \,\textbf{[AGPL-3.0]}};
+\node[modelbox, below=2pt of m3, fill=red!8] (m4) {weights \,\textbf{[tampered]}};
+\node[modelbox, below=2pt of m4, fill=red!8] (m5) {weights \,\textbf{[unaudited]}};
+\node[above=2pt of m1, font=\small\bfseries] (mlabel) {Incoming models};
+\node[fit=(m1)(m2)(m3)(m4)(m5), draw, dashed, rounded corners=3pt, inner sep=5pt] (mfit) {};
+
+% ---- Central LICENSE GATE ----
+\node[box, right=1.4cm of mfit, fill=orange!15, draw=orange!80!black, line width=1.2pt,
+      minimum width=4.0cm, align=center] (gate) {%
+  \textbf{\small VisionServe}\\[1pt]
+  \textbf{\small load-time LICENSE GATE}\\[3pt]
+  \footnotesize\begin{tabular}{@{}l@{}}
+  \checkmark\ permissive allowlist\\
+  \checkmark\ sha256 weight pin\\
+  \checkmark\ audited source URL\\
+  \checkmark\ provenance ledger\\
+  \end{tabular}};
+
+% ---- Outputs (right) ----
+\node[box, right=1.5cm of gate, fill=green!12, draw=green!55!black, line width=1pt,
+      minimum width=3.0cm] (admit) {%
+  \textbf{\checkmark\ ADMIT}\\[1pt]
+  \footnotesize Apache-2.0 / MIT / BSD};
+\node[box, below=10pt of admit, fill=red!12, draw=red!70!black, line width=1pt,
+      minimum width=3.0cm] (refuse) {%
+  \textbf{$\times$\ REFUSE}\\[1pt]
+  \footnotesize AGPL / tampered /\\ unaudited / mislabeled};
+
+% ---- Arrows ----
+\draw[arr] (mfit.east) -- (gate.west);
+\draw[arr, green!55!black] (gate.east) |- (admit.west);
+\draw[arr, red!70!black] (gate.east) |- (refuse.west);
+
+% ---- Contrast note (prior art too late) ----
+\node[box, below=8pt of gate, fill=gray!8, text width=4.4cm, font=\scriptsize] (prior) {%
+  \emph{Prior art acts too late:} build-time SCA scanners only \emph{warn};
+  deploy-time admission checks container \emph{identity}, not a license policy over model weights.};
+
+% ---- Bottom banner: anchored at the figure's lower-left, spans the diagram width.
+%      text width wraps the strip so it never overflows the two-column text block. ----
+\node[box, fill=blue!10, draw=blue!50, line width=0.8pt, text width=0.9\textwidth,
+      align=center, font=\small, anchor=north west]
+      (banner) at ([yshift=-12pt]mfit.west |- prior.south) {%
+  \textbf{Single Go binary, no Python} \;\textbar\; \textbf{19 models / 7 CV tasks}
+  \;\textbar\; \textbf{A6000 + Jetson edge} \;\textbar\; \textbf{$\sim$8$\times$ default-Python goodput}
+  \;\textbar\; \textbf{matches default Triton (no-decode)}};
+
+\end{tikzpicture}
+\caption{VisionServe centers on a \emph{load-time license-policy gate}: as model weights are
+loaded it admits only permissively-licensed models (Apache-2.0/MIT/BSD) and, in verified mode,
+binds the declared license to a sha256 weight pin, an audited source URL, and a maintainer-audited
+provenance ledger---refusing AGPL, tampered, unaudited, or mislabeled weights before they ever
+run, whereas prior art only warns at build time or checks container identity at deploy time.}
+\label{fig:teaser}
+\end{figure*}
+
 Computer vision models have moved rapidly from research prototypes into production pipelines
 and edge deployments, powering applications from autonomous inspection robots to real-time
 video analytics at the network edge.
 
 \paragraph{Problem.}
 General-purpose model-serving systems such as NVIDIA Triton Inference Server~\cite{nvidia2023triton}
-and TorchServe~\cite{pytorch2023torchserve} are architected for cloud data centers: they
+and TorchServe~\cite{pytorch2023torchserve} are architected for cloud data centers. They
 require Kubernetes or Docker orchestration, expose complex gRPC configuration surfaces, and
 carry Python or JVM runtimes that can exceed several gigabytes of disk and memory overhead.
 At the other extreme, deploying a model by running a bare PyTorch script provides neither
 a stable REST API, nor lifecycle management (loading, unloading, VRAM accounting), nor the
 ability to serve multiple models through a single endpoint.
-Compounding the infrastructure problem is a license minefield: the most widely used
-detection models---the YOLO series---are released under the GNU Affero General Public
-License v3.0 (AGPL-3.0)~\cite{ultralytics2023yolo,agpllicense}, which requires any software
-that incorporates or exposes YOLO as a network service to publish its entire source code
-under AGPL-3.0, foreclosing use in closed-source or commercial products without a
-paid commercial license.
+A second, less-discussed problem is licensing. The most widely used detection models, the YOLO
+series, are released under the GNU Affero General Public License v3.0
+(AGPL-3.0)~\cite{ultralytics2023yolo,agpllicense}, which requires any software that incorporates
+or exposes YOLO as a network service to publish its entire source code under AGPL-3.0. That
+rules out closed-source or commercial use without a paid commercial license.
 
 \paragraph{Gap.}
-Despite the wide variety of available tools, no existing solution simultaneously provides
-(a)~a complete CV serving stack---covering detection, segmentation, open-vocabulary
-detection, classification, depth estimation, and embedding---in a single deployable unit;
-(b)~a guarantee that every included model is permissively licensed (Apache-2.0, MIT, or
-BSD) so that downstream products can use it without license encumbrance; and
-(c)~a single self-contained binary that runs on edge hardware without requiring a Python
-interpreter, GPU driver stack beyond what ONNX Runtime needs, or container runtime.
+No existing solution simultaneously provides
+(a)~a complete CV serving stack (detection, segmentation, open-vocabulary
+detection, classification, depth estimation, embedding, and grasp synthesis) in a single
+deployable unit;
+(b)~a load-time policy that refuses to load any model whose declared license is
+outside a permissive allowlist (Apache-2.0, MIT, or BSD), so that downstream products can use it
+without license encumbrance; and
+(c)~a single self-contained binary that runs on edge hardware without a Python
+interpreter, a GPU driver stack beyond what ONNX Runtime needs, or a container runtime.
 
 \paragraph{VisionServe.}
-We present VisionServe, a lightweight inference server written in Go that is designed to be
+We present VisionServe, a lightweight inference server written in Go and designed to be
 the ``Ollama for Computer Vision''~\cite{ollama2023}: one binary, pulled from a local model
-registry, serving any of 16 registered models over a REST API with no Python dependency.
+registry, serving any of 19 registered models over a REST API with no Python dependency.
 All inference is delegated to ONNX Runtime~\cite{onnxruntime} via a thin cgo binding,
-enabling automatic fallback across execution providers (TensorRT $\to$ CUDA $\to$ CoreML
-$\to$ DirectML $\to$ OpenVINO $\to$ CPU) without changes to model code.
-License safety is enforced structurally: the model registry parser validates each model's
-declared license against an Apache-2.0/MIT/BSD allowlist at server startup, refusing to
-load any model that does not pass.
+which enables automatic fallback across execution providers (TensorRT, CUDA, CoreML,
+DirectML, OpenVINO, CPU) without changes to model code.
+The defining feature is that a license policy is enforced inside the runtime at load time: the
+model registry parser validates each model's declared license against an Apache-2.0/MIT/BSD
+allowlist at startup and refuses to load any model that fails. In an opt-in verified mode the
+gate is hardened further, binding the declared license to the weight bytes (sha256), to an
+audited \texttt{source\_url}, and to a maintainer-audited license-provenance ledger, so a
+manifest relabeled by a contributor is refused by a record the contributor does not control
+(Section~\ref{sec:catalog}).
 
 \paragraph{Contributions.}
-This paper makes the following contributions:
+The primary contribution is the license gate; the remaining items are the system and the
+measurements that support it.
 
 \begin{itemize}
-  \item \textbf{A license-enforcing model loader (primary).} To our knowledge the first
-        inference runtime to enforce a permissive-license allowlist (Apache-2.0/MIT/BSD)
-        \emph{at model-load time}, refusing non-permissive models by construction, and binding
-        the declared license to specific weight bytes (sha256) and an audited
-        \texttt{source\_url}, entirely offline in a single edge binary.
+  \item \textbf{A load-time license-policy gate (primary contribution).} To our knowledge this
+        is the first inference runtime to enforce a permissive-license allowlist
+        (Apache-2.0/MIT/BSD) at model-load time. In verified mode it binds the declared license
+        to specific weight bytes (sha256), an audited \texttt{source\_url}, and a
+        maintainer-audited license-provenance ledger that cross-checks the declared license
+        against an independent human audit of the upstream, entirely offline in one binary. We
+        position the gate against build-time SCA scanners, deploy-time admission controllers, and
+        model signing, none of which enforces a license policy at load time, and give a threat
+        model exercised by a reproducible adversarial demonstration: an AGPL-declared model, a
+        weight-hash mismatch, an unaudited source, and a manifest whose permissive-but-wrong
+        license diverges from the audited ledger are each refused. The ledger secures the curated
+        catalog by separating contributor and maintainer authority; it is not a universal license
+        oracle for arbitrary uploads.
 
-  \item \textbf{A novelty boundary and threat model.} We position the gate against build-time
-        SCA scanners, deploy-time admission controllers, and model signing---none of which
-        enforces a license policy at model-load time---and give an honest threat model
-        exercised by a reproducible adversarial demo (an AGPL-declared model, a weight-hash
-        mismatch, and an unaudited source are each refused).
+  \item \textbf{A complete, Python-free CV serving system around the gate.} VisionServe serves 19
+        registered models across seven task types behind one unified \texttt{Result} schema and a
+        single binary. The single-binary, Python-free, and multi-EP properties are shared with
+        prior systems (llama.cpp, ONNX Runtime); our contribution on these axes is to bring them
+        together under the license gate for multi-task computer vision.
 
-  \item \textbf{A CV-specific serving-overhead crossover characterization (measured).} On
-        identical ONNX, a single-binary Go server scales to $\sim$$8\times$ a GIL-bound
-        FastAPI+ONNX~Runtime baseline's peak goodput (695 vs.\ 85~rps for MobileNetV3-Small at
-        concurrency~64), and we report honestly where it loses ($\sim$78\,ms vs.\
-        $\sim$15\,ms per request at concurrency~1).
-
-  \item \textbf{A latency decomposition localizing the overhead} to pure-Go JPEG decode
-        ($\sim$19\,ms) and resize/normalize ($\sim$3.6\,ms), not the GPU (ORT~Run $<$1\,ms on
-        an A6000)---the CV-specific instance of non-inference overhead dominating small-DNN
-        serving~\cite{abouelhamayed2024beyond}.
-
-  \item \textbf{A reproducible end-to-end evaluation:} served accuracy (export and serving
-        preserve ImageNet Top-1 to within 0.5\%), throughput--latency behavior across
-        concurrency, and multi-model footprint (one Go process serving four models uses
-        917\,MB RSS / 920\,MB VRAM vs.\ 1632\,MB / 1384\,MB for four FastAPI+ORT processes),
-        plus a single unified result schema and Python/JavaScript client libraries across all
-        16 registered models (12 benchmarked) on an NVIDIA RTX~A6000.
+  \item \textbf{A measured serving-overhead characterization (supporting evidence).} On identical
+        ONNX, the single Go binary matches an eight-process FastAPI+ONNX-Runtime deployment in
+        peak goodput at a fraction of the memory, and reaches roughly $8\times$ the goodput of the
+        single-worker default that most teams ship (585 vs.\ 652~rps at eight workers; the
+        advantage narrows for compute-heavy models). A latency decomposition attributes the
+        per-request cost to pure-Go JPEG decode, not the GPU (ORT~Run $<$1\,ms), and with a
+        pre-decoded tensor VisionServe matches a default-configuration Triton's serving ceiling.
+        This is the CV-specific instance of non-inference overhead dominating small-DNN
+        serving~\cite{abouelhamayed2024beyond}. Results cover an RTX~A6000 and a Jetson AGX Orin,
+        with export and serving preserving ImageNet Top-1 to within 0.5\% (16 of 19 models
+        benchmarked).
 \end{itemize}
 
 \paragraph{Paper outline.}
-The remainder of this paper is organized as follows: Section~\ref{sec:related} surveys
+The remainder of this paper is organized as follows. Section~\ref{sec:related} surveys
 related work in model serving and CV tooling; Section~\ref{sec:design} describes the
 system architecture and key design decisions; Section~\ref{sec:catalog} presents the model
-catalog; Section~\ref{sec:eval} reports benchmark results; Section~\ref{sec:applications}
-illustrates representative use cases; and Sections~\ref{sec:limitations}
-and~\ref{sec:conclusion} discuss limitations, future directions, and conclusions.
+catalog and the license gate; Section~\ref{sec:eval} reports benchmark results;
+Section~\ref{sec:applications} illustrates representative use cases; and
+Sections~\ref{sec:limitations} and~\ref{sec:conclusion} discuss limitations, future directions,
+and conclusions.

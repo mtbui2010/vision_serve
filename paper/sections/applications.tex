@@ -2,43 +2,45 @@
 \label{subsec:edge-deployment}
 
 VisionServe targets resource-constrained edge scenarios without compromising inference
-performance. The execution-provider fallback chain---TensorRT $\to$ CUDA $\to$ CoreML
-$\to$ DirectML $\to$ OpenVINO $\to$ CPU---allows the same binary to exploit the best
+performance. The execution-provider fallback chain (TensorRT $\to$ CUDA $\to$ CoreML
+$\to$ DirectML $\to$ OpenVINO $\to$ CPU) lets the same binary exploit the best
 available accelerator on each platform: NVIDIA Jetson modules via the TensorRT EP,
 Raspberry Pi-class ARM boards via the CPU EP, and Apple Silicon Macs via the CoreML EP.
 Because the server is a single statically-linked Go binary with no Python runtime
 dependency, it eliminates the roughly 200\,MB overhead that PyTorch or TensorFlow
-deployments impose even before any model weights are loaded. This footprint reduction
-is significant on boards with 4--8\,GB of unified memory.
+deployments impose even before any model weights are loaded. That footprint reduction
+matters on boards with 4--8\,GB of unified memory.
 
-As a concrete example, rf-detr-nano runs on a Jetson Orin with the TensorRT EP; on-device
-latency and energy on the Jetson are to be reported once measured on the device (we do not
-relabel the workstation figures here). The same model falls back gracefully to the CUDA EP
-on a workstation GPU, and to the CPU EP on a plain ARM board, with no configuration
-change required from the operator.
+As one example, rf-detr-nano runs on a Jetson AGX Orin at 112.9\,rps under the TensorRT
+EP. This is $\sim$20$\times$ the 5.6\,rps CPU path and $\sim$12$\times$ more energy-efficient
+(338 vs.\ 4136\,mJ/inference), measured on-device with the same harness
+(Section~\ref{sec:eval:edge}, Table~\ref{tab:edge}). The same model falls back gracefully to the
+CUDA EP on a workstation GPU and to the CPU EP on a plain ARM board, driven by the manifest's
+\texttt{tensorrt}\,$\to$\,\texttt{cuda}\,$\to$\,\texttt{cpu} chain with no configuration change
+required from the operator.
 
 \subsection{Text-Prompted Segmentation via Grounded-SAM}
 \label{subsec:grounded-sam}
 
 Grounded-SAM~\cite{liu2023groundingdino,zhang2023mobilesam} combines open-vocabulary
 detection with prompted segmentation in a single HTTP request. The client submits a
-natural-language prompt (e.g., ``red traffic cone'') together with the image; internally,
+natural-language prompt (e.g., ``red traffic cone'') together with the image. Internally,
 the \texttt{PipelineModel} implementation routes the request through two ONNX sessions
 managed by the \texttt{lifecycle.Manager}: GroundingDINO~\cite{liu2023groundingdino}
 first localises every object matching the text query and returns bounding boxes, which
 are then passed as box prompts to MobileSAM~\cite{zhang2023mobilesam}, whose decoder
 produces a binary mask for each detection. The two chained calls are invisible to the
-caller---the server returns a single unified \texttt{Result} containing both the
+caller, since the server returns a single unified \texttt{Result} containing both the
 detection bounding boxes and the corresponding RLE-encoded masks.
 
 A minimal invocation illustrates the simplicity of the client interface:
 
-\begin{verbatim}
+{\footnotesize\begin{verbatim}
 curl -X POST http://localhost:11435/infer \
   -F "model=grounded-sam" \
   -F "prompt=red traffic cone" \
   -F "image=@scene.jpg"
-\end{verbatim}
+\end{verbatim}}
 
 The response carries a \texttt{detections} array with bounding boxes in original image
 coordinates and a \texttt{masks} array encoded as column-major RLE, ready for
@@ -57,7 +59,7 @@ enabling spatial reasoning without a stereo camera or LiDAR sensor.
     \item Send the same image to an object detector (e.g., rf-detr) to obtain bounding
           boxes (\texttt{DetectionResult}).
     \item Call
-          \texttt{depths = get\_depth\_at\_detection(depth\_result, det\_result)},
+          \texttt{depths = get\_depth\_at\_detection(\allowbreak depth\_result, det\_result)},
           which samples the depth map at the centroid of each bounding box and returns a
           per-detection depth value aligned with the detection list.
 \end{enumerate}
@@ -67,6 +69,35 @@ function with the same semantics. Practical applications include warehouse robot
 (estimating pick distance), autonomous navigation (obstacle ranging), and augmented
 reality scene understanding (anchoring virtual objects at physically plausible depths).
 
+\subsection{Robotic Grasp Synthesis}
+\label{subsec:grasp}
+
+The \texttt{grasp} task turns a segmented object into actionable planar parallel-jaw grasps for
+pick-and-place robots, in the same single HTTP request and unified \texttt{Result} schema.
+Internally the \texttt{PipelineModel} routes the image through MobileSAM (class-agnostic
+whole-image automask, or a detector $\to$ box-prompted mask for the class-aware
+\texttt{grasp-rfdetr} / \texttt{grasp-gd} variants), then a pure-Go analytic stage
+(\texttt{internal/grasp}) converts each binary mask into grasp rectangles: it builds a boundary
+normal map with a Sobel-like convolution, decimates the boundary on a polar grid about the
+centroid, enumerates antipodal finger pairs, and scores each candidate with a friction-cone
+force-closure test. Each grasp is returned as $(x,y,\theta,\text{width},\text{quality})$ in
+original-image coordinates, alongside the source mask:
+
+{\footnotesize\begin{verbatim}
+curl -X POST http://localhost:11435/api/predict \
+  -F "model=grasp" \
+  -F "image=@bin.jpg" \
+  -F "gripper_min=10" -F "gripper_max=150"
+\end{verbatim}}
+
+\noindent
+Because the synthesizer is analytic, with no neural network, no ONNX session, and no weights, it adds a
+robotics capability without a new model download or any license obligation, and the gripper
+opening bounds (\texttt{gripper\_min}/\texttt{gripper\_max}, in pixels) are tunable per request.
+This is a deliberate license-driven design choice: it sidesteps the non-commercially-licensed
+learned grasp models (Dex-Net) that VisionServe's allowlist would reject
+(Section~\ref{sec:catalog:inventory}).
+
 \subsection{Open-Vocabulary and Domain-Specific Lightweight Models}
 \label{subsec:open-vocab-domain}
 
@@ -74,12 +105,12 @@ Beyond general-purpose detection and segmentation, VisionServe supports
 domain-specific lightweight models that conform to the same unified schema. PaddleOCR
 \cite{du2020ppocr} implements a two-stage text detection and recognition pipeline
 entirely within the \texttt{PipelineModel} interface: a detection stage localises text
-regions as bounding boxes, and a recognition stage transcribes each region; the results
+regions as bounding boxes, and a recognition stage transcribes each region. The results
 are returned as a standard \texttt{Result} with no schema changes required on the client.
 
 SCRFD~\cite{guo2021scrfd} provides high-speed face detection at 45\,ms median latency
 and approximately 420\,MB VRAM. Because it implements the plain \texttt{Model}
 interface, adding face detection to an application requires only selecting the
-\texttt{scrfd} model identifier---no task-specific client code is needed. Both examples
-demonstrate that the architecture accommodates heterogeneous model families while
+\texttt{scrfd} model identifier, with no task-specific client code needed. Both examples
+show that the architecture accommodates heterogeneous model families while
 maintaining a single, predictable API surface.

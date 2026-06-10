@@ -79,10 +79,13 @@ func (m *groundedSAM) PoolSizes() map[string]int { return map[string]int{roleDec
 
 // Infer runs detection then per-box segmentation; masks are index-aligned with detections.
 func (m *groundedSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
+	// Serialize the whole GroundingDINO pipeline (see groundingdino.PipelineMu).
+	groundingdino.PipelineMu.Lock()
+	defer groundingdino.PipelineMu.Unlock()
 	if strings.TrimSpace(prompt.Text) == "" {
 		return models.Result{}, fmt.Errorf("grounded-sam requires a text prompt, e.g. --prompt \"cat. remote.\"")
 	}
-	boxThresh, textThresh := m.thresholds()
+	boxThresh, textThresh := m.thresholds(prompt)
 
 	// 1) Open-vocab detection (GroundingDINO).
 	gdinoRun := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
@@ -125,13 +128,21 @@ func (m *groundedSAM) Infer(img image.Image, prompt models.Prompt, r models.Runn
 	return models.Result{Detections: dets, Masks: masks}, nil
 }
 
-func (m *groundedSAM) thresholds() (box, text float64) {
+// thresholds resolves box/text thresholds with this precedence: per-request prompt
+// override (>0) → manifest config (>0) → built-in default.
+func (m *groundedSAM) thresholds(p models.Prompt) (box, text float64) {
 	box, text = m.cfg.ConfThresh, m.cfg.TextThresh
 	if box <= 0 {
 		box = defaultBoxThresh
 	}
 	if text <= 0 {
 		text = defaultTextThresh
+	}
+	if p.BoxThresh > 0 {
+		box = p.BoxThresh
+	}
+	if p.TextThresh > 0 {
+		text = p.TextThresh
 	}
 	return box, text
 }

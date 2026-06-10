@@ -9,6 +9,11 @@ architecture: efficient-sam
 # Two ONNX sessions (roles): encoder → decoder.
 # TODO: verify the actual file names on onnx-community/EfficientSAM (HuggingFace).
 # The names below follow the standard HF Optimum export convention; adjust if different.
+source_url: https://huggingface.co/yunyangx/EfficientSAM/
+sha256:
+  encoder: 84ed466ffcc5c1f8d08409bc34a23bb364ab2c15e402cb12d4335a42be0e0951
+  decoder: a62f8fa5ea080447c0689418d69e58f1e83e0b7adf9c142e2bd9bcc8045c0b11
+
 files:
   encoder: efficient_sam_encoder.onnx
   decoder: efficient_sam_decoder.onnx

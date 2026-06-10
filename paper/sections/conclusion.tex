@@ -1,17 +1,23 @@
-VisionServe provides a lean, license-safe path to local computer-vision inference.
-Three design choices underpin the system: a single Go binary with no Python runtime
-dependency, all inference routed exclusively through ONNX Runtime~\cite{onnxruntime}
-on a strict Apache-2.0/MIT/BSD license allowlist, and a unified \texttt{Result} schema
-shared across all task types. Together, these choices make deployment reproducible on
-hardware ranging from a Jetson Orin to an Apple Silicon laptop without operator
-intervention. Across 16 registered models covering six task types---object detection,
-instance segmentation, depth estimation, face detection, OCR, and open-vocabulary
-detection---measured end-to-end latencies range from 33\,ms to 570\,ms on an RTX A6000
-GPU, with sub-100\,ms achievable for the majority of models at typical input resolutions.
+VisionServe makes the model license policy a first-class part of the serving
+infrastructure: every model is admitted through a strict Apache-2.0/MIT/BSD allowlist,
+so a deployment cannot silently inherit copyleft obligations. Two further design choices
+support this gate. The system ships as a single Go binary with no Python runtime
+dependency, and it routes all inference exclusively through ONNX Runtime~\cite{onnxruntime}
+behind a unified \texttt{Result} schema shared across all task types. Together these
+choices make deployment reproducible on hardware ranging from a Jetson Orin to an
+Apple Silicon laptop, without operator intervention.
+
+We evaluated the system across 19 registered models covering seven task types:
+object detection, instance segmentation, depth estimation, face detection, OCR,
+open-vocabulary detection, and planar grasp synthesis. Measured end-to-end latencies
+range from 33\,ms to 570\,ms on an RTX A6000 GPU, and the majority of models stay
+under 100\,ms at typical input resolutions. Reproduced on a Jetson AGX Orin, the same
+single binary drives the TensorRT/CUDA/CPU fallback at up to 20$\times$ the CPU throughput
+and 12$\times$ the energy efficiency for a real detector.
 
 VisionServe is released under the Apache-2.0 license and is publicly available at
-\url{https://github.com/mtbui2010/visionserve}. We invite community contributions: new models require
-only a single package under \texttt{internal/models/} implementing the \texttt{Model}
-or \texttt{PipelineModel} interface, with no changes to core server or engine code.
-Planned extensions include the CLIP~\cite{radford2021clip} text encoder, RTMPose,
-ArcFace, ROCm execution-provider support, and multi-image request batching.
+\url{https://github.com/mtbui2010/visionserve}. We invite community contributions: a new
+model requires only a single package under \texttt{internal/models/} implementing the
+\texttt{Model} or \texttt{PipelineModel} interface, with no changes to core server or
+engine code. Planned extensions include the CLIP~\cite{radford2021clip} text encoder,
+RTMPose, ArcFace, ROCm execution-provider support, and multi-image request batching.

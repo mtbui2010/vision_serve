@@ -25,6 +25,15 @@ func runServe(args []string) error {
 		return err
 	}
 
+	// Verified mode (opt-in, trust-critical deployments): cross-check every model's declared
+	// license against the maintainer-audited provenance ledger and enforce the sha256/source pin.
+	// Off by default (local-first). Enable with VISIONSERVE_VERIFY=strict (or 1/true).
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("VISIONSERVE_VERIFY"))) {
+	case "strict", "1", "true", "on":
+		n := registry.EnableVerifiedMode()
+		log.Printf("license gate: VERIFIED MODE on — %d audited upstream(s); declared licenses cross-checked against the provenance ledger, sha256/source pinned", n)
+	}
+
 	reg := registry.New(modelsDir(*modelsFlag))
 	warns, err := reg.Scan()
 	if err != nil {

@@ -28,19 +28,27 @@ contaminated. The gate makes that load **impossible by construction**, not by au
 | A model under a non-permissive / copyleft license (AGPL) is declared | **License allowlist** (Apache-2.0 / MIT / BSD only) | `manifest.validate()` — registry scan, before load | `A_agpl_license_refused` |
 | Weights are swapped/tampered but the manifest keeps a permissive label ("relabeling") | **Content pin (sha256)** — computed digest must equal the declared digest | `Manifest.VerifyWeights()` — load time, after weights exist | `B_hash_mismatch_refused` |
 | Weights come from an unvetted mirror (right hash, wrong origin) | **Verified-source allowlist** (`source_url` must start with an audited prefix; opt-in) | `Manifest.VerifyWeights()` / `checkSourceAllowlist` | `C_unaudited_source_refused` |
-| Permissive license + correct bytes + audited origin | — (admitted) | both checks pass | `0_baseline_admitted` |
+| A manifest is **relabeled/mislabeled by its author** — a permissive *and allowlisted* license that nonetheless differs from the model's true upstream license (the allowlist alone cannot catch this; both are permissive) | **License provenance ledger** — the contributor-declared license must equal the *maintainer-audited* upstream license recorded for that `source_url` prefix (verified mode) | `Manifest.VerifyLicenseProvenance()` (`ledger.go`) | `D_ledger_license_mismatch_refused`, `E_unledgered_source_refused` |
+| Permissive license + correct bytes + audited origin + license matches the audited ledger | — (admitted) | all checks pass | `0_baseline_admitted` |
 
 Together: the gate **binds a declared-permissive license to specific bytes from an audited origin**,
 closing the relabeling and wrong-origin holes — entirely offline, no network call.
 
 ## What the gate does NOT guarantee (honest limits)
 
-- It still **trusts the declared license string itself**. If an upstream author mislabels a truly
-  copyleft model as Apache-2.0 *and* the bytes/origin are consistent, the gate admits it. The
-  sha256 + source allowlist mitigate this by binding the label to **audited** bytes/origin (a human
-  vets the prefix once), but the gate is a **policy-enforcement point, not a license oracle**. It is
-  therefore "load-time license *policy* enforcement, hardened by content-hashing and a verified
-  source", **not** a "machine-checkable license guarantee".
+- For the **curated catalog** in verified mode, the gate no longer merely trusts the contributor's
+  declared string: the **license provenance ledger** (`ledger.go`) is a *separate, maintainer-audited*
+  record of each upstream's true license (with the LICENSE-file URL and its sha256 as evidence), and
+  the gate admits a model only when the contributor-declared license **equals** the audited record.
+  This separates authority — contributors edit manifests, maintainers edit the ledger — so a PR that
+  flips a manifest's license to smuggle in a copyleft model is refused by a record the PR author does
+  not control. **Residual trust:** the ledger's ground truth is a one-time human audit of the upstream
+  LICENSE file; it detects later divergence of the declared label from that audit, but cannot detect
+  an upstream that was *itself* mislabeled at audit time, and it does not extend to arbitrary
+  un-audited uploads (a universal license oracle is impossible). The gate is therefore **load-time
+  license *policy* enforcement, hardened by content-hashing, a verified source, and an audited
+  provenance ledger** — strong for the shipped catalog, **not** a machine-checkable guarantee for
+  arbitrary models.
 - It does not detect license obligations that require source/weight disclosure post-hoc; it prevents
   the load, which is the relevant control for an edge deployer.
 - sha256 is integrity, not authenticity — pair with model signing (below) for signer identity.

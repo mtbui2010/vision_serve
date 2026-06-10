@@ -26,6 +26,7 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
@@ -35,6 +36,16 @@ import (
 func init() {
 	models.Register("grounding-dino", New)
 }
+
+// PipelineMu serializes whole GroundingDINO-based pipelines end-to-end (grounding-dino,
+// grounded-sam, grasp-gd). The GroundingDINO graph plus the chained MobileSAM decoder pool
+// issue many concurrent cgo ONNX Runtime calls; under concurrent request load this manifests
+// as sporadic request errors and (without async-preemption disabled) the Go-runtime fatal
+// "non-Go code set up signal handler without SA_ONSTACK" from the ORT/CUDA native layer.
+// These pipelines are heavy and low-QPS, so we trade cross-request concurrency for correctness
+// by running one whole pipeline at a time. Pipelines that do NOT use GroundingDINO
+// (e.g. grasp-rfdetr) are unaffected and stay fully concurrent.
+var PipelineMu sync.Mutex
 
 const roleModel = "model"
 
@@ -67,10 +78,12 @@ func (m *groundingDINO) Roles() []string { return []string{roleModel} }
 
 // Infer runs the full open-vocab detection pipeline for the text prompt.
 func (m *groundingDINO) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
+	PipelineMu.Lock()
+	defer PipelineMu.Unlock()
 	if strings.TrimSpace(prompt.Text) == "" {
 		return models.Result{}, fmt.Errorf("grounding-dino requires a text prompt, e.g. --prompt \"cat. remote.\"")
 	}
-	boxThresh, textThresh := m.thresholds()
+	boxThresh, textThresh := m.thresholds(prompt)
 
 	run := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
 		return r.Run(roleModel, inputs)
@@ -82,13 +95,21 @@ func (m *groundingDINO) Infer(img image.Image, prompt models.Prompt, r models.Ru
 	return models.Result{Detections: dets}, nil
 }
 
-func (m *groundingDINO) thresholds() (box, text float64) {
+// thresholds resolves box/text thresholds with this precedence: per-request prompt
+// override (>0) → manifest config (>0) → built-in default.
+func (m *groundingDINO) thresholds(p models.Prompt) (box, text float64) {
 	box, text = m.cfg.ConfThresh, m.cfg.TextThresh
 	if box <= 0 {
 		box = defaultBoxThresh
 	}
 	if text <= 0 {
 		text = defaultTextThresh
+	}
+	if p.BoxThresh > 0 {
+		box = p.BoxThresh
+	}
+	if p.TextThresh > 0 {
+		text = p.TextThresh
 	}
 	return box, text
 }

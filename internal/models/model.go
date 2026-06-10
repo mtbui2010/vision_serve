@@ -148,6 +148,12 @@ type Prompt struct {
 	// the grasp model (0 = use the manifest default).
 	GripperMin float64
 	GripperMax float64
+	// BoxThresh/TextThresh: per-request GroundingDINO threshold overrides (0 = use the
+	// manifest value, else the built-in default). BoxThresh filters object queries by
+	// score (= box_threshold); TextThresh controls which prompt tokens are assigned as a
+	// detection's label (= text_threshold). Used by grounding-dino, grounded-sam, grasp-gd.
+	BoxThresh  float64
+	TextThresh float64
 }
 
 // Empty reports whether the prompt carries no PROMPT content (options aside).

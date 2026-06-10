@@ -110,6 +110,13 @@ var VerifiedSourcePrefixes []string
 // audited source" — it closes the relabeling hole but still TRUSTS the declared
 // license itself (see docs/manifest-spec.md threat model).
 func (m *Manifest) VerifyWeights() error {
+	// Verified mode: cross-check the contributor-declared license against the maintainer-audited
+	// ledger (see ledger.go). No-op when verified mode is off. This is the control that catches a
+	// manifest mislabeled by its author even when bytes/origin are consistent.
+	if err := m.VerifyLicenseProvenance(); err != nil {
+		return err
+	}
+
 	if len(VerifiedSourcePrefixes) > 0 {
 		if err := checkSourceAllowlist(m.SourceURL); err != nil {
 			return fmt.Errorf("model %q: %w", m.Name, err)
