@@ -28,6 +28,8 @@ GPU    ?= 1
 
 # Python interpreter used to build the client package for PyPI.
 PYTHON ?= python3
+# PyPI project name (used by `make pypi-next-version` to auto-detect the latest release).
+PYPI_PKG ?= visionserve
 
 # Conda env that provides the LaTeX engine (tectonic) for `make pdf`. tectonic is a
 # self-contained engine that fetches only the packages the paper needs and caches
@@ -41,7 +43,7 @@ TEXENV ?= texpdf
 ORT_DYLIB_PATH ?= $(shell find $(HOME) /usr/local/lib /usr/lib -name 'libonnxruntime.so*' 2>/dev/null | grep -v node_modules | grep -E 'onnxruntime/capi.*\.so\.[0-9]' | head -1)
 
 .PHONY: all build install run serve list ps rm pull demo terminate test fmt vet tidy lint clean \
-        build-linux-arm64 docker docker-edge pypi help pdf paper-clean clear-image \
+        build-linux-arm64 docker docker-edge pypi pypi-next-version help pdf paper-clean clear-image \
         push-docker push-docker-arm push-docker-next-version
 
 all: build ## Default target: build
@@ -242,6 +244,39 @@ pypi: ## Build + validate the Python client package (clients/python -> dist/). P
 	@echo "→ built clients/python/dist/"
 	@echo "  Publish to PyPI:      git tag vX.Y.Z && git push origin vX.Y.Z   (CI Trusted Publishing)"
 	@echo "  Publish to TestPyPI:  run the 'Publish Python client' workflow manually (workflow_dispatch)"
+
+pypi-next-version: ## Query PyPI for the latest version, bump patch in pyproject, build, commit + push tag vX.Y.Z (CI publishes)
+	@set -e; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+	    echo "ERROR: working tree has uncommitted changes — commit them first so the release tag is a complete, reproducible build." >&2; \
+	    git status --short >&2; exit 1; \
+	fi; \
+	echo "=== Querying PyPI for latest $(PYPI_PKG) version ==="; \
+	LATEST=$$(curl -sf "https://pypi.org/pypi/$(PYPI_PKG)/json" \
+	    | python3 -c "import sys,json,re; \
+	      rels=[k for k in json.load(sys.stdin).get('releases',{}) if re.match(r'^[0-9]+\.[0-9]+\.[0-9]+$$',k)]; \
+	      rels.sort(key=lambda x:[int(n) for n in x.split('.')]); \
+	      print(rels[-1] if rels else '0.0.0')" 2>/dev/null || echo ""); \
+	if [ -z "$$LATEST" ]; then \
+	    CUR=$$(grep -m1 '^version' clients/python/pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/'); \
+	    echo "  WARNING: PyPI query failed — falling back to pyproject version $$CUR"; \
+	    LATEST=$$CUR; \
+	fi; \
+	NEXT=$$(echo "$$LATEST" | python3 -c "import sys; v=sys.stdin.read().strip().split('.'); v[2]=str(int(v[2])+1); print('.'.join(v))"); \
+	echo "  Latest on PyPI: $$LATEST  →  Next: $$NEXT"; \
+	echo "=== Bumping clients/python/pyproject.toml → $$NEXT ==="; \
+	sed -i -E "s|^version = \"[^\"]*\"|version = \"$$NEXT\"|" clients/python/pyproject.toml; \
+	echo "=== Building + validating the package ==="; \
+	$(MAKE) pypi; \
+	echo "=== Committing + tagging v$$NEXT ==="; \
+	git add clients/python/pyproject.toml; \
+	git commit -m "client: release v$$NEXT"; \
+	git tag "v$$NEXT"; \
+	git push origin HEAD; \
+	git push origin "v$$NEXT"; \
+	echo ""; \
+	echo "=== Done — pushed tag v$$NEXT; CI 'Publish Python client' uploads to PyPI ==="; \
+	echo "  https://pypi.org/project/$(PYPI_PKG)/$$NEXT/"
 
 clean: ## Remove build artifacts
 	rm -rf $(BIN_DIR) clients/python/dist clients/python/build
