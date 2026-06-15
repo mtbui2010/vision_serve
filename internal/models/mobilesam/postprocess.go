@@ -116,8 +116,8 @@ type MaskBitmap struct {
 	Conf float64
 }
 
-// toMask encodes a MaskBitmap into the public models.Mask (column-major RLE + bbox + conf).
-func (b MaskBitmap) toMask() models.Mask {
+// ToMask encodes a MaskBitmap into the public models.Mask (column-major RLE + bbox + conf).
+func (b MaskBitmap) ToMask() models.Mask {
 	return models.Mask{
 		RLE:  encodeRLEColumnMajor(b.Data, b.H, b.W),
 		BBox: b.BBox,

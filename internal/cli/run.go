@@ -19,7 +19,9 @@ import (
 	"visionserve/internal/imageproc"
 	"visionserve/internal/lifecycle"
 	"visionserve/internal/models"
+	"visionserve/internal/morph"
 	"visionserve/internal/registry"
+	roipkg "visionserve/internal/roi"
 	"visionserve/pkg/api"
 )
 
@@ -53,6 +55,12 @@ func runRun(args []string) error {
 	pointFlag := fs.String("point", "", "point prompt(s) for SAM, \"x,y[,label]\" (label 1=fg 0=bg; multiple separated by ';')")
 	minSizeFlag := fs.Float64("min-size", 0, "minimum bbox area as %% of image area (0 = no limit, e.g. 0.1 = 0.1%%)")
 	maxSizeFlag := fs.Float64("max-size", 0, "maximum bbox area as %% of image area (0 = no limit, e.g. 90 = 90%%)")
+	roiFlag := fs.String("roi", "", "region of interest \"x,y,w,h\" in ORIGINAL pixels: process only this crop, map results back")
+	methodFlag := fs.String("method", "", "background model: auto|depth|sam|cv|automask (default auto)")
+	bgMaxAreaFlag := fs.Float64("bg-max-area", 0, "background model (sam/automask): a mask >= this %% of image is background")
+	fgMinAreaFlag := fs.Float64("fg-min-area", 0, "background model (sam/automask): drop masks below this %% of image")
+	gridSizeFlag := fs.Int("grid-size", 0, "background/MobileSAM automask grid N (N*N decoder calls)")
+	dilateFlag := fs.Int("dilate", 0, "morph every output mask by |N| px: >0 enlarge (dilate), <0 shrink (erode)")
 
 	// Allow flags interleaved with positionals (e.g. `run rf-detr img.jpg --out r.png`). The
 	// standard flag package stops at the first positional, so we loop: parse flags -> take 1
@@ -95,6 +103,19 @@ func runRun(args []string) error {
 	if err != nil {
 		return err
 	}
+	prompt.Method = *methodFlag
+	prompt.BgMaxArea, prompt.FgMinArea = *bgMaxAreaFlag, *fgMinAreaFlag
+	prompt.GridSize = *gridSizeFlag
+
+	// Region of interest (crop semantics): infer on the crop, but keep the ORIGINAL image
+	// (img) for visualization since results are mapped back to original coordinates.
+	fullW, fullH := img.Bounds().Dx(), img.Bounds().Dy()
+	inferImg := img
+	rect, hasROI := roipkg.Clamp(roipkg.Parse(*roiFlag), fullW, fullH)
+	if hasROI {
+		inferImg = roipkg.Crop(img, rect)
+		roipkg.ShiftPrompt(&prompt, rect)
+	}
 
 	mgr := lifecycle.NewManager(reg)
 	defer mgr.Close()
@@ -104,14 +125,18 @@ func runRun(args []string) error {
 	// are captured BEFORE any image is drawn/saved, so visualization never
 	// inflates the reported latency.
 	clientStart := time.Now()
-	res, err := mgr.PredictPrompt(modelName, img, prompt)
+	res, err := mgr.PredictPrompt(modelName, inferImg, prompt)
 	if err != nil {
 		return err
 	}
 	clientMs := float64(time.Since(clientStart).Microseconds()) / 1000.0
 
+	if hasROI {
+		res = roipkg.MapResult(res, rect, fullW, fullH)
+	}
+	morph.ApplyToMasks(res.Masks, fullW, fullH, *dilateFlag)
 	if *minSizeFlag > 0 || *maxSizeFlag > 0 {
-		res = api.FilterBySizePct(res, *minSizeFlag, *maxSizeFlag, img.Bounds().Dx(), img.Bounds().Dy())
+		res = api.FilterBySizePct(res, *minSizeFlag, *maxSizeFlag, fullW, fullH)
 	}
 
 	// Resolve the output path: --save-as / --out (explicit) take precedence; a

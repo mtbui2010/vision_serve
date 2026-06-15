@@ -47,4 +47,15 @@ visionserve run grounded-sam img.jpg --prompt "cat. remote." --out overlay.png
 - `conf_threshold` (default 0.3): GroundingDINO box/query score filter.
 - `text_threshold` (default 0.25): token→label assignment filter.
 
+Both can be **overridden per request** (not just in the manifest) via the
+`box_threshold` / `text_threshold` HTTP form/JSON fields or the matching Python client
+kwargs; precedence is per-request (>0) → manifest → default. Since the boxes come from
+GroundingDINO, lowering `text_threshold` keeps more prompt words per label (e.g.
+`"canned coffee"` instead of just `"coffee"`):
+
+```bash
+curl -s -F model=grounded-sam -F image=@img.jpg -F prompt="canned coffee." \
+  -F box_threshold=0.4 -F text_threshold=0.15 http://localhost:11435/api/predict
+```
+
 The overlay PNG draws each detection box + its mask.

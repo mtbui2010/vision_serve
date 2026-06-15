@@ -51,6 +51,7 @@ func autoSegment(
 	scale float64,
 	decRun func(map[string]engine.Tensor) ([]engine.Tensor, error),
 	decOutNames []string,
+	gridSize int,
 ) ([]MaskBitmap, error) {
 	origW := img.Bounds().Dx()
 	origH := img.Bounds().Dy()
@@ -58,7 +59,10 @@ func autoSegment(
 	minArea := max(1, int(float64(totalPx)*autoMinAreaFrac))
 	maxArea := int(float64(totalPx) * autoMaxAreaFrac)
 
-	const N = autoGridSize
+	N := gridSize
+	if N <= 0 {
+		N = autoGridSize
+	}
 	allResults := make([]amgResult, N*N)
 
 	var wg sync.WaitGroup
@@ -69,7 +73,7 @@ func autoSegment(
 			go func(i, j, idx int) {
 				defer wg.Done()
 				allResults[idx] = runGridPoint(
-					i, j, origW, origH, minArea, maxArea,
+					i, j, N, origW, origH, minArea, maxArea,
 					scale, embedding, decRun, decOutNames,
 				)
 			}(i, j, idx)
@@ -129,14 +133,14 @@ func autoSegment(
 
 // runGridPoint runs a single decoder call for grid cell (i,j) and returns a candidate.
 func runGridPoint(
-	i, j, origW, origH, minArea, maxArea int,
+	i, j, gridN, origW, origH, minArea, maxArea int,
 	scale float64,
 	embedding engine.Tensor,
 	decRun func(map[string]engine.Tensor) ([]engine.Tensor, error),
 	decOutNames []string,
 ) amgResult {
-	cx := (float64(i) + 0.5) / float64(autoGridSize) * float64(origW)
-	cy := (float64(j) + 0.5) / float64(autoGridSize) * float64(origH)
+	cx := (float64(i) + 0.5) / float64(gridN) * float64(origW)
+	cy := (float64(j) + 0.5) / float64(gridN) * float64(origH)
 	px := float32(cx * scale)
 	py := float32(cy * scale)
 

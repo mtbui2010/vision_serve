@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -72,15 +73,27 @@ func Inspect(modelPath string) (inputs, outputs []IOInfo, err error) {
 	return conv(in), conv(out), nil
 }
 
-// Session is a live ONNX session. Thread-safe: Run is protected by a mutex
-// because an ORT session is not guaranteed safe when called concurrently with the same input binding.
-// (see CLAUDE.md: session access must be thread-safe.)
+// Session is a live ONNX session. Thread-safe AND OS-thread-pinned: every call to the
+// underlying ORT session (create, Run, Destroy) is funnelled onto ONE dedicated OS thread
+// owned by this Session's worker goroutine (see worker / submit).
+//
+// Why pinned, not just mutex-serialized: ORT's CUDA execution provider allocates GPU
+// resources PER OS THREAD (a cublas + cudnn handle and a memory arena, created lazily on the
+// first Run seen on each thread). Go freely migrates a goroutine across OS threads between
+// calls — and cgo calls in particular spawn fresh threads — so a plain mutex would let each
+// inference land on a different thread, leaking a new CUDA context every time until
+// `cublasCreate` fails with "CUBLAS failure 3: the resource allocation failed" after a few
+// requests. Pinning to one thread means exactly one CUDA per-thread context per session for
+// its whole lifetime. (see CLAUDE.md: session access must be thread-safe + VRAM-safe.)
 type Session struct {
-	mu          sync.Mutex
 	sess        *ort.DynamicAdvancedSession
 	inputNames  []string
 	outputNames []string
 	activeEP    Provider // EP that was actually loaded (first one whose libs were available)
+
+	jobs      chan func() // work funnelled onto the dedicated OS thread; closed by Close
+	closeOnce sync.Once
+	closeErr  chan error // worker sends the Destroy() result here after jobs drains
 }
 
 // ActiveEP returns the execution provider that is actually running this session.
@@ -112,14 +125,54 @@ func NewSession(modelPath string, inputNames, outputNames []string, providers []
 		}
 	}
 
-	// Try each EP in priority order, creating the session with that single EP appended.
-	// If session creation FAILS (not just a missing lib, but the EP cannot build/partition
-	// this specific graph — e.g. TensorRT rejecting the MobileSAM decoder's Float shape
-	// tensor `orig_im_size`), fall back to the NEXT EP in the chain instead of failing the
-	// whole load. CPU is always the last candidate, so a session is always created.
-	//
-	// ORT prints RED errors to stderr while an EP fails over. On eventual success we swallow
-	// that noise (it is normal fallback); if ALL EPs are exhausted we reprint the last error.
+	s := &Session{
+		inputNames:  inputNames,
+		outputNames: outputNames,
+		jobs:        make(chan func()),
+		closeErr:    make(chan error, 1),
+	}
+	// Start the dedicated, OS-thread-pinned worker. It creates the ORT session on that thread
+	// so the session's CUDA per-thread context is bound to the same thread that will Run and
+	// Destroy it — exactly one context for the session's lifetime (see Session doc).
+	ready := make(chan error, 1)
+	go s.worker(modelPath, providers, ready)
+	if err := <-ready; err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// worker owns the session's single OS thread for its entire lifetime: it creates the ORT
+// session, runs every job serially, and destroys the session — all on the same locked thread.
+// This is what keeps ORT's CUDA EP to one per-thread context per session (see Session doc).
+func (s *Session) worker(modelPath string, providers []Provider, ready chan<- error) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	sess, ep, err := createSession(modelPath, s.inputNames, s.outputNames, providers)
+	if err != nil {
+		ready <- err
+		return
+	}
+	s.sess = sess
+	s.activeEP = ep
+	ready <- nil // happens-before NewSession's return: s.sess/s.activeEP are safely published
+
+	for fn := range s.jobs {
+		fn()
+	}
+	s.closeErr <- s.sess.Destroy() // jobs closed by Close: destroy on the same locked thread
+}
+
+// createSession builds an ORT session, trying each EP in priority order with that single EP
+// appended. If session creation FAILS (not just a missing lib, but the EP cannot build/partition
+// this specific graph — e.g. TensorRT rejecting the MobileSAM decoder's Float shape tensor
+// `orig_im_size`), it falls back to the NEXT EP in the chain instead of failing the whole load.
+// CPU is always the last candidate, so a session is always created. Must run on the worker thread.
+//
+// ORT prints RED errors to stderr while an EP fails over. On eventual success we swallow that
+// noise (it is normal fallback); if ALL EPs are exhausted we reprint the last error.
+func createSession(modelPath string, inputNames, outputNames []string, providers []Provider) (*ort.DynamicAdvancedSession, Provider, error) {
 	candidates := availableProviders(providers)
 	if Trace {
 		fmt.Fprintf(os.Stderr, "engine: [trace] creating session for %s — EP chain: %s\n",
@@ -133,7 +186,7 @@ func NewSession(modelPath string, inputNames, outputNames []string, providers []
 	for _, ep := range candidates {
 		opts, err := ort.NewSessionOptions()
 		if err != nil {
-			return nil, fmt.Errorf("engine: failed to create SessionOptions: %w", err)
+			return nil, activeEP, fmt.Errorf("engine: failed to create SessionOptions: %w", err)
 		}
 		var s *ort.DynamicAdvancedSession
 		captured, runErr := captureStderr(func() error {
@@ -161,10 +214,10 @@ func NewSession(modelPath string, inputNames, outputNames []string, providers []
 		if lastCaptured != "" {
 			fmt.Fprint(os.Stderr, lastCaptured) // real error: restore ORT's original log
 		}
-		return nil, fmt.Errorf("engine: failed to create session for %s (all EPs exhausted): %w",
+		return nil, activeEP, fmt.Errorf("engine: failed to create session for %s (all EPs exhausted): %w",
 			filepath.Base(modelPath), lastErr)
 	}
-	return &Session{sess: sess, inputNames: inputNames, outputNames: outputNames, activeEP: activeEP}, nil
+	return sess, activeEP, nil
 }
 
 // providerNames renders the requested EP order for trace output.
@@ -246,9 +299,7 @@ func (s *Session) Run(inputs []Tensor) ([]Tensor, error) {
 	if len(inputs) != len(s.inputNames) {
 		return nil, fmt.Errorf("engine: input count %d != model input count %d", len(inputs), len(s.inputNames))
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.runLocked(inputs)
+	return s.submit(func() ([]Tensor, error) { return s.runOnThread(inputs) })
 }
 
 // RunNamed runs inference binding inputs BY NAME (robust when a model has many inputs
@@ -263,13 +314,29 @@ func (s *Session) RunNamed(inputs map[string]Tensor) ([]Tensor, error) {
 		}
 		ordered = append(ordered, t)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.runLocked(ordered)
+	return s.submit(func() ([]Tensor, error) { return s.runOnThread(ordered) })
 }
 
-// runLocked is the shared inference core; the caller must hold s.mu.
-func (s *Session) runLocked(inputs []Tensor) ([]Tensor, error) {
+// submit funnels one unit of inference work onto the session's dedicated OS thread and waits
+// for its result. The worker processes jobs serially, so this also serializes concurrent
+// callers (replacing the old mutex) while guaranteeing the ORT call runs on the pinned thread.
+func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
+	type result struct {
+		outs []Tensor
+		err  error
+	}
+	ch := make(chan result, 1)
+	s.jobs <- func() {
+		outs, err := work()
+		ch <- result{outs, err}
+	}
+	r := <-ch
+	return r.outs, r.err
+}
+
+// runOnThread is the shared inference core; it ONLY ever executes on the worker's locked OS
+// thread (via submit), so it touches s.sess without further locking.
+func (s *Session) runOnThread(inputs []Tensor) ([]Tensor, error) {
 	inVals := make([]ort.Value, 0, len(inputs))
 	for i, t := range inputs {
 		var (
@@ -317,15 +384,16 @@ func (s *Session) InputNames() []string { return s.inputNames }
 func (s *Session) OutputNames() []string { return s.outputNames }
 
 // Close releases the session (to avoid VRAM leaks). Must be called via lifecycle on unload.
+// It closes the job channel so the worker drains any in-flight jobs, destroys the session on
+// its own pinned thread (releasing that thread's CUDA per-thread context), then exits.
+// Idempotent and safe to call once; concurrent inference must have stopped first.
 func (s *Session) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.sess != nil {
-		err := s.sess.Destroy()
-		s.sess = nil
-		return err
-	}
-	return nil
+	var err error
+	s.closeOnce.Do(func() {
+		close(s.jobs)
+		err = <-s.closeErr
+	})
+	return err
 }
 
 func destroyValues(vals []ort.Value) {

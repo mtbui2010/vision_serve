@@ -19,6 +19,9 @@ MODEL  ?= rf-detr
 IMAGE  ?= test/testdata/sample.jpg
 ADDR   ?= :11435
 MODELS ?= ./models
+# Idle auto-unload override for `make serve` (seconds): 0 = never unload (models stay
+# resident — no slow reload after an idle pause), -1 = use each manifest's value.
+IDLE   ?= -1
 # Use the GPU (CUDA EP) by default; falls back to CPU automatically if no CUDA-enabled
 # ORT lib is found. Override with `make run GPU=0` to force CPU.
 GPU    ?= 1
@@ -59,15 +62,16 @@ install: ## Install the binary into GOBIN/GOPATH bin (use `visionserve` globally
 # to auto-detect a CUDA-enabled ORT lib + the cuDNN/CUDA libs, and fall back to the
 # auto-detected CPU ORT lib if none is found. Add GPU=0 to force CPU.
 
-run: build ## Run on 1 image: make run MODEL=rf-detr IMAGE=path.jpg [OUT=r.png] [BOX=x,y,w,h] [PROMPT="cat."] [POINT=x,y] [MIN_SIZE=px²] [MAX_SIZE=px²] [GPU=0]
+run: build ## Run on 1 image: make run MODEL=rf-detr IMAGE=path.jpg [OUT=r.png] [BOX=x,y,w,h] [PROMPT="cat."] [POINT=x,y] [ROI=x,y,w,h] [METHOD=cv] [MIN_SIZE=px²] [MAX_SIZE=px²] [GPU=0]
 	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; else export ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)"; fi; \
 		"$(BIN_DIR)/$(BINARY)" run --models "$(MODELS)" $(MODEL) "$(IMAGE)" \
 		$(if $(OUT),--out "$(OUT)") $(if $(BOX),--box "$(BOX)") $(if $(PROMPT),--prompt "$(PROMPT)") $(if $(POINT),--point "$(POINT)") \
+		$(if $(ROI),--roi "$(ROI)") $(if $(METHOD),--method "$(METHOD)") $(if $(BG_MAX_AREA),--bg-max-area "$(BG_MAX_AREA)") $(if $(GRID_SIZE),--grid-size "$(GRID_SIZE)") $(if $(DILATE),--dilate "$(DILATE)") \
 		$(if $(MIN_SIZE),--min-size "$(MIN_SIZE)") $(if $(MAX_SIZE),--max-size "$(MAX_SIZE)")'
 
-serve: build ## Start the HTTP server: make serve [ADDR=:11435] [GPU=0]
+serve: build ## Start the HTTP server: make serve [ADDR=:11435] [GPU=0] [IDLE=0]
 	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; else export ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)"; fi; \
-		"$(BIN_DIR)/$(BINARY)" serve --models "$(MODELS)" --addr "$(ADDR)"'
+		"$(BIN_DIR)/$(BINARY)" serve --models "$(MODELS)" --addr "$(ADDR)" --idle-unload-seconds "$(IDLE)"'
 
 list: build ## List models in the registry (+ pullable models)
 	$(BIN_DIR)/$(BINARY) list --models $(MODELS)
@@ -168,7 +172,7 @@ clear-image: ## Remove ALL local visionserve docker images (local + Docker Hub t
 DOCKER_HUB_USER ?= mtbui2010
 # PUSH_VERSION is the tag of the already-built local image (e.g. v0.1.2).
 # Override at the command line if needed: make push-docker PUSH_VERSION=v0.2.0
-PUSH_VERSION    ?= v0.1.7
+PUSH_VERSION    ?= v0.1.9
 
 push-docker: ## Tag and push CPU + GPU images to Docker Hub (DOCKER_HUB_USER=mtbui2010)
 	@echo "=== Tagging images for Docker Hub ($(DOCKER_HUB_USER)) ==="

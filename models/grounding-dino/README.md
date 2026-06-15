@@ -89,6 +89,19 @@ Thresholds (adjustable in `manifest.yaml`):
 - `conf_threshold` (default 0.3): minimum box/query score to keep a detection.
 - `text_threshold` (default 0.25): minimum token score for assigning a label to a box.
 
+Both thresholds can also be **overridden per request** instead of editing the manifest —
+pass `box_threshold` / `text_threshold` as HTTP form/JSON fields, or as
+`box_threshold=` / `text_threshold=` kwargs on the Python client. Precedence is
+per-request (>0) → manifest → built-in default. Lowering `text_threshold` keeps more
+prompt words in each label — e.g. the prompt `"canned coffee"` yields the label
+`"canned coffee"` instead of just `"coffee"`.
+
+```bash
+# server: tighter boxes, richer labels
+curl -s -F model=grounding-dino -F image=@img.jpg -F prompt="canned coffee." \
+  -F box_threshold=0.4 -F text_threshold=0.15 http://localhost:11435/api/predict
+```
+
 ## Performance
 
 Measured on NVIDIA RTX A6000 via VisionServe HTTP server (warm, `duration_ms`):

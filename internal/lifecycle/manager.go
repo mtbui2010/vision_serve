@@ -29,6 +29,11 @@ type Manager struct {
 	mu   sync.Mutex
 	live map[string]*Session
 
+	// idleOverrideSec, when >= 0, overrides every model's manifest
+	// idle_unload_seconds at Load time (0 = never auto-unload). -1 keeps the
+	// per-manifest value. Set once at startup via SetIdleUnloadOverride.
+	idleOverrideSec int
+
 	stop chan struct{}
 	once sync.Once
 }
@@ -36,12 +41,21 @@ type Manager struct {
 // NewManager creates a manager bound to a registry and starts the idle reaper.
 func NewManager(reg *registry.Registry) *Manager {
 	m := &Manager{
-		reg:  reg,
-		live: map[string]*Session{},
-		stop: make(chan struct{}),
+		reg:             reg,
+		live:            map[string]*Session{},
+		idleOverrideSec: -1, // -1 = use each manifest's idle_unload_seconds
+		stop:            make(chan struct{}),
 	}
 	go m.reaper()
 	return m
+}
+
+// SetIdleUnloadOverride overrides every model's manifest idle_unload_seconds.
+// sec >= 0 applies to ALL models (0 = never auto-unload — models stay resident so
+// the first request after a long idle pause is not slowed by a reload); sec < 0
+// restores the per-manifest value. Call once at startup, before loading any model.
+func (m *Manager) SetIdleUnloadOverride(sec int) {
+	m.idleOverrideSec = sec
 }
 
 // Load loads a model into memory (idempotent: returns immediately if already loaded).
@@ -113,7 +127,11 @@ func (m *Manager) Load(name string) error {
 		return err
 	}
 
-	idle := time.Duration(man.Runtime.IdleUnloadSeconds) * time.Second
+	idleSec := man.Runtime.IdleUnloadSeconds
+	if m.idleOverrideSec >= 0 {
+		idleSec = m.idleOverrideSec // global --idle-unload-seconds override (0 = never)
+	}
+	idle := time.Duration(idleSec) * time.Second
 	now := time.Now()
 	task := api.Task(man.Task)
 

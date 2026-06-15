@@ -81,6 +81,18 @@ dependency is **gratuitous** — every operation is plain array math, so it **po
 **Implication:** `mask2grasps` is **not** a `Model` or `PipelineModel` that owns an ONNX
 session. It is a **pure-Go postprocess on a segmentation `Result`**.
 
+**Performance — the dominant stage is the boundary-normal pass.** In the Go port
+(`collectBoundary` in `internal/grasp/grasp.go`) the boundary-normal map dominates cost; the
+combinatorial antipodal search is **not** the bottleneck (the decimated boundary-point count is
+bounded by the `(deg, stride)` polar grid). The boundary pass is computed with an **integral
+image (summed-area table)** for the separable Sobel-like kernel, so each per-pixel ±1 kernel sum
+reduces to a few O(1) rectangle counts, plus a **uniform-window fast-skip** (a `(2r+1)²` window
+that is all-set or all-background has a zero normal and is skipped — this is the solid interior
+and surrounding background, leaving only the thin boundary band to run the full sums). The result
+is **BIT-EXACT** — identical grasps to the direct convolution — but ~**2–6× faster** on this
+stage: cost drops from `O(area·kernel)` to ~`O(area)` with a small constant, scaling with object
+area far better.
+
 ## 4. Schema extension (shared, do once)
 
 Per `CLAUDE.md` ("unified schema, no per-model schema"), extend `pkg/api/types.go` exactly the
@@ -164,6 +176,36 @@ func (m *graspSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner)
     return models.Result{Task: models.TaskGrasp, Masks: masks, Grasps: grasps}, nil
 }
 ```
+
+### 5a. Class-agnostic vs. box-prompted fast path
+
+The shipped `grasp` model (`internal/models/grasp/grasp.go`) has an OPTIONAL detector. With a
+detector (e.g. `grasp-gd` = GroundingDINO) it runs **detect → segment-per-box → grasp-per-mask**
+for **class-aware** grasps. **Without** a detector the model is **class-agnostic**, and the
+incoming `Prompt` selects between two paths:
+
+- **No `box` prompt** — whole-image **automask**, then `mask2grasp` on **every** mask. Cost
+  scales with the number of objects in the *scene*.
+- **`box` prompt present (fast path)** — the class-agnostic `grasp` model honors the boxes and
+  segments **ONLY** those boxes (MobileSAM box-prompted), running the analytic `mask2grasp` on
+  those masks alone. Cost scales with the number of *targets*, not the scene — one segmentation
+  + one `FromMask` per box instead of automask + `FromMask` over everything, which is several×
+  faster for a single object.
+
+This enables a **"select the target client-side, then grasp just it"** flow:
+`grounding-dino` → `select_target_object(...)` → `predict("grasp", img, box=target_bbox)`.
+
+> NOTE: this fast path is the **plain `grasp` model only**. On `grasp-gd` the built-in
+> GroundingDINO detector always runs and the incoming `box` is **ignored** — to target one
+> object, use the two-step flow (GroundingDINO boxes selected client-side → plain `grasp` with
+> `box=...`) rather than `grasp-gd`.
+
+### 5b. Per-request GroundingDINO thresholds (grasp-gd)
+
+The GroundingDINO detector stage inside `grasp-gd` honors per-request threshold overrides:
+`box_threshold` / `text_threshold` carried on the `Prompt` (>0) take precedence over the
+manifest/default thresholds (`defaultBoxThresh = 0.3`, `defaultTextThresh = 0.25`) for that
+request, exactly as they do for the standalone `grounding-dino` model.
 
 ## 6. Integration path B — GG-CNN learned (later)
 

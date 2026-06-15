@@ -144,6 +144,13 @@ make run MODEL=mobile-sam IMAGE=img.jpg OUT=masks.png                 # no promp
 make run MODEL=efficient-sam IMAGE=img.jpg BOX=34,58,120,240 OUT=mask.png
 make run MODEL=sam2 IMAGE=img.jpg BOX=34,58,120,240 OUT=mask.png
 
+# Background — support-surface (table/floor) mask; method=auto|depth|sam|cv|automask
+make run MODEL=background IMAGE=img.jpg OUT=bg.png
+make run MODEL=background IMAGE=img.jpg METHOD=cv ROI=300,380,700,330 OUT=bg.png   # ROI: run on a crop, map back
+
+# ROI — restrict ANY model to a region (x,y,w,h in original pixels); results in original coords
+make run MODEL=rf-detr IMAGE=img.jpg ROI=300,380,700,330 OUT=out.png
+
 # Open-vocabulary detection — text prompt (lowercased, dot-separated)
 make run MODEL=grounding-dino IMAGE=img.jpg PROMPT="cat. remote." OUT=boxes.png
 
@@ -173,7 +180,7 @@ make run MODEL=mobile-sam IMAGE=img.jpg MIN_SIZE=0.1 MAX_SIZE=50
 
 | Variable | For | Example |
 |----------|-----|---------|
-| `MODEL` | which model | `rf-detr`, `rt-detr`, `mobile-sam`, `efficient-sam`, `sam2`, `nano-sam`, `grounding-dino`, `grounded-sam`, `depth-anything-v2`, `midas`, `efficientnet-b0`, `mobilenet-v3`, `clip`, `scrfd`, `paddle-ocr` |
+| `MODEL` | which model | `rf-detr`, `rt-detr`, `mobile-sam`, `efficient-sam`, `sam2`, `nano-sam`, `background`, `grounding-dino`, `grounded-sam`, `depth-anything-v2`, `midas`, `efficientnet-b0`, `mobilenet-v3`, `clip`, `scrfd`, `paddle-ocr` |
 | `IMAGE` | input image path | `IMAGE=cats.jpg` |
 | `OUT` | save annotated image (all tasks: boxes, masks, top-K text, depth colormap) | `OUT=out.png` |
 | `PROMPT` | open-vocab text | `PROMPT="cat. remote."` |
@@ -181,6 +188,8 @@ make run MODEL=mobile-sam IMAGE=img.jpg MIN_SIZE=0.1 MAX_SIZE=50
 | `POINT` | SAM point prompt | `POINT=95,180,1` (label 1=fg 0=bg) |
 | `MIN_SIZE` | min bbox area as % of image — filter out small objects | `MIN_SIZE=0.5` |
 | `MAX_SIZE` | max bbox area as % of image — filter out large objects | `MAX_SIZE=80` |
+| `ROI` | restrict any model to a region — crop, run, map results back to original coords | `ROI=300,380,700,330` |
+| `METHOD` | background model algorithm (`auto`/`depth`/`sam`/`cv`/`automask`) | `METHOD=cv` |
 | `GPU` | `1` (default) or `0` to force CPU | `GPU=0` |
 | `MODELS` | registry directory | `MODELS=./models` |
 
@@ -192,7 +201,15 @@ make run MODEL=mobile-sam IMAGE=img.jpg MIN_SIZE=0.1 MAX_SIZE=50
 ```bash
 make serve                       # listen on :11435 (GPU by default; GPU=0 for CPU)
 make serve ADDR=:8080            # custom address
+make serve IDLE=0                # keep models resident (never idle-unload)
 ```
+
+> **Idle auto-unload.** By default each model unloads after its manifest
+> `idle_unload_seconds` (300 s) of inactivity, which means the first request after a
+> pause pays a slow reload. The `--idle-unload-seconds` flag on `visionserve serve`
+> overrides this for every model: `0` keeps models resident (never unload — no slow
+> first inference after an idle pause), `-1` uses each manifest's default, and `N` sets
+> a custom timeout. Via make: `make serve IDLE=0`.
 
 Manage models in a running server:
 
@@ -238,8 +255,19 @@ curl -s -H 'Content-Type: application/json' \
 | `prompt` | open-vocab text | `"cat. remote."` |
 | `box` | SAM box | `"x,y,w,h"` (multiple separated by `;`) |
 | `point` | SAM point | `"x,y[,label]"` (multiple separated by `;`) |
+| `box_threshold` | GroundingDINO box confidence (default 0.3; 0 = manifest default) | `"0.3"` |
+| `text_threshold` | GroundingDINO token threshold (default 0.25; lower keeps more prompt tokens per label, e.g. `"canned coffee"` not just `"coffee"`) | `"0.25"` |
 | `min_size` | filter small objects (bbox area as % of image, 0 = no limit) | `"0.5"` |
 | `max_size` | filter large objects (bbox area as % of image, 0 = no limit) | `"80"` |
+| `roi` | process only this crop, map results back (any model) | `"x,y,w,h"` (original pixels) |
+| `method` | background model algorithm (`auto`/`depth`/`sam`/`cv`/`automask`) | `"cv"` |
+
+> `box_threshold` / `text_threshold` apply to `grounding-dino`, `grounded-sam`, and
+> `grasp-gd` (multipart form fields, JSON body, or Python client kwargs).
+
+> **`roi` restricts any model to a region.** The server crops to the ROI, runs the
+> model on that crop only, and maps results back to original image coordinates —
+> `box`/`point` prompts are given in original coords and shifted automatically.
 
 ### 6. Infer from Python
 
@@ -414,6 +442,11 @@ docker run -d \
   --name visionserve \
   mtbui2010/visionserve:v0.1.2-cpu
 ```
+
+> **Keep models resident.** The image's `ENTRYPOINT` is `visionserve` (CMD
+> `serve --addr :11435`), so you can pass serve flags after the image — e.g. append
+> `serve --addr :11435 --idle-unload-seconds 0` to disable idle auto-unload and avoid a
+> slow first inference after an idle pause.
 
 The registry lives at `/root/.models` inside the container (set via
 `VISIONSERVE_MODELS`). Bind-mounting your host folder `~/.visionserve_models` onto it

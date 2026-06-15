@@ -217,6 +217,22 @@ func (g *graspModel) Infer(img image.Image, prompt models.Prompt, r models.Runne
 		return res, nil
 	}
 
+	// Box-prompted fast path (no detector): segment ONLY the requested boxes and grasp
+	// each. This is the "select the target client-side (e.g. grounding-dino boxes →
+	// select_target_object), then grasp just it" flow — one segmentation + one FromMask
+	// per box, instead of automask + FromMask over EVERY object in the scene.
+	if len(prompt.Boxes) > 0 {
+		masks, bitmaps, err := g.segment(img, models.Prompt{Boxes: prompt.Boxes}, r)
+		if err != nil {
+			return models.Result{}, err
+		}
+		for i := range bitmaps {
+			res.Grasps = append(res.Grasps, graspcore.FromMask(bitmaps[i], params)...)
+		}
+		res.Masks = masks
+		return res, nil
+	}
+
 	// Class-agnostic: whole-image automask, then grasp each mask.
 	masks, bitmaps, err := g.segment(img, models.Prompt{}, r)
 	if err != nil {

@@ -108,6 +108,49 @@ curl -s -F model=mobile-sam -F image=@photo.jpg \
 
 ---
 
+## Keeping models resident (disabling idle unload)
+
+**Symptom:** after the server has sat idle for a while, the **first** inference is
+noticeably slow (a multi-second pause), then subsequent requests are fast again.
+
+**Cause:** each model has an idle auto-unload reaper (manifests default to
+`idle_unload_seconds: 300`, i.e. 5 min). Once a model has been idle past that window
+it is unloaded from VRAM, so the next request pays for a full reload — ONNX session
+re-create + CUDA init + first-inference autotune.
+
+**Fix:** override the reaper with the `serve` flag `--idle-unload-seconds`:
+
+* `0` — **never unload.** Models stay resident in VRAM, so the first request after an
+  idle pause is *not* slowed by a reload. Tradeoff: VRAM is held continuously.
+* `-1` — use each manifest's value (the default; 300 s / 5 min).
+* `N` — override every model to `N` seconds.
+
+Because the image's `CMD` is `serve --addr :11435`, args after the image name **replace**
+the whole CMD (the `visionserve` entrypoint stays), so you must repeat `--addr :11435`:
+
+```bash
+# GPU — keep models resident (never unload)
+docker run -d \
+  --gpus all \
+  -p 11435:11435 \
+  -v ~/.visionserve_models:/root/.models \
+  --name visionserve \
+  mtbui2010/visionserve:latest \
+  serve --addr :11435 --idle-unload-seconds 0
+
+# CPU — keep models resident (never unload)
+docker run -d \
+  -p 11435:11435 \
+  -v ~/.visionserve_models:/root/.models \
+  --name visionserve \
+  mtbui2010/visionserve:v0.1.2-cpu \
+  serve --addr :11435 --idle-unload-seconds 0
+```
+
+> Running locally instead of in Docker? The `make serve` equivalent is `make serve IDLE=0`.
+
+---
+
 ## One-shot inference (no server)
 
 `visionserve run` loads the model in-process, infers, and exits:

@@ -27,6 +27,7 @@ needed for:
   - [Result types](#result-types)
   - [Detection](#detection)
   - [Segmentation](#segmentation)
+  - [Background segmentation](#background-segmentation)
   - [Open-vocab / Grounded-SAM](#open-vocab--grounded-sam)
   - [Depth estimation](#depth-estimation)
   - [Classification](#classification)
@@ -57,7 +58,15 @@ shared library at runtime). From the repo root:
 
 ```bash
 make serve            # starts the Go server on :11435
+make serve IDLE=0     # ...and never auto-unload models (keep them resident)
 ```
+
+> **Slow first request after a pause?** By default each model auto-unloads after 5 min
+> idle (`idle_unload_seconds: 300`), so the next request pays a full reload (ONNX session
+> re-create + CUDA init). Keep models resident with the `serve` flag
+> `--idle-unload-seconds 0` — via `make serve IDLE=0`, the binary
+> (`visionserve serve --addr :11435 --idle-unload-seconds 0`), or Docker (append it to the
+> container command). `-1` = use each manifest's value (default); `N` = override all to N s.
 
 ## Quickstart
 
@@ -118,6 +127,11 @@ Global flags (accepted **before or after** the subcommand):
 | `--prompt "<text>"` | Open-vocab text prompt, e.g. `"cat. remote."` (GroundingDINO / Grounded-SAM / grasp-gd) |
 | `--box x,y,w,h` | SAM box prompt(s) in ORIGINAL image pixels; multiple boxes separated by `;` |
 | `--point x,y[,l]` | SAM point prompt(s); label `1`=fg, `0`=bg; multiple separated by `;` |
+| `--roi x,y,w,h` | Region of interest in ORIGINAL image pixels; process only this crop and map results back (any model). Box/point prompts stay in original coords |
+| `--method NAME` | `background` model algorithm: `auto`\|`depth`\|`sam`\|`cv`\|`automask` (default `auto`) |
+| `--box-threshold T` / `--text-threshold T` | GroundingDINO thresholds (grounding-dino / grounded-sam / grasp-gd); lower `--text-threshold` keeps more words per label |
+| `--bg-max-area PCT` / `--fg-min-area PCT` | `background` (sam/automask) mask-area thresholds, as % of image area |
+| `--grid-size N` | `background` / MobileSAM automask grid (N×N decoder calls) |
 | `--min-size PCT` / `--max-size PCT` | Drop objects whose bbox area is below/above PCT% of the image (e.g. `0.1`, `90`) |
 | `--gripper-min PX` / `--gripper-max PX` | Grasp models only: jaw-opening bounds in original-image pixels |
 | `--save` | Save an annotated image, auto-named `<stem>.python.<model>.<task>.png` |
@@ -163,6 +177,12 @@ visionserve predict mobile-sam dog.jpg --box 50,40,200,180 --save-as dog_masks.p
 # Open-vocab grasps, remote server, top-1 grasp per object
 visionserve --host http://10.0.0.5:11435 predict grasp-gd bin.jpg --prompt "mug." --max-grasps-per-object 1 --save
 
+# Background support-surface in a region, classical-CV method
+visionserve predict background scene.jpg --method cv --roi 300,380,700,330 --save
+
+# Detect only inside a region (any model); results come back in ORIGINAL coords
+visionserve predict rf-detr scene.jpg --roi 100,100,400,300
+
 # Registry / memory management
 visionserve list
 visionserve ps
@@ -180,11 +200,15 @@ visionserve load rf-detr
 | `load(model)` | `POST /api/load` | `{"model", "state"}` |
 | `unload(model)` | `POST /api/unload` | `{"model", "state"}` |
 | `ps()` | `GET /api/models` (filtered) | loaded `list[ModelInfo]` |
-| `predict(model, image, *, prompt=None, box=None, point=None, box_threshold=None, text_threshold=None, min_size=0, max_size=0, gripper_min=None, gripper_max=None)` | `POST /api/predict` | `Result` |
+| `predict(model, image, *, prompt=None, box=None, point=None, roi=None, box_threshold=None, text_threshold=None, min_size=0, max_size=0, gripper_min=None, gripper_max=None, method=None, bg_max_area=None, fg_min_area=None, grid_size=None)` | `POST /api/predict` | `Result` |
 
 `min_size` / `max_size` filter by bounding-box area as a **percentage of the image area** (0–100; `0` = no limit). Example: `min_size=0.5` keeps only objects covering at least 0.5% of the image. The conversion to absolute pixels is done server-side using the uploaded image dimensions.
 
+`roi=[x, y, w, h]` (ORIGINAL image pixels) crops to that region, runs the model on the **crop only**, and maps every result back to original coordinates — generic to **all** models (detection / segmentation / grasp / background). Box / point prompts are given in original coords and shifted into the crop automatically.
+
 `box_threshold` / `text_threshold` are **GroundingDINO** tuning knobs (`grounding-dino`, `grounded-sam`, `grasp-gd`); `None` = use the server manifest/default. `box_threshold` is the query-score cutoff that filters detections; `text_threshold` controls how many prompt tokens are kept in each label. Lowering `text_threshold` keeps more words per label — e.g. `"canned coffee"` instead of just `"coffee"`. See [Open-vocab / Grounded-SAM](#open-vocab--grounded-sam).
+
+`method` selects the **`background`** algorithm per request (`auto`, `depth`, `sam`, `cv`, `automask`; `None` = the server default, `auto`). `bg_max_area` / `fg_min_area` / `grid_size` are **`background`** tuning knobs (`None` = use the server manifest/default); `bg_max_area` and `fg_min_area` are percentages of the image area and only affect the `sam` / `automask` methods, while `grid_size` only affects `automask`. See [Background segmentation](#background-segmentation). Do **not** use `min_size` / `max_size` with `background` — they filter the *output* bboxes and drop the surface mask (whose bbox spans the support surface).
 
 ### Image inputs
 
@@ -282,6 +306,52 @@ for m in res.masks:
 res = c.predict("efficient-sam", "img.jpg", box=[50, 40, 120, 90])
 res = c.predict("sam2", "img.jpg", box=[50, 40, 120, 90])
 ```
+
+### Background segmentation
+
+`background` returns the **support-surface (background) mask** — the table or floor an object
+rests on — as a **single** segmentation mask. The result is **0 or 1** mask (no prompt
+needed), so **always guard `if res.masks:`**. The foreground (objects) is simply the
+**complement** of this mask: invert it client-side if that's what you need.
+
+It picks an algorithm per request via `method=` (also the JSON/form field `method`):
+
+| `method` | Speed | Notes |
+| --- | --- | --- |
+| `auto` *(default)* | — | Tries `depth`, falls back to `cv` if depth finds no clear plane. Robust — always yields a result |
+| `depth` | ~90 ms | MiDaS depth → fit dominant plane (affine disparity) → near-plane = surface. Fastest **and most accurate when a clear plane exists** (real RGB-D, or a clean tabletop). On monocular relative-depth over cluttered scenes it bows out (returns nothing) — which is why `auto` falls back to `cv` |
+| `cv` | ~30 ms | Classical CV, **no inference** — a large low-texture region grown from the image border/bottom. Fast and robust on monocular; weaker on heavily textured surfaces |
+| `sam` | ~500 ms | MobileSAM prompted with foreground **points** on the lower frame → the surface mask |
+| `automask` | ~1.3 s | MobileSAM Automatic Mask Generator → union of the large / border-touching masks |
+
+```python
+from PIL import Image
+W, H = Image.open("scene.jpg").size
+
+res = c.predict("background", "scene.jpg")            # method=auto (depth→cv fallback)
+if res.masks:                                          # 0 masks possible — always guard
+    bg = res.masks[0].to_ndarray(width=W, height=H)   # support-surface (table/floor) mask
+    fg = ~bg                                           # foreground = complement (invert)
+
+# force a specific method / tune the sam+automask classification
+res = c.predict("background", "scene.jpg", method="cv")
+res = c.predict("background", "scene.jpg", method="automask", bg_max_area=60, grid_size=16)
+```
+
+Tuning knobs (areas are a **percentage of the image area**) apply only to the
+`sam` / `automask` methods — `depth` and `cv` ignore them:
+
+| Param | Default | Description |
+| --- | --- | --- |
+| `bg_max_area` | `50` | A mask whose area is ≥ this % of the image counts as the BACKGROUND (support surface) |
+| `fg_min_area` | `0` | A mask smaller than this % is dropped as noise |
+| `grid_size` | `8` | `automask` grid `N` (N×N point prompts → N² decoder calls). Raise to `16` to catch finer surface fragments (~4× slower); coverage saturates beyond ~16 |
+
+> **Do NOT pass `min_size` / `max_size` to `background`.** Those are an **output** bbox-area
+> filter applied server-side *after* the model, and they will DROP the surface mask (its bbox
+> spans the support surface). Use `bg_max_area` / `fg_min_area` instead. Also **always guard
+> `if res.masks:`** — 0 masks is a valid result (e.g. `method="depth"` on a cluttered
+> monocular scene with no clear plane, or thresholds set too aggressively).
 
 ### Open-vocab / Grounded-SAM
 
@@ -384,6 +454,38 @@ target = select_target_grasp(res.grasps, cls="mug",
 if target:
     print("best grasp:", target.x, target.y, target.theta)
 ```
+
+#### Fast single-target grasp (detect → select → grasp one box)
+
+`grasp-gd` runs the analytic mask→grasp search on **every** detected object, which is
+wasteful when you only want to pick up **one** target. Instead, detect first, select the
+target client-side, then grasp **just that box** — the `grasp` model accepts a `box` prompt
+and segments + grasps only that region (one mask→grasp instead of N), so it scales with the
+*target* count, not the scene. With many objects this is several times faster.
+
+```python
+from visionserve import Client, select_target_object, select_target_grasp
+from PIL import Image
+
+c = Client()
+W, H = Image.open("scene.jpg").size
+
+# 1) Boxes only (no masks) — grounding-dino is faster than grounded-sam here
+det = c.predict("grounding-dino", "scene.jpg", prompt="mug. bottle.", text_threshold=0.15)
+
+# 2) Select the target object client-side (by class, nearest pixel, largest, distance, …)
+obj = select_target_object(det, cls="mug", near_point="center", image_size=(W, H))
+
+# 3) Grasp ONLY that box → one segmentation + one mask→grasp
+g = c.predict("grasp", "scene.jpg", box=obj.bbox, gripper_min=20, gripper_max=150)
+best = select_target_grasp(g.grasps)
+if best:
+    print(best.pose)   # [x, y, width, theta] — robot-ready
+```
+
+> The `box` prompt is honored by the **class-agnostic** `grasp` model (no detector). On
+> `grasp-gd` the built-in GroundingDINO detector runs instead and the `box` is ignored —
+> use the two-step flow above to target a single object.
 
 See [Grasp post-processing](#grasp-post-processing) below for the full selection and filtering API.
 
@@ -502,6 +604,18 @@ target = select_target_grasp(
     intrinsics=K,
 )
 
+# 3b. depth_result / intrinsics also accept plain arrays/lists (e.g. RGB-D sensor):
+import numpy as np
+depth_mm = np.asarray(realsense_depth, dtype=np.uint16)   # (H, W) millimetres
+target = select_target_grasp(
+    res.grasps,
+    target_distance=0.55,                 # metres
+    depth_result=depth_mm,                # 2-D ndarray (uint16/float32) at image res
+    intrinsics=[600, 600, 320, 240],      # [fx, fy, cx, cy]
+)
+# Depth is normalised to METRES: integer arrays default to mm→m (×0.001), float
+# arrays / a depth Result are taken as metres. Override with depth_scale=<m per unit>.
+
 # 4. Filter by class + gripper bounds, weighted composite
 target = select_target_grasp(
     res.grasps,
@@ -517,6 +631,11 @@ if target:
 ```
 
 `return_index=True` returns `(grasp_or_None, index)` into the original list.
+
+> `depth_result` (a depth `Result` **or** a 2-D numpy array), `intrinsics`
+> (`CameraIntrinsics` **or** `[fx, fy, cx, cy]`), and `depth_scale` are accepted the
+> same way by `select_target_object`, `grasp_distances`, `object_distances`, and
+> `get_depth_at_detection`.
 
 #### `select_target_object()`
 
@@ -572,6 +691,28 @@ annotated.save("out.png")
 
 # Or via result.visualize():
 res.visualize("bin.jpg", target_grasp=target).save("out.png")
+```
+
+#### Visualization with target box highlighted
+
+Highlight a selected object box (e.g. from `select_target_object`) in red with a
+thicker outline via `target_box`. It accepts a `Detection` / `Mask` (matched by
+identity or bbox) **or** a raw `[x, y, w, h]`. If the box isn't one of the result's
+own detections/masks (e.g. it was selected on a separate detect call) it's drawn as a
+standalone red rectangle:
+
+```python
+from visionserve import select_target_object
+
+det = c.predict("grounding-dino", "scene.jpg", prompt="mug. bottle.")
+obj = select_target_object(det, cls="mug", near_point="center", image_size=(W, H))
+
+# Highlight the chosen object in red; all others in palette colours
+det.visualize("scene.jpg", target_box=obj).save("out.png")
+
+# Works with a raw bbox too (e.g. to mark the grasped region on a grasp result)
+g = c.predict("grasp", "scene.jpg", box=obj.bbox)
+g.visualize("scene.jpg", target_box=obj.bbox).save("out.png")
 ```
 
 ### Size filtering — `Result.filter_by_size()`

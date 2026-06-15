@@ -114,57 +114,98 @@ func boundingBox(b Bitmap) (x0, y0, x1, y1 int, ok bool) {
 //
 //	kernel_y rows [0..r-1]=+1, row r=0, rows [r+1..2r]=-1; kernel_x = transpose.
 //
-// cv2.filter2D correlates (no kernel flip), so we correlate too. Only boundary
-// pixels carry a nonzero normal, and every such pixel lies within r of a set
-// pixel — so we compute normals ONLY inside the mask's bounding box expanded by r
-// (clamped to the image). This is exact (pixels outside have zero normal) while
-// avoiding a full-frame O(W·H·(2r+1)²) sweep for a small object in a large image.
+// The kernel is SEPARABLE and weights are ±1, so the per-pixel sums reduce to a
+// few rectangle counts of set pixels:
+//
+//	sy = (#set in rows y-r..y-1) - (#set in rows y+1..y+r)  over cols x-r..x+r
+//	sx = (#set in cols x-r..x-1) - (#set in cols x+1..x+r)  over rows y-r..y+r
+//
+// Each rectangle count is O(1) via a summed-area table (integral image) of the
+// mask, so collectBoundary is O(bbox area) instead of O(bbox area·(2r+1)²). The
+// result is bit-for-bit identical to the direct convolution (same sx, sy), so the
+// downstream grasps are unchanged. We only scan the bbox expanded by r (clamped to
+// the image): every pixel that can carry a nonzero normal lies within r of a set
+// pixel.
 func collectBoundary(b Bitmap) []boundaryPoint {
 	const eps = 1e-10
 	const r = normalRadius
-	x0, y0, x1, y1, ok := boundingBox(b)
+	bx0, by0, bx1, by1, ok := boundingBox(b)
 	if !ok {
 		return nil
 	}
-	// expand by the kernel radius and clamp to the image bounds.
-	if x0 -= r; x0 < 0 {
-		x0 = 0
+
+	// Summed-area table over the TIGHT bbox: sat[(j+1)*stride+(i+1)] = number of set
+	// pixels in the local rectangle [0..i]×[0..j]. Set pixels exist only inside the
+	// tight bbox, so rectangle queries clamp to it (everything outside is background).
+	bw, bh := bx1-bx0+1, by1-by0+1
+	stride := bw + 1
+	sat := make([]int, stride*(bh+1))
+	for j := 0; j < bh; j++ {
+		rowAbove := j * stride
+		rowCur := (j + 1) * stride
+		base := (by0 + j) * b.W
+		for i := 0; i < bw; i++ {
+			set := 0
+			if b.Data[base+bx0+i] {
+				set = 1
+			}
+			sat[rowCur+i+1] = set + sat[rowAbove+i+1] + sat[rowCur+i] - sat[rowAbove+i]
+		}
 	}
-	if y0 -= r; y0 < 0 {
-		y0 = 0
-	}
-	if x1 += r; x1 >= b.W {
-		x1 = b.W - 1
-	}
-	if y1 += r; y1 >= b.H {
-		y1 = b.H - 1
+	// rectCount: number of set pixels in the inclusive GLOBAL rectangle cols [a..b],
+	// rows [c..d], clamped to the tight bbox (outside the bbox is all background).
+	rectCount := func(a, bb, c, d int) int {
+		if a < bx0 {
+			a = bx0
+		}
+		if bb > bx1 {
+			bb = bx1
+		}
+		if c < by0 {
+			c = by0
+		}
+		if d > by1 {
+			d = by1
+		}
+		if a > bb || c > d {
+			return 0
+		}
+		la, lb := a-bx0, bb-bx0
+		lc, ld := c-by0, d-by0
+		return sat[(ld+1)*stride+(lb+1)] - sat[lc*stride+(lb+1)] - sat[(ld+1)*stride+la] + sat[lc*stride+la]
 	}
 
+	// scan region = bbox expanded by r, clamped to the image.
+	sx0, sy0, sx1, sy1 := bx0-r, by0-r, bx1+r, by1+r
+	if sx0 < 0 {
+		sx0 = 0
+	}
+	if sy0 < 0 {
+		sy0 = 0
+	}
+	if sx1 >= b.W {
+		sx1 = b.W - 1
+	}
+	if sy1 >= b.H {
+		sy1 = b.H - 1
+	}
+
+	const full = (2*r + 1) * (2*r + 1) // taps in a complete window
 	var pts []boundaryPoint
-	for y := y0; y <= y1; y++ {
-		for x := x0; x <= x1; x++ {
-			var sx, sy float64
-			for ky := -r; ky <= r; ky++ {
-				for kx := -r; kx <= r; kx++ {
-					if !b.at(x+kx, y+ky) {
-						continue
-					}
-					// kernel_y weight depends on the row offset ky.
-					switch {
-					case ky < 0:
-						sy += 1 // top rows -> +1
-					case ky > 0:
-						sy -= 1 // bottom rows -> -1
-					}
-					// kernel_x = transpose -> weight depends on column offset kx.
-					switch {
-					case kx < 0:
-						sx += 1
-					case kx > 0:
-						sx -= 1
-					}
-				}
+	for y := sy0; y <= sy1; y++ {
+		for x := sx0; x <= sx1; x++ {
+			// Fast skip: a window that is uniformly background or uniformly set has a
+			// zero normal (sy = #above - #below = 0, likewise sx). This is the common
+			// case — object interior and surrounding background — so only the ~(2r+1)-
+			// wide boundary band runs the full sums. Exact: skipped pixels contribute
+			// nothing to the boundary.
+			if c := rectCount(x-r, x+r, y-r, y+r); c == 0 || c == full {
+				continue
 			}
+			// sy: rows above (+1) minus rows below (-1), over cols x-r..x+r.
+			sy := float64(rectCount(x-r, x+r, y-r, y-1) - rectCount(x-r, x+r, y+1, y+r))
+			// sx: cols left (+1) minus cols right (-1), over rows y-r..y+r.
+			sx := float64(rectCount(x-r, x-1, y-r, y+r) - rectCount(x+1, x+r, y-r, y+r))
 			n := math.Hypot(sx, sy)
 			if n <= 0 {
 				continue

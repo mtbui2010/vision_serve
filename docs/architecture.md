@@ -61,7 +61,18 @@ interface; lifecycle type-asserts to pick the path):
   still **loads and owns** every session (VRAM stays centralized); the model only
   orchestrates calls by role. Examples: **MobileSAM** (encoder + decoder),
   **GroundingDINO** (single graph but prompted by text), **Grounded-SAM**
-  (GroundingDINO → MobileSAM).
+  (GroundingDINO → MobileSAM), **Grasp** (orchestrates MobileSAM), and
+  **Background** (the first model to orchestrate *two different backbones* —
+  MobileSAM **and** MiDaS — behind one model, with a per-request **method** selector).
+  It returns a single support-surface (background) mask and picks the algorithm per
+  request via `Prompt.Method`: `"auto"` (default) runs depth, falling back to cv;
+  `"depth"` uses MiDaS depth + an affine-disparity RANSAC plane fit (the near-plane =
+  support surface); `"sam"` runs a MobileSAM foreground-point prompt on the lower
+  frame; `"cv"` is classical CV with **no ONNX session** (a low-texture region grown
+  from the border); and `"automask"` runs the MobileSAM Automatic Mask Generator and
+  unions the large / border-touching masks. Background reuses the MobileSAM weights
+  (roles `encoder`/`decoder`) and the MiDaS weights (role `depth`) via the manifest
+  `files:` map.
 
 ### Prompt path
 
@@ -72,9 +83,34 @@ HTTP layers (`models.ParsePrompt` is shared):
 - `Boxes` — SAM box prompts, each `[x,y,w,h]` in **original-image** coordinates.
 - `Points` — SAM point prompts (`label` 1 = foreground, 0 = background).
 
+The `Prompt` is also the **single channel for per-request options** (each `0` = use
+the model/manifest default, read per-call so it is thread-safe): `MinSize`/`MaxSize`
+(output bbox-area filter), `GripperMin`/`GripperMax` (grasp parallel-jaw bounds),
+`BoxThresh`/`TextThresh` (GroundingDINO thresholds), `BgMaxArea`/`FgMinArea`
+(Background support-surface/noise area cutoffs), `GridSize` (override for the MobileSAM
+Automatic Mask Generator grid — e.g. Background threads it through to its `automask`
+method), and `Method` (per-request algorithm selector for models that offer several —
+the Background model: `"auto"` | `"depth"` | `"sam"` | `"cv"` | `"automask"`).
+
 Simple `Model`s (RF-DETR) ignore the prompt. The manager always calls
 `PredictPrompt(model, img, prompt)`; an empty prompt is valid — for MobileSAM it
 triggers the **Automatic Mask Generator** (16×16 grid, ~256 decoder calls).
+
+### Region of interest (generic crop wrapper)
+
+A `roi` = `[x,y,w,h]` option (in **original-image** pixels — `Prompt.ROI`, the HTTP
+form/JSON `roi` field, and the `run` CLI `--roi` / `make run ROI=`) restricts a request
+to a sub-rectangle with **crop semantics**: the image is cropped to the ROI, the model
+runs on the crop *only* (it never sees the rest of the frame), and results are mapped
+back to original-image coordinates. Like the size filter (`api.FilterBySizePct`), this
+is a **generic, model-agnostic pre/post wrapper around inference** — it works for
+detection / segmentation / grasp / background alike and lives **outside** the models, in
+the new `internal/roi` package, applied identically by the HTTP predict handler and the
+`run` CLI (one source of truth). Box/point prompts are given in original coords and
+shifted into the crop before inference; on the way out, detection/mask bboxes and grasp
+centres are offset by the ROI origin, and each mask is **re-embedded** (decode at crop
+size → paste at the ROI offset → re-encode at full size via the `pkg/api` column-major
+RLE codec `EncodeMaskRLE` / `DecodeMaskRLE`).
 
 ### Multi-session lifecycle
 
@@ -86,6 +122,14 @@ gateway that exposes those sessions by role (`Run(role, inputs)`, `InputNames(ro
 (e.g. SAM: encoder → decoder) by calling the Runner per role. Each `engine.Session.Run`
 locks a mutex, so concurrent requests are safely serialized, and the idle reaper
 unloads *all* of a model's sessions together.
+
+**Idle-unload override.** Each manifest declares an `idle_unload_seconds` (default
+300s) after which the reaper auto-unloads a model. The `serve` command can override
+this globally with `--idle-unload-seconds` (`Manager.SetIdleUnloadOverride`):
+`-1` (default) keeps each manifest's value, `0` means **never unload** (models stay
+resident — avoids the slow cold reload after an idle pause), and `N` overrides every
+model to `N` seconds. The reaper still skips any model whose effective idle timeout is
+`0`.
 
 ## Hardware / execution providers
 
@@ -130,7 +174,8 @@ Every task returns the same `api.Result`. There is **no per-model schema**:
 - `Detections` — each `{ bbox [x,y,w,h], class, conf }`, bbox in **original-image** coords.
   Used by detection (RF-DETR, RT-DETR, SCRFD) and open-vocab detection (GroundingDINO).
 - `Masks` — each `{ rle, bbox, conf }`, the mask encoded as **column-major RLE**
-  (COCO-style). Used by segmentation (MobileSAM, EfficientSAM, SAM2) and Grounded-SAM.
+  (COCO-style). Used by segmentation (MobileSAM, EfficientSAM, SAM2, Background) and
+  Grounded-SAM.
 - `Classifications` — each `{ class, conf }`, ranked top-K predictions.
   Used by classification (EfficientNet-B0, MobileNetV3).
 - `DepthMap` / `DepthWidth` / `DepthHeight` — flat row-major `[]float32` relative depth

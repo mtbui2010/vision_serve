@@ -99,6 +99,30 @@ type PredictJSONRequest struct {
 	// e.g. "canned coffee" instead of just "coffee"). Used by grounding-dino/grounded-sam/grasp-gd.
 	BoxThreshold  float64 `json:"box_threshold,omitempty"`
 	TextThreshold float64 `json:"text_threshold,omitempty"`
+	// Foreground model knobs (percent of image area): bg_max_area = a mask ≥ this is
+	// background (support surface); fg_min_area = a mask < this is dropped as noise.
+	// 0 = model default. Distinct from min_size/max_size (the output bbox-area filter).
+	BgMaxArea float64 `json:"bg_max_area,omitempty"`
+	FgMinArea float64 `json:"fg_min_area,omitempty"`
+	// GridSize overrides the MobileSAM automask grid (N×N → N² decoder calls); larger =
+	// catches more small objects but slower. 0 = model default. Used by foreground.
+	GridSize int `json:"grid_size,omitempty"`
+	// Method selects the algorithm for models that offer several (the `background` model:
+	// "depth" | "sam" | "cv" | "automask"). "" = model default.
+	Method string `json:"method,omitempty"`
+	// ROI restricts processing to a region of interest "x,y,w,h" in ORIGINAL image pixels:
+	// the server crops to it, runs the model on the crop, and maps results back. "" = full image.
+	ROI string `json:"roi,omitempty"`
+	// Dilate post-processes every output mask by a square-kernel morphology of |Dilate| px:
+	// >0 enlarges (dilate), <0 shrinks (erode), 0 = off.
+	Dilate int `json:"dilate,omitempty"`
+	// Optional external depth map (RGB-D), raw little-endian array, base64-encoded. DepthDtype
+	// is "uint16" (→ /65535) or "float32" (as-is); DepthWidth/Height give its resolution
+	// (default = image size). Used by the background model's depth method instead of MiDaS.
+	DepthBase64 string `json:"depth_base64,omitempty"`
+	DepthDtype  string `json:"depth_dtype,omitempty"`
+	DepthWidth  int    `json:"depth_width,omitempty"`
+	DepthHeight int    `json:"depth_height,omitempty"`
 }
 
 // LoadRequest / UnloadRequest are used by /api/load and /api/unload.

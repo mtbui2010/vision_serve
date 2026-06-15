@@ -154,6 +154,36 @@ type Prompt struct {
 	// detection's label (= text_threshold). Used by grounding-dino, grounded-sam, grasp-gd.
 	BoxThresh  float64
 	TextThresh float64
+	// BgMaxArea/FgMinArea: foreground model knobs (percent of image area). A MobileSAM
+	// automask is treated as BACKGROUND when its area ≥ BgMaxArea (a support surface), and
+	// dropped as noise when its area < FgMinArea. 0 = use the model default. These are
+	// SEPARATE from MinSize/MaxSize (which are an output bbox-area post-filter applied by
+	// the handler — that would drop the foreground union, whose bbox spans the image).
+	BgMaxArea float64
+	FgMinArea float64
+	// GridSize: per-request override for the MobileSAM Automatic Mask Generator grid
+	// (N×N point prompts → N² decoder calls). 0 = use the model's default. Larger N
+	// catches more small objects but is slower. Read per-call (thread-safe), e.g. by the
+	// foreground model to let a request trade speed for coverage.
+	GridSize int
+	// Method: per-request algorithm selector for models that offer several (the
+	// `background` model: "depth" | "sam" | "cv" | "automask"). "" = the model default.
+	Method string
+	// ROI: optional region of interest [x, y, w, h] in ORIGINAL image pixels. When set
+	// (w>0 && h>0), the SERVER crops the image to this rectangle, runs the model on the
+	// crop only, and maps results back to original coordinates. Handled in the HTTP layer,
+	// generic to every model — individual models never see it.
+	ROI [4]float64
+	// Dilate: post-process every output MASK by a square-kernel morphology of |Dilate|
+	// pixels — >0 enlarges (dilate), <0 shrinks (erode), 0 = no-op. Generic, handled in the
+	// HTTP layer (and run CLI); individual models never see it.
+	Dilate int
+	// Depth: optional external depth map (RGB-D sensor), row-major, length DepthW*DepthH,
+	// ALIGNED to the RGB image. Values are normalized: uint16 → /65535 ([0,1]); float kept
+	// as-is. Invalid pixels (uint16 0, or float ≤0/NaN) are NaN. When provided, the
+	// `background` model's depth method fits the plane on THIS instead of running MiDaS.
+	Depth        []float32
+	DepthW, DepthH int
 }
 
 // Empty reports whether the prompt carries no PROMPT content (options aside).

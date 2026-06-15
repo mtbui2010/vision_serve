@@ -70,7 +70,7 @@ func Segment(
 		if err != nil {
 			return nil, err
 		}
-		masks = append(masks, bm.toMask())
+		masks = append(masks, bm.ToMask())
 	}
 	return masks, nil
 }

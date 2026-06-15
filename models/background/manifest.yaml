@@ -1,0 +1,43 @@
+# Background (class-agnostic support-surface segmentation) — Apache-2.0.
+#
+# Returns a SINGLE background mask (the support surface: table / floor) using one of four
+# interchangeable methods, chosen per request via `method`:
+#   - depth    (default): MiDaS depth → fit the dominant plane → near-plane = support surface.
+#              Fastest (~tens of ms) and most accurate for tabletop scenes.
+#   - sam:     MobileSAM prompted at likely-background seed points, validated by area + border.
+#   - cv:      classical CV (no inference) — large low-texture region grown from the border.
+#   - automask: MobileSAM Automatic Mask Generator → union the large / border-touching masks.
+#
+# Foreground (objects) is the complement of the returned mask; invert client-side if needed.
+#
+# task: segmentation — output carries a single `masks` entry (the support surface).
+#
+# Weights are NOT committed. This manifest REUSES MobileSAM (sam/automask) and MiDaS (depth)
+# weights via relative paths — pull mobile-sam and midas; no extra files are needed.
+#
+# Run: `visionserve run background img.jpg`            # default method=depth
+#   per request: method=depth|sam|cv|automask; bg_max_area / grid_size tune sam/automask.
+name: background
+task: segmentation
+license: Apache-2.0
+architecture: background
+
+segmenter: mobile-sam
+
+# MobileSAM encoder + decoder (sam/automask) and MiDaS (depth), from sibling model dirs.
+files:
+  encoder: ../mobile-sam/mobile_sam_encoder.onnx
+  decoder: ../mobile-sam/mobile_sam_decoder_single.onnx
+  depth: ../midas/midas_v21_small_256.onnx
+
+input:
+  # Reference only — each method does its own preprocessing (MobileSAM pads to 1024,
+  # MiDaS squash-resizes to 256). Placeholder to satisfy validation.
+  width: 1024
+  height: 1024
+  layout: NCHW
+  letterbox: false
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

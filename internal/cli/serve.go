@@ -21,6 +21,7 @@ func runServe(args []string) error {
 	modelsFlag := fs.String("models", "", "model registry directory")
 	addr := fs.String("addr", server.DefaultAddr, "listen address host:port")
 	preloadFlag := fs.String("preload", "", "comma-separated models to load at startup, e.g. mobile-sam,rf-detr")
+	idleFlag := fs.Int("idle-unload-seconds", -1, "override every model's idle auto-unload (seconds); 0 = never unload (stay resident, no slow reload after an idle pause); -1 = use each manifest's value")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -44,6 +45,14 @@ func runServe(args []string) error {
 	}
 
 	mgr := lifecycle.NewManager(reg)
+	if *idleFlag >= 0 {
+		mgr.SetIdleUnloadOverride(*idleFlag)
+		if *idleFlag == 0 {
+			log.Printf("idle-unload: DISABLED (models stay resident; no reload after idle)")
+		} else {
+			log.Printf("idle-unload: overriding all models to %ds", *idleFlag)
+		}
+	}
 
 	// Background: check TRT availability and log a recommendation if absent.
 	// Runs in a goroutine so it never delays server startup or the first request.

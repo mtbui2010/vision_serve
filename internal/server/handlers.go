@@ -19,6 +19,8 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/morph"
+	roipkg "visionserve/internal/roi"
 	"visionserve/pkg/api"
 )
 
@@ -99,15 +101,95 @@ func (s *Server) handlePredict(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+
+	// Region of interest (generic, crop semantics): crop the image to the ROI, run the
+	// model on the crop (it only sees the ROI), then map results back to original coords.
+	fullW, fullH := img.Bounds().Dx(), img.Bounds().Dy()
+	rect, hasROI := roipkg.Clamp(prompt.ROI, fullW, fullH)
+	if hasROI {
+		img = roipkg.Crop(img, rect)
+		roipkg.ShiftPrompt(&prompt, rect)
+	}
+
 	res, err := s.mgr.PredictPrompt(model, img, prompt)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+
+	if hasROI {
+		res = roipkg.MapResult(res, rect, fullW, fullH)
+	}
+	// Mask morphology (enlarge/shrink) in ORIGINAL-image terms, then size filter.
+	morph.ApplyToMasks(res.Masks, fullW, fullH, prompt.Dilate)
 	if minSize > 0 || maxSize > 0 {
-		res = api.FilterBySizePct(res, minSize, maxSize, img.Bounds().Dx(), img.Bounds().Dy())
+		res = api.FilterBySizePct(res, minSize, maxSize, fullW, fullH)
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// parseDepth turns a raw little-endian depth array into a normalized float map (row-major,
+// NaN = invalid), resized to the RGB image (imgW×imgH). dtype is "float32" (kept as-is, ≤0/NaN
+// → invalid) or "uint16" (default; /65535, 0 → invalid). dw/dh default to the image size.
+// Returns nil when the bytes don't match the declared dtype×dims.
+func parseDepth(raw []byte, dtype string, dw, dh, imgW, imgH int) ([]float32, int, int) {
+	if len(raw) == 0 || imgW <= 0 || imgH <= 0 {
+		return nil, 0, 0
+	}
+	if dw <= 0 || dh <= 0 {
+		dw, dh = imgW, imgH
+	}
+	n := dw * dh
+	depth := make([]float32, n)
+	switch strings.ToLower(strings.TrimSpace(dtype)) {
+	case "float32", "float", "f32":
+		if len(raw) != n*4 {
+			return nil, 0, 0
+		}
+		for i := 0; i < n; i++ {
+			v := math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
+			if f := float64(v); math.IsNaN(f) || f <= 0 {
+				depth[i] = float32(math.NaN())
+			} else {
+				depth[i] = v
+			}
+		}
+	default: // uint16
+		if len(raw) != n*2 {
+			return nil, 0, 0
+		}
+		for i := 0; i < n; i++ {
+			if u := binary.LittleEndian.Uint16(raw[i*2:]); u == 0 {
+				depth[i] = float32(math.NaN()) // 0 = no measurement
+			} else {
+				depth[i] = float32(u) / 65535.0
+			}
+		}
+	}
+	if dw != imgW || dh != imgH {
+		depth = resizeDepthNearestF(depth, dw, dh, imgW, imgH)
+		dw, dh = imgW, imgH
+	}
+	return depth, dw, dh
+}
+
+// resizeDepthNearestF nearest-neighbor resizes a float depth map (NaN-preserving).
+func resizeDepthNearestF(src []float32, sw, sh, dw, dh int) []float32 {
+	out := make([]float32, dw*dh)
+	for y := 0; y < dh; y++ {
+		sy := y * sh / dh
+		if sy >= sh {
+			sy = sh - 1
+		}
+		for x := 0; x < dw; x++ {
+			sx := x * sw / dw
+			if sx >= sw {
+				sx = sw - 1
+			}
+			out[y*dw+x] = src[sy*sw+sx]
+		}
+	}
+	return out
 }
 
 // POST /api/infer_tensor?model=<name>&shape=N,C,H,W
@@ -212,6 +294,17 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 		prompt.MinSize, prompt.MaxSize = req.MinSize, req.MaxSize
 		prompt.GripperMin, prompt.GripperMax = req.GripperMin, req.GripperMax
 		prompt.BoxThresh, prompt.TextThresh = req.BoxThreshold, req.TextThreshold
+		prompt.BgMaxArea, prompt.FgMinArea = req.BgMaxArea, req.FgMinArea
+		prompt.GridSize = req.GridSize
+		prompt.Method = req.Method
+		prompt.ROI = roipkg.Parse(req.ROI)
+		prompt.Dilate = req.Dilate
+		if req.DepthBase64 != "" {
+			if raw, e := base64.StdEncoding.DecodeString(req.DepthBase64); e == nil {
+				prompt.Depth, prompt.DepthW, prompt.DepthH = parseDepth(
+					raw, req.DepthDtype, req.DepthWidth, req.DepthHeight, img.Bounds().Dx(), img.Bounds().Dy())
+			}
+		}
 		return req.Model, img, prompt, req.MinSize, req.MaxSize, nil
 	}
 
@@ -245,8 +338,28 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 	// GroundingDINO threshold overrides; ignore parse errors (default 0 = manifest/default)
 	boxThresh, _ := strconv.ParseFloat(r.FormValue("box_threshold"), 64)
 	textThresh, _ := strconv.ParseFloat(r.FormValue("text_threshold"), 64)
+	// foreground background/noise area thresholds (% of image); 0 = model default
+	bgMaxArea, _ := strconv.ParseFloat(r.FormValue("bg_max_area"), 64)
+	fgMinArea, _ := strconv.ParseFloat(r.FormValue("fg_min_area"), 64)
+	gridSize, _ := strconv.Atoi(r.FormValue("grid_size"))
 	prompt.MinSize, prompt.MaxSize = minSize, maxSize
 	prompt.GripperMin, prompt.GripperMax = gripperMin, gripperMax
 	prompt.BoxThresh, prompt.TextThresh = boxThresh, textThresh
+	prompt.BgMaxArea, prompt.FgMinArea = bgMaxArea, fgMinArea
+	prompt.GridSize = gridSize
+	prompt.Method = r.FormValue("method")
+	prompt.ROI = roipkg.Parse(r.FormValue("roi"))
+	dilate, _ := strconv.Atoi(r.FormValue("dilate"))
+	prompt.Dilate = dilate
+	// Optional external depth map (RGB-D) as a raw little-endian array file.
+	if df, _, derr := r.FormFile("depth"); derr == nil {
+		defer df.Close()
+		if raw, e := io.ReadAll(io.LimitReader(df, maxTensorBytes)); e == nil {
+			dw, _ := strconv.Atoi(r.FormValue("depth_width"))
+			dh, _ := strconv.Atoi(r.FormValue("depth_height"))
+			prompt.Depth, prompt.DepthW, prompt.DepthH = parseDepth(
+				raw, r.FormValue("depth_dtype"), dw, dh, img.Bounds().Dx(), img.Bounds().Dy())
+		}
+	}
 	return model, img, prompt, minSize, maxSize, nil
 }

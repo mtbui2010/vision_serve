@@ -36,7 +36,8 @@ const (
 )
 
 type mobileSAM struct {
-	cfg models.Config
+	cfg      models.Config
+	gridSize int // AMG grid N (N×N decoder calls); defaults to autoGridSize
 }
 
 // New is the factory called by lifecycle after parsing the manifest.
@@ -44,7 +45,18 @@ func New(cfg models.Config) (models.Base, error) {
 	if cfg.Files[roleEncoder] == "" || cfg.Files[roleDecoder] == "" {
 		return nil, fmt.Errorf("mobilesam: manifest must declare files.%s and files.%s", roleEncoder, roleDecoder)
 	}
-	return &mobileSAM{cfg: cfg}, nil
+	return &mobileSAM{cfg: cfg, gridSize: autoGridSize}, nil
+}
+
+// SetAutoGridSize overrides the Automatic Mask Generator grid: an N×N grid of point
+// prompts → N² decoder calls. A smaller N is much faster (fewer decoder runs) but may
+// miss small objects; n ≤ 0 resets to the default. Used by the foreground model to
+// trade coverage for speed.
+func (m *mobileSAM) SetAutoGridSize(n int) {
+	if n <= 0 {
+		n = autoGridSize
+	}
+	m.gridSize = n
 }
 
 func (m *mobileSAM) Name() string      { return m.cfg.Name }
@@ -69,7 +81,7 @@ func (m *mobileSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner
 	}
 	masks := make([]models.Mask, len(bms))
 	for i, b := range bms {
-		masks[i] = b.toMask()
+		masks[i] = b.ToMask()
 	}
 	return models.Result{Masks: masks}, nil
 }
@@ -86,7 +98,7 @@ func (m *mobileSAM) InferMasks(img image.Image, prompt models.Prompt, r models.R
 	}
 	masks := make([]models.Mask, len(bms))
 	for i, b := range bms {
-		masks[i] = b.toMask()
+		masks[i] = b.ToMask()
 	}
 	return masks, bms, nil
 }
@@ -119,9 +131,14 @@ func (m *mobileSAM) inferBitmaps(img image.Image, prompt models.Prompt, r models
 	}
 	decOutNames := r.OutputNames(roleDecoder)
 
-	// No prompt → Automatic Mask Generator (16×16 grid, ~256 decoder calls).
+	// No prompt → Automatic Mask Generator (N×N grid, N² decoder calls). A per-request
+	// prompt.GridSize (> 0) overrides the instance default (thread-safe: read per call).
 	if sets == nil {
-		return autoSegment(img, embedding, scale, decRun, decOutNames)
+		grid := m.gridSize
+		if prompt.GridSize > 0 {
+			grid = prompt.GridSize
+		}
+		return autoSegment(img, embedding, scale, decRun, decOutNames, grid)
 	}
 
 	// Prompted: one decoder run per prompt set.
