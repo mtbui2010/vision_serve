@@ -1,6 +1,6 @@
 # Binary build
 /bin/
-visionserve
+/visionserve
 
 # ONNX weights — NOT committed (large). Download per each model directory's README.
 *.onnx
