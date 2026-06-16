@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visionserve"
-version = "0.1.2"
+version = "0.1.3"
 description = "Python client SDK for the VisionServe HTTP server (talks to the Go runtime over HTTP)."
 readme = "README.md"
 requires-python = ">=3.8"
