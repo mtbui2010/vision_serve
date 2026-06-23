@@ -418,11 +418,13 @@ Pre-built images on Docker Hub: [`mtbui2010/visionserve`](https://hub.docker.com
 
 | Tag | Platform | Contents | Size |
 |-----|----------|----------|------|
-| **`latest`**, `v0.1.2-gpu` | x86-64 NVIDIA | CUDA 12.4 + cuDNN 9 (no TensorRT) | ~4 GB |
-| `v0.1.2`, `v0.1.2-cpu` | x86-64 | CPU only — no GPU required | ~141 MB |
-| `v0.1.2-arm` | Jetson arm64 | CUDA + TensorRT EP (JetPack 6) | ~4 GB |
+| **`latest`**, `latest-gpu` | x86-64 NVIDIA | CUDA 12.4 + cuDNN 9 (no TensorRT) | ~4 GB |
+| `latest-cpu` | x86-64 | CPU only — no GPU required | ~141 MB |
+| `latest-arm` | Jetson arm64 | CUDA + TensorRT EP (JetPack 6) | ~4 GB |
 
-> **`latest` = GPU image.** Use `v0.1.2-cpu` explicitly on machines without an NVIDIA GPU.
+> **`latest` = GPU image.** Use `latest-cpu` explicitly on machines without an NVIDIA GPU.
+> Immutable versioned tags (`vX.Y.Z`, `vX.Y.Z-cpu`, `vX.Y.Z-arm`) are also published if you
+> want to pin a specific release — browse them on the [Docker Hub tags page](https://hub.docker.com/r/mtbui2010/visionserve/tags).
 
 #### Step 1 — Start the server
 
@@ -440,7 +442,7 @@ docker run -d \
   -p 11435:11435 \
   -v ~/.visionserve_models:/root/.models \
   --name visionserve \
-  mtbui2010/visionserve:v0.1.2-cpu
+  mtbui2010/visionserve:latest-cpu
 ```
 
 > **Keep models resident.** The image's `ENTRYPOINT` is `visionserve` (CMD
@@ -587,15 +589,15 @@ docker run --rm --gpus all \
 docker run --rm \
   -v visionserve:/root/.models \
   -v "$PWD/image.jpg:/img.jpg:ro" \
-  mtbui2010/visionserve:v0.1.2-cpu \
+  mtbui2010/visionserve:latest-cpu \
   run rf-detr /img.jpg
 ```
 
 #### Build and publish locally
 
 ```bash
-make docker                     # build CPU image  → visionserve:v0.1.2-cpu
-make docker ORT_VARIANT=gpu     # build GPU image  → visionserve:v0.1.2-gpu (latest)
+make docker                     # build CPU image  → visionserve:<version>-cpu
+make docker ORT_VARIANT=gpu     # build GPU image  → visionserve:<version>-gpu (latest)
 make push-docker                # push CPU + GPU to Docker Hub
 ```
 

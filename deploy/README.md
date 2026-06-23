@@ -15,11 +15,13 @@ Model weights are **not** baked in; they are downloaded on first use via `vision
 
 | Tag | Platform | Contents | Size |
 |-----|----------|----------|------|
-| `latest`, `v0.1.2-gpu` | x86-64 NVIDIA | CUDA 12.4 + cuDNN 9 (no TensorRT) | ~4 GB |
-| `v0.1.2`, `v0.1.2-cpu` | x86-64 | CPU only — no GPU required | ~141 MB |
-| `v0.1.2-arm` | Jetson arm64 | CUDA + TensorRT EP (JetPack 6) | ~4 GB |
+| `latest`, `latest-gpu` | x86-64 NVIDIA | CUDA 12.4 + cuDNN 9 (no TensorRT) | ~4 GB |
+| `latest-cpu` | x86-64 | CPU only — no GPU required | ~141 MB |
+| `latest-arm` | Jetson arm64 | CUDA + TensorRT EP (JetPack 6) | ~4 GB |
 
-> **`latest` = GPU image.** Use `v0.1.2-cpu` explicitly on machines without an NVIDIA GPU.
+> **`latest` = GPU image.** Use `latest-cpu` explicitly on machines without an NVIDIA GPU.
+> Immutable versioned tags (`vX.Y.Z`, `vX.Y.Z-cpu`, `vX.Y.Z-arm`) are also published for
+> pinning — see the [tags page](https://hub.docker.com/r/mtbui2010/visionserve/tags).
 
 ---
 
@@ -41,7 +43,7 @@ docker run -d \
   -p 11435:11435 \
   -v ~/.visionserve_models:/root/.models \
   --name visionserve \
-  mtbui2010/visionserve:v0.1.2-cpu
+  mtbui2010/visionserve:latest-cpu
 ```
 
 The registry lives at `/root/.models` inside the container (`VISIONSERVE_MODELS`).
@@ -143,7 +145,7 @@ docker run -d \
   -p 11435:11435 \
   -v ~/.visionserve_models:/root/.models \
   --name visionserve \
-  mtbui2010/visionserve:v0.1.2-cpu \
+  mtbui2010/visionserve:latest-cpu \
   serve --addr :11435 --idle-unload-seconds 0
 ```
 
@@ -174,7 +176,7 @@ docker run --rm --gpus all \
 
 ## GPU image details (x86-64)
 
-The GPU image (`latest` / `v0.1.3-gpu`) bundles **CUDA 12.4 + cuDNN 9** and includes
+The GPU image (`latest` / `latest-gpu`) bundles **CUDA 12.4 + cuDNN 9** and includes
 `libonnxruntime_providers_tensorrt.so`. TensorRT EP is used **automatically** when
 `libnvinfer.so.10` is found on the host; otherwise VisionServe silently falls back to
 CUDA EP — no crash.
@@ -212,7 +214,7 @@ docker run ... -v /usr/lib/x86_64-linux-gnu/libnvinfer.so.10:/usr/lib/x86_64-lin
 
 ## Jetson / arm64
 
-The ARM image (`v0.1.2-arm`) is built with `deploy/Dockerfile.jetson` using
+The ARM image (`latest-arm`) is built with `deploy/Dockerfile.jetson` using
 `nvcr.io/nvidia/l4t-ml:r36.3.0` (JetPack 6.x, CUDA 12.2 + TensorRT 8.6) as the ORT source.
 
 **Build on a machine with `docker buildx` + QEMU or directly on the Jetson:**
@@ -231,7 +233,7 @@ docker run -d \
   --runtime nvidia \
   -p 11435:11435 \
   --name visionserve \
-  mtbui2010/visionserve:v0.1.2-arm
+  mtbui2010/visionserve:latest-arm
 ```
 
 ---
@@ -251,9 +253,9 @@ docker compose -f deploy/docker-compose.yml up
 ## Build from source
 
 ```bash
-make docker                   # CPU image  → visionserve:v0.1.2-cpu
-make docker ORT_VARIANT=gpu   # GPU image  → visionserve:v0.1.2-gpu
-make docker-arm ORT_SOURCE=jetson  # Jetson → visionserve:v0.1.2-arm
+make docker                   # CPU image  → visionserve:<version>-cpu
+make docker ORT_VARIANT=gpu   # GPU image  → visionserve:<version>-gpu
+make docker-arm ORT_SOURCE=jetson  # Jetson → visionserve:<version>-arm
 make push-docker              # push CPU + GPU to Docker Hub
 make push-docker-arm          # push ARM to Docker Hub
 ```

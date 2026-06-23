@@ -44,7 +44,7 @@ ORT_DYLIB_PATH ?= $(shell find $(HOME) /usr/local/lib /usr/lib -name 'libonnxrun
 
 .PHONY: all build install run serve list ps rm pull demo terminate test fmt vet tidy lint clean \
         build-linux-arm64 docker docker-edge pypi pypi-next-version help pdf paper-clean clear-image \
-        push-docker push-docker-arm push-docker-next-version
+        push-docker push-docker-arm push-docker-next-version push-docker-readme
 
 all: build ## Default target: build
 
@@ -180,18 +180,34 @@ push-docker: ## Tag and push CPU + GPU images to Docker Hub (DOCKER_HUB_USER=mtb
 	@echo "=== Tagging images for Docker Hub ($(DOCKER_HUB_USER)) ==="
 	docker tag visionserve:$(PUSH_VERSION)-cpu   $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-cpu
 	docker tag visionserve:$(PUSH_VERSION)-cpu   $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)
+	docker tag visionserve:$(PUSH_VERSION)-cpu   $(DOCKER_HUB_USER)/visionserve:latest-cpu
 	docker tag visionserve:$(PUSH_VERSION)-gpu   $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-gpu
+	docker tag visionserve:$(PUSH_VERSION)-gpu   $(DOCKER_HUB_USER)/visionserve:latest-gpu
 	docker tag visionserve:$(PUSH_VERSION)-gpu   $(DOCKER_HUB_USER)/visionserve:latest
 	@echo "=== Pushing CPU + GPU ==="
 	docker push $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-cpu
 	docker push $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)
+	docker push $(DOCKER_HUB_USER)/visionserve:latest-cpu
 	docker push $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-gpu
+	docker push $(DOCKER_HUB_USER)/visionserve:latest-gpu
 	docker push $(DOCKER_HUB_USER)/visionserve:latest
 	@echo "=== Done. Images pushed: ==="
 	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)"
-	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-cpu"
-	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-gpu"
+	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-cpu   (= latest-cpu)"
+	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-gpu   (= latest-gpu = latest)"
 	@echo "  $(DOCKER_HUB_USER)/visionserve:latest"
+
+push-docker-readme: ## Publish deploy/README.md as the Docker Hub repo "Overview" (needs DOCKERHUB_TOKEN)
+	@test -n "$(DOCKERHUB_TOKEN)" || { echo "push-docker-readme: set DOCKERHUB_TOKEN (a Docker Hub access token or password)"; exit 1; }
+	@echo "=== Updating Docker Hub Overview for $(DOCKER_HUB_USER)/visionserve from deploy/README.md ==="
+	@DOCKERHUB_TOKEN='$(DOCKERHUB_TOKEN)' DOCKER_HUB_USER='$(DOCKER_HUB_USER)' python3 -c "import json, os, urllib.request as u; \
+	user = os.environ['DOCKER_HUB_USER']; secret = os.environ['DOCKERHUB_TOKEN']; \
+	tok = json.load(u.urlopen(u.Request('https://hub.docker.com/v2/users/login/', data=json.dumps({'username': user, 'password': secret}).encode(), headers={'Content-Type': 'application/json'})))['token']; \
+	desc = open('deploy/README.md').read(); \
+	req = u.Request('https://hub.docker.com/v2/repositories/%s/visionserve/' % user, data=json.dumps({'full_description': desc}).encode(), method='PATCH', headers={'Content-Type': 'application/json', 'Authorization': 'JWT ' + tok}); \
+	u.urlopen(req).read(); \
+	print('Overview updated from deploy/README.md (%d chars).' % len(desc))"
+	@echo "  https://hub.docker.com/r/$(DOCKER_HUB_USER)/visionserve"
 
 push-docker-next-version: ## Auto-detect latest Docker Hub tag, bump patch, build CPU+GPU, push all
 	@set -e; \
@@ -232,9 +248,11 @@ push-docker-next-version: ## Auto-detect latest Docker Hub tag, bump patch, buil
 push-docker-arm: ## Push ARM/Jetson image to Docker Hub
 	@echo "=== Tagging ARM image for Docker Hub ($(DOCKER_HUB_USER)) ==="
 	docker tag visionserve:$(PUSH_VERSION)-arm   $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-arm
+	docker tag visionserve:$(PUSH_VERSION)-arm   $(DOCKER_HUB_USER)/visionserve:latest-arm
 	@echo "=== Pushing ARM ==="
 	docker push $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-arm
-	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-arm"
+	docker push $(DOCKER_HUB_USER)/visionserve:latest-arm
+	@echo "  $(DOCKER_HUB_USER)/visionserve:$(PUSH_VERSION)-arm   (= latest-arm)"
 
 ## --- Python client (PyPI) ---
 
