@@ -111,8 +111,8 @@ type Entry struct {
 	// Grasp-pipeline fields (architecture "grasp").
 	// Detector is the optional box-stage model name ("rf-detr", "grounding-dino", …).
 	// Empty means class-agnostic (whole-image automask, no detector session).
-	Detector  string
-	Segmenter string  // mask backbone; default "mobile-sam" when empty
+	Detector   string
+	Segmenter  string  // mask backbone; default "mobile-sam" when empty
 	GripperMin float64 // default parallel-jaw opening lower bound in original-image px
 	GripperMax float64 // default parallel-jaw opening upper bound in original-image px
 }
@@ -267,6 +267,58 @@ var builtin = []Entry{
 		ConfThreshold:     0.3,
 		TextThreshold:     0.25,
 		MaxDetections:     300,
+		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		Verified:          true,
+	},
+	{
+		Name:         "rfdetr-gdino",
+		Task:         "open_vocab",
+		License:      "Apache-2.0",
+		Architecture: "rfdetr-gdino",
+		Description:  "Hybrid router — RF-DETR for in-vocabulary COCO prompts (fast), GroundingDINO for open-vocab prompts.",
+		Dependencies: []string{"rf-detr", "grounding-dino"},
+		VirtualFiles: map[string]string{
+			"rfdetr": "../rf-detr/rf-detr-base.onnx",
+			"gdino":  "../grounding-dino/model.onnx",
+		},
+		InputWidth:        560,
+		InputHeight:       560,
+		InputLayout:       "NCHW",
+		Letterbox:         true,
+		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		PostprocessType:   "detr",
+		BoxFormat:         "cxcywh",
+		ConfThreshold:     0.5,
+		MaxDetections:     300,
+		LabelsFile:        "../rf-detr/coco91.txt", // reuse rf-detr's labels (no file written; dep provides it)
+		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		Verified:          true,
+	},
+	{
+		Name:         "rfdetr-gdino-sam",
+		Task:         "open_vocab",
+		License:      "Apache-2.0",
+		Architecture: "rfdetr-gdino",
+		Description:  "Hybrid router + MobileSAM masks — RF-DETR/GroundingDINO boxes → one mask per box.",
+		Dependencies: []string{"rf-detr", "grounding-dino", "mobile-sam"},
+		VirtualFiles: map[string]string{
+			"rfdetr":  "../rf-detr/rf-detr-base.onnx",
+			"gdino":   "../grounding-dino/model.onnx",
+			"encoder": "../mobile-sam/mobile_sam_encoder.onnx",
+			"decoder": "../mobile-sam/mobile_sam_decoder_single.onnx",
+		},
+		InputWidth:        560,
+		InputHeight:       560,
+		InputLayout:       "NCHW",
+		Letterbox:         true,
+		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		PostprocessType:   "detr",
+		BoxFormat:         "cxcywh",
+		ConfThreshold:     0.5,
+		MaxDetections:     300,
+		LabelsFile:        "../rf-detr/coco91.txt",
 		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
 		IdleUnloadSeconds: 300,
 		Verified:          true,

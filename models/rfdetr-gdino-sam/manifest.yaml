@@ -1,0 +1,43 @@
+# Hybrid RF-DETR + GroundingDINO + MobileSAM (Apache-2.0). Same router as `rfdetr-gdino`,
+# plus a MobileSAM mask per detected box (Grounded-SAM style): text → boxes → masks.
+#   - prompt empty OR every requested class ∈ RF-DETR's COCO vocabulary → RF-DETR boxes,
+#   - any out-of-vocabulary class → GroundingDINO boxes,
+#   then MobileSAM segments each box.
+# Run: `visionserve run rfdetr-gdino-sam img.jpg --prompt "person. dog."`
+#
+# Same `architecture: rfdetr-gdino` factory — the encoder+decoder roles below switch on the
+# mask stage automatically. Weights are REUSED from the three model dirs via relative paths.
+# vocab.txt is resolved next to files.gdino (../grounding-dino/vocab.txt).
+name: rfdetr-gdino-sam
+task: open_vocab
+license: Apache-2.0
+architecture: rfdetr-gdino
+
+# Four ONNX graphs by role, referenced from the sibling model directories.
+files:
+  rfdetr:  ../rf-detr/rf-detr-base-real.onnx
+  gdino:   ../grounding-dino/model.onnx
+  encoder: ../mobile-sam/mobile_sam_encoder.onnx
+  decoder: ../mobile-sam/mobile_sam_decoder_single.onnx
+
+# RF-DETR preprocessing/postprocess values (GroundingDINO + MobileSAM preprocess themselves).
+input:
+  width: 560
+  height: 560
+  layout: NCHW
+  letterbox: true
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std:  [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr
+  box_format: cxcywh
+  conf_threshold: 0.5
+  max_detections: 300
+
+labels: ../rf-detr/coco91.txt
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

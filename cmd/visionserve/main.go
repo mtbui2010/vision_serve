@@ -11,14 +11,15 @@ import (
 
 	// Blank-import the model packages so their init() registers a factory in the registry.
 	// Adding a new model = add one import line here (do NOT modify other core code).
+	_ "visionserve/internal/models/background"
 	_ "visionserve/internal/models/classification"
 	_ "visionserve/internal/models/clip"
 	_ "visionserve/internal/models/depth"
-	_ "visionserve/internal/models/background"
 	_ "visionserve/internal/models/efficientsam"
 	_ "visionserve/internal/models/grasp"
 	_ "visionserve/internal/models/groundedsam"
 	_ "visionserve/internal/models/groundingdino"
+	_ "visionserve/internal/models/hybrid"
 	_ "visionserve/internal/models/mobilesam"
 	_ "visionserve/internal/models/nanosam"
 	_ "visionserve/internal/models/paddleocr"

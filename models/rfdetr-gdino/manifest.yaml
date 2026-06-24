@@ -1,0 +1,42 @@
+# Hybrid RF-DETR + GroundingDINO router (Apache-2.0). One text prompt; the model routes:
+#   - prompt empty OR every requested class ∈ RF-DETR's COCO vocabulary → RF-DETR (fast),
+#   - any out-of-vocabulary class → GroundingDINO (open-vocab).
+# Run: `visionserve run rfdetr-gdino img.jpg --prompt "person. car."`   (→ RF-DETR)
+#      `visionserve run rfdetr-gdino img.jpg --prompt "unicorn."`        (→ GroundingDINO)
+#
+# Weights are NOT committed. This manifest REUSES the weights of the two model dirs via
+# relative paths, so download those (models/rf-detr/README.md, models/grounding-dino/README.md).
+# vocab.txt for the tokenizer is resolved next to files.gdino (../grounding-dino/vocab.txt).
+name: rfdetr-gdino
+task: open_vocab
+license: Apache-2.0
+architecture: rfdetr-gdino
+
+# Two ONNX graphs by role, referenced from the sibling model directories.
+files:
+  rfdetr: ../rf-detr/rf-detr-base-real.onnx
+  gdino:  ../grounding-dino/model.onnx
+
+# This block carries RF-DETR's preprocessing/postprocess values (GroundingDINO ignores it and
+# preprocesses to its own 800×800 internally). Keep in sync with models/rf-detr/manifest.yaml.
+input:
+  width: 560
+  height: 560
+  layout: NCHW
+  letterbox: true
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std:  [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr
+  box_format: cxcywh
+  conf_threshold: 0.5
+  max_detections: 300
+
+# RF-DETR's 91-line COCO labels — also the routing vocabulary (index 0 = N/A, skipped).
+labels: ../rf-detr/coco91.txt
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300
