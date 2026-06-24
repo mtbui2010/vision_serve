@@ -11,7 +11,7 @@ import (
 )
 
 // Version is the binary version (overridden at build time via -ldflags).
-var Version = "0.1.9-dev"
+var Version = "0.1.11-dev"
 
 const usage = `visionserve — Ollama for Computer Vision (local-first, edge-GPU)
 
