@@ -13,7 +13,8 @@ const (
 	TaskDepth          Task = "depth"            // monocular depth estimation
 	TaskClassification Task = "classification"   // image classification
 	TaskEmbed          Task = "embed"            // image/text embedding (CLIP, ArcFace)
-	TaskGrasp          Task = "grasp"            // planar parallel-jaw grasp synthesis
+	TaskGrasp             Task = "grasp"              // planar parallel-jaw grasp synthesis
+	TaskInstanceDetection Task = "instance_detection" // one-shot / template-based object detection
 )
 
 // Result is the normalized output — a unified schema across tasks.
@@ -123,6 +124,9 @@ type PredictJSONRequest struct {
 	DepthDtype  string `json:"depth_dtype,omitempty"`
 	DepthWidth  int    `json:"depth_width,omitempty"`
 	DepthHeight int    `json:"depth_height,omitempty"`
+	// TemplateName selects a named template set registered via POST /api/templates.
+	// Used by instance_detection models (OWL-ViT, SiamRPN, …); ignored by all others.
+	TemplateName string `json:"template_name,omitempty"`
 }
 
 // LoadRequest / UnloadRequest are used by /api/load and /api/unload.

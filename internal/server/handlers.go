@@ -299,6 +299,7 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 		prompt.Method = req.Method
 		prompt.ROI = roipkg.Parse(req.ROI)
 		prompt.Dilate = req.Dilate
+		prompt.TemplateName = req.TemplateName
 		if req.DepthBase64 != "" {
 			if raw, e := base64.StdEncoding.DecodeString(req.DepthBase64); e == nil {
 				prompt.Depth, prompt.DepthW, prompt.DepthH = parseDepth(
@@ -351,6 +352,10 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 	prompt.ROI = roipkg.Parse(r.FormValue("roi"))
 	dilate, _ := strconv.Atoi(r.FormValue("dilate"))
 	prompt.Dilate = dilate
+	// instance_detection: resolve template by name via lifecycle + template store
+	if v := r.FormValue("template_name"); v != "" {
+		prompt.TemplateName = v
+	}
 	// Optional external depth map (RGB-D) as a raw little-endian array file.
 	if df, _, derr := r.FormFile("depth"); derr == nil {
 		defer df.Close()

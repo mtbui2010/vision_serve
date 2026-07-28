@@ -107,6 +107,12 @@ type Config struct {
 	Segmenter  string
 	GripperMin float64
 	GripperMax float64
+
+	// Instance detection config (owlvit, siamrpn, …). Populated from the manifest's
+	// [instance] block by lifecycle.Manager. Models that do not use them leave them zero.
+	InstanceSimThreshold float64
+	InstanceMaxTemplates int
+	InstancePatchSize    int
 }
 
 // Base is the minimal interface every model implements (simple Model and
@@ -182,8 +188,16 @@ type Prompt struct {
 	// ALIGNED to the RGB image. Values are normalized: uint16 → /65535 ([0,1]); float kept
 	// as-is. Invalid pixels (uint16 0, or float ≤0/NaN) are NaN. When provided, the
 	// `background` model's depth method fits the plane on THIS instead of running MiDaS.
-	Depth        []float32
+	Depth          []float32
 	DepthW, DepthH int
+
+	// TemplateName is the name of a registered template set (see /api/templates).
+	// Used by instance_detection models (OWL-ViT, SiamRPN, …). The lifecycle manager
+	// resolves this to TemplateImages before calling the model.
+	TemplateName string
+	// TemplateImages carries the resolved template crops (set by lifecycle from the
+	// template store). Individual models read this slice; they never populate it.
+	TemplateImages []image.Image
 }
 
 // Empty reports whether the prompt carries no PROMPT content (options aside).

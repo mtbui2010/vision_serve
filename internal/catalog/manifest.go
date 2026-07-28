@@ -95,6 +95,44 @@ func (e Entry) RenderManifest() string {
 		}
 	}
 
+	// explain block (only when configured).
+	if e.Explain != nil {
+		b.WriteString("\nexplain:\n")
+		fmt.Fprintf(&b, "  type: %s\n", e.Explain.Type)
+		if len(e.Explain.Outputs) > 0 {
+			b.WriteString("  outputs:\n")
+			// emit in sorted order for determinism
+			keys := make([]string, 0, len(e.Explain.Outputs))
+			for k := range e.Explain.Outputs {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Fprintf(&b, "    %s: %s\n", k, e.Explain.Outputs[k])
+			}
+		}
+		if e.Explain.SpatialStride > 0 {
+			fmt.Fprintf(&b, "  spatial_stride: %d\n", e.Explain.SpatialStride)
+		}
+		if e.Explain.TopChannels > 0 {
+			fmt.Fprintf(&b, "  top_channels: %d\n", e.Explain.TopChannels)
+		}
+	}
+
+	// instance block (only when configured).
+	if e.Instance != nil {
+		b.WriteString("\ninstance:\n")
+		if e.Instance.MaxTemplates > 0 {
+			fmt.Fprintf(&b, "  max_templates: %d\n", e.Instance.MaxTemplates)
+		}
+		if e.Instance.SimThreshold > 0 {
+			fmt.Fprintf(&b, "  sim_threshold: %g\n", e.Instance.SimThreshold)
+		}
+		if e.Instance.PatchSize > 0 {
+			fmt.Fprintf(&b, "  patch_size: %d\n", e.Instance.PatchSize)
+		}
+	}
+
 	if e.LabelsFile != "" {
 		fmt.Fprintf(&b, "\nlabels: %s\n", e.LabelsFile)
 	}

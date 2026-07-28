@@ -22,6 +22,7 @@ import (
 	_ "visionserve/internal/models/hybrid"
 	_ "visionserve/internal/models/mobilesam"
 	_ "visionserve/internal/models/nanosam"
+	_ "visionserve/internal/models/owlvit"
 	_ "visionserve/internal/models/paddleocr"
 	_ "visionserve/internal/models/rfdetr"
 	_ "visionserve/internal/models/rtdetr"

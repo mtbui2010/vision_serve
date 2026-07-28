@@ -31,6 +31,10 @@ type Session struct {
 	pipeline models.PipelineModel       // pipeline mode
 	engines  map[string]engine.Runnable // pipeline mode (role → session or pool)
 
+	// explainEngine is the same ONNX file loaded with all outputs including explain tensors.
+	// nil until the first /api/explain call (lazy load). Lifecycle owns it.
+	explainEngine engine.Runnable
+
 	mu       sync.Mutex
 	lastUsed time.Time
 }
@@ -185,12 +189,25 @@ func (s *Session) idleFor(now time.Time) time.Duration {
 	return now.Sub(s.lastUsed)
 }
 
+// ExplainEngine returns the lazily-created explain session (nil if not yet loaded).
+func (s *Session) ExplainEngine() engine.Runnable { return s.explainEngine }
+
+// SetExplainEngine stores the explain session under the caller's lock.
+func (s *Session) SetExplainEngine(r engine.Runnable) { s.explainEngine = r }
+
 // close releases the ONNX session(s) (avoid VRAM leaks).
 func (s *Session) close() error {
-	if s.engine != nil {
-		return s.engine.Close()
-	}
 	var firstErr error
+	if s.engine != nil {
+		if err := s.engine.Close(); err != nil {
+			firstErr = err
+		}
+	}
+	if s.explainEngine != nil {
+		if err := s.explainEngine.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	for _, e := range s.engines {
 		if err := e.Close(); err != nil && firstErr == nil {
 			firstErr = err

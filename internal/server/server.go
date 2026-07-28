@@ -10,6 +10,7 @@ import (
 
 	"visionserve/internal/lifecycle"
 	"visionserve/internal/registry"
+	"visionserve/internal/templates"
 )
 
 // DefaultAddr is the default listen address.
@@ -19,15 +20,16 @@ const DefaultAddr = ":11435"
 type Server struct {
 	reg  *registry.Registry
 	mgr  *lifecycle.Manager
+	tmpl *templates.Store // template store for instance_detection models
 	http *http.Server
 }
 
 // New creates a server. Empty addr -> DefaultAddr.
-func New(reg *registry.Registry, mgr *lifecycle.Manager, addr string) *Server {
+func New(reg *registry.Registry, mgr *lifecycle.Manager, tmpl *templates.Store, addr string) *Server {
 	if addr == "" {
 		addr = DefaultAddr
 	}
-	s := &Server{reg: reg, mgr: mgr}
+	s := &Server{reg: reg, mgr: mgr, tmpl: tmpl}
 	s.http = &http.Server{
 		Addr:              addr,
 		Handler:           s.routes(),
@@ -44,6 +46,10 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/unload", s.handleUnload)
 	mux.HandleFunc("POST /api/predict", s.handlePredict)
 	mux.HandleFunc("POST /api/infer_tensor", s.handleInferTensor)
+	mux.HandleFunc("POST /api/explain", s.handleExplain)
+	mux.HandleFunc("POST /api/templates", s.handleTemplateRegister)
+	mux.HandleFunc("GET /api/templates", s.handleTemplateList)
+	mux.HandleFunc("DELETE /api/templates/{name}", s.handleTemplateDelete)
 	return logRequests(mux)
 }
 

@@ -22,13 +22,65 @@ var licenseAllowlist = map[string]bool{
 }
 
 var validTasks = map[api.Task]bool{
-	api.TaskDetection:      true,
-	api.TaskSegmentation:   true,
-	api.TaskOpenVocab:      true,
-	api.TaskDepth:          true,
-	api.TaskClassification: true,
-	api.TaskEmbed:          true,
-	api.TaskGrasp:          true,
+	api.TaskDetection:         true,
+	api.TaskSegmentation:      true,
+	api.TaskOpenVocab:         true,
+	api.TaskDepth:             true,
+	api.TaskClassification:    true,
+	api.TaskEmbed:             true,
+	api.TaskGrasp:             true,
+	api.TaskInstanceDetection: true,
+}
+
+// InstanceConfig is optional — when present, the model supports one-shot / template-based
+// detection via /api/predict with a TemplateName prompt field.
+type InstanceConfig struct {
+	// MaxTemplates is the max number of template images to use per inference (0 = no limit).
+	MaxTemplates int `yaml:"max_templates"`
+	// SimThreshold is the minimum similarity score to report a detection (0 = use model default).
+	SimThreshold float64 `yaml:"sim_threshold"`
+	// PatchSize is the ViT patch size (e.g. 16 for owlv2-base-patch16, 32 for base-patch32).
+	PatchSize int `yaml:"patch_size"`
+}
+
+// ExplainConfig khai báo khả năng heatmap visualization của model.
+// Khi không có block này, model không support /api/explain.
+type ExplainConfig struct {
+	Type          string            `yaml:"type"`           // "attention" | "score_cam"
+	Outputs       map[string]string `yaml:"outputs"`        // role → ONNX output node name
+	                                                        // attention: {"attention": "cross_attn_weights"}
+	                                                        // score_cam: {"features": "backbone_features"}
+	SpatialStride int               `yaml:"spatial_stride"` // backbone downsample factor (default 32 if 0)
+	TopChannels   int               `yaml:"top_channels"`   // Score-CAM: max channels per request (default 64 if 0)
+}
+
+// ExplainOutputNames trả về set các output node names dành riêng cho explain.
+// Lifecycle dùng để tạo detect_session với các tên này bị loại ra.
+func (c *ExplainConfig) ExplainOutputNames() map[string]bool {
+	if c == nil {
+		return nil
+	}
+	s := make(map[string]bool, len(c.Outputs))
+	for _, v := range c.Outputs {
+		s[v] = true
+	}
+	return s
+}
+
+// EffectiveSpatialStride trả về stride thực tế (default 32).
+func (c *ExplainConfig) EffectiveSpatialStride() int {
+	if c == nil || c.SpatialStride <= 0 {
+		return 32
+	}
+	return c.SpatialStride
+}
+
+// EffectiveTopChannels trả về số kênh tối đa cho Score-CAM (default 64).
+func (c *ExplainConfig) EffectiveTopChannels() int {
+	if c == nil || c.TopChannels <= 0 {
+		return 64
+	}
+	return c.TopChannels
 }
 
 // Manifest is the "Modelfile for CV" — specified in docs/manifest-spec.md.
@@ -93,6 +145,13 @@ type Manifest struct {
 		GripperMax float64 `yaml:"gripper_max"`
 	} `yaml:"grasp"`
 
+	// Explain: optional heatmap visualization config. Khi nil, model không support /api/explain.
+	Explain *ExplainConfig `yaml:"explain"`
+
+	// Instance: optional one-shot detection config (OWL-ViT, SiamRPN, …).
+	// When nil, model does not accept template prompts.
+	Instance *InstanceConfig `yaml:"instance"`
+
 	Runtime struct {
 		Prefer            []string `yaml:"prefer"`
 		IdleUnloadSeconds int      `yaml:"idle_unload_seconds"`
@@ -146,6 +205,24 @@ func (m *Manifest) validate() error {
 	// Validate the fallback chain (normalizes + ensures CPU is present).
 	if _, err := engine.ResolveProviders(m.Runtime.Prefer); err != nil {
 		return err
+	}
+	if m.Explain != nil {
+		if m.Explain.Type != "attention" && m.Explain.Type != "score_cam" {
+			return fmt.Errorf("explain.type %q is invalid (attention/score_cam)", m.Explain.Type)
+		}
+		if len(m.Explain.Outputs) == 0 {
+			return fmt.Errorf("explain.outputs must declare at least one output node name")
+		}
+		switch m.Explain.Type {
+		case "attention":
+			if _, ok := m.Explain.Outputs["attention"]; !ok {
+				return fmt.Errorf("explain.type=attention requires explain.outputs.attention")
+			}
+		case "score_cam":
+			if _, ok := m.Explain.Outputs["features"]; !ok {
+				return fmt.Errorf("explain.type=score_cam requires explain.outputs.features")
+			}
+		}
 	}
 	return nil
 }

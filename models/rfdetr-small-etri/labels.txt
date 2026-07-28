@@ -1,0 +1,23 @@
+remote
+coffee
+towel
+phone
+banana
+cup
+water bottle
+juice bottle
+fork
+spoon
+snack box
+orange
+milk bottle
+coffee can
+beer can
+hat
+medicine bottle
+bread
+apple
+sprite can
+cola can
+snack bag
+N/A

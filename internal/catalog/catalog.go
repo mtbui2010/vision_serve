@@ -18,6 +18,8 @@ import (
 	_ "embed"
 	"fmt"
 	"sort"
+
+	"visionserve/internal/registry"
 )
 
 // coco91 is embedded so `pull rf-detr` can write the labels file without any
@@ -115,6 +117,11 @@ type Entry struct {
 	Segmenter  string  // mask backbone; default "mobile-sam" when empty
 	GripperMin float64 // default parallel-jaw opening lower bound in original-image px
 	GripperMax float64 // default parallel-jaw opening upper bound in original-image px
+
+	// Explain: optional heatmap visualization config. Nil means model does not support /api/explain.
+	Explain *registry.ExplainConfig
+	// Instance: optional one-shot detection config. Nil means model does not accept template prompts.
+	Instance *registry.InstanceConfig
 }
 
 // builtin is the curated catalog. Keep entries permissive-only.

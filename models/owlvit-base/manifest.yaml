@@ -1,0 +1,30 @@
+name: owlv2_base_patch16
+task: instance_detection
+license: Apache-2.0
+architecture: owlvit
+
+# Single ONNX file — OWLv2 handles both scene and templates in one forward pass.
+files:
+  model: owlv2_base_patch16.onnx
+
+input:
+  width: 960
+  height: 960
+  layout: NCHW
+  letterbox: false
+  normalize:
+    mean: [0.48145466, 0.4578275, 0.40821073]   # CLIP normalization (not ImageNet)
+    std:  [0.26862954, 0.26130258, 0.27577711]
+
+postprocess:
+  conf_threshold: 0.1    # minimum sigmoid(logit) to emit a detection
+  max_detections: 10
+
+instance:
+  patch_size: 16       # must match the exported variant
+  sim_threshold: 0.1     # confidence threshold (same semantics as conf_threshold)
+  max_templates: 5       # max template images used per call (0 = no limit)
+
+runtime:
+  prefer: [cuda, cpu]
+  idle_unload_seconds: 300

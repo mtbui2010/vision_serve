@@ -1,0 +1,35 @@
+# RF-DETR — closed-set NMS-free detector, Apache-2.0. Exported by VisionForge.
+# Deploy on VisionServe: drop this folder (model.onnx + manifest.yaml + labels.txt)
+# into the model registry. No vocab needed (RF-DETR has no text encoder).
+name: rfdetr-small
+task: detection
+license: Apache-2.0
+architecture: rf-detr
+model_file: model.onnx
+
+input:
+  width: 512
+  height: 512
+  layout: NCHW
+  letterbox: true
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr
+  box_format: cxcywh
+  conf_threshold: 0.5
+  max_detections: 300
+
+labels: labels.txt
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300
+
+explain:
+  type: attention
+  outputs:
+    attention: cross_attn_weights
+  spatial_stride: 16

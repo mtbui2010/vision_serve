@@ -14,6 +14,7 @@ import (
 	"visionserve/internal/lifecycle"
 	"visionserve/internal/registry"
 	"visionserve/internal/server"
+	"visionserve/internal/templates"
 )
 
 func runServe(args []string) error {
@@ -44,7 +45,9 @@ func runServe(args []string) error {
 		log.Printf("registry warning: %v", wn)
 	}
 
+	tmpl := templates.New()
 	mgr := lifecycle.NewManager(reg)
+	mgr.SetTemplateStore(tmpl)
 	if *idleFlag >= 0 {
 		mgr.SetIdleUnloadOverride(*idleFlag)
 		if *idleFlag == 0 {
@@ -85,7 +88,7 @@ func runServe(args []string) error {
 		}
 	}
 
-	srv := server.New(reg, mgr, *addr)
+	srv := server.New(reg, mgr, tmpl, *addr)
 
 	// graceful shutdown on SIGINT/SIGTERM
 	go func() {
