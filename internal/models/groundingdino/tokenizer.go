@@ -13,6 +13,14 @@ const (
 	idUNK = 100
 	idCLS = 101
 	idSEP = 102
+	// idPeriod is "." in bert-base-uncased — the separator GroundingDINO prompts use
+	// between class phrases ("cup. water bottle."). postprocess splits on it.
+	idPeriod = 1012
+	// idComma is "," — NOT one of the four tokens the export treats as special
+	// ([CLS], [SEP], ".", "?"), so commas do not add loop iterations to the baked mask
+	// subgraph. That lets several classes share one pass while still being labelled
+	// separately: "." bounds a PASS, "," bounds a LABEL inside it.
+	idComma = 1010
 )
 
 // Tokenizer is a minimal BERT bert-base-uncased WordPiece tokenizer implemented in pure
