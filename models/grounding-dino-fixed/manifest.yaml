@@ -1,0 +1,48 @@
+# GroundingDINO with a CORRECT text self-attention mask — open-vocabulary detection,
+# Apache-2.0. Same architecture and weights-lineage as ../grounding-dino; the ONLY difference
+# is the ONNX graph.
+#
+# The community export (../grounding-dino/model.onnx) baked the trip count of the
+# transformers-4.48 Python loop in generate_masks_with_special_tokens_and_transfer_map, so
+# only the FIRST "."-separated phrase ever got its attention block: multi-class prompts were
+# order-dependent and silently dropped classes. This re-export rebuilds the mask with a
+# vectorized, data-independent subgraph, so the whole prompt is scored correctly in ONE pass.
+# See ../grounding-dino/README.md for the analysis and the export recipe.
+#
+# internal/models/groundingdino probes the weights (SupportsJointTextPass) and picks the
+# regime automatically, so both manifests are safe to use — this one is just ~8x faster on
+# multi-class prompts.
+#
+# Weights are NOT committed (694 MB). Re-export them with the recipe in
+# ../grounding-dino/README.md; the vocab is shared via the symlink in this directory.
+#
+# Run: `visionserve run grounding-dino-fixed img.jpg --prompt "chair. tv. vase."`
+name: grounding-dino-fixed
+task: open_vocab
+license: Apache-2.0
+architecture: grounding-dino
+
+source_url: https://huggingface.co/IDEA-Research/grounding-dino-tiny
+sha256:
+  model: ae9a0026953c6d5ce5a97b421af84c065d7f07173971cb105edb0071868fc180
+
+files:
+  model: ../grounding-dino/model-fixedmask.onnx
+
+input:
+  # Reference only — preprocess (resize 800x800 + ImageNet normalize) happens in Go.
+  width: 800
+  height: 800
+  layout: NCHW
+  letterbox: false
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+postprocess:
+  conf_threshold: 0.3
+  text_threshold: 0.25
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

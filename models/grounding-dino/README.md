@@ -71,6 +71,92 @@ outputs:
 Post-process: `sigmoid(logits)` → box score = max over text tokens; filter by
 `conf_threshold` (box) and `text_threshold` (label assignment).
 
+## Known defect in this ONNX export (one pass per class phrase)
+
+`onnx-community/grounding-dino-tiny-ONNX` **does not rebuild the block-diagonal text
+self-attention mask for more than one class phrase**, so a joint multi-class prompt is
+order-dependent and silently drops classes.
+
+GroundingDINO's BERT branch needs a block-diagonal mask so the tokens of one phrase cannot
+attend to another phrase's tokens. HF builds it inside the model from `input_ids`
+(`generate_masks_with_special_tokens_and_transfer_map`) — it is not a graph input, so the
+export has to reproduce it. In transformers 4.48 (the version this file was traced with)
+that function is a **Python `for` loop over `torch.nonzero(special_tokens_mask)`**, and
+`torch.onnx.export` baked the trip count in. In the graph, `input_ids` feeds
+`Equal(101)/Equal(102)/Equal(1012)/Equal(1029)` → `Or` chain → `NonZero` → `Transpose` →
+`Gather(axis 0, index 0)`, `Gather(index 1)`, `Gather(index 2)` — exactly **three hard-coded
+iterations** driving 6 `ScatterND` nodes (mask + `position_ids` per iteration). The export
+prompt held one class (`[CLS] … . [SEP]` = 3 special tokens).
+
+At runtime only the **first** phrase gets its attention block; every later phrase keeps just
+the `EyeLike` identity (each token attends to itself alone) with `position_id` 0. Measured on
+`demo/images/000000000139.jpg`, HF PyTorch returns the same 15 detections for every
+reordering of a 12-class prompt, while a raw joint ONNX pass returns 4 / 0 / 0 / 3.
+
+Nothing on the Go side can repair that graph: the only text inputs are `input_ids` /
+`attention_mask` / `token_type_ids`, all `[1, L]`, and `attention_mask` is used solely as the
+padding mask (`Cast` → `Not` → `Tile` into the fusion and decoder attention) — it can never
+encode a block-diagonal `[L, L]` mask.
+
+**Fallback for these weights:** `groundingdino.Detect` runs the session **once per
+`.`-separated phrase** — the single-phrase regime this export handles exactly right (for
+`"chair."` the ONNX mask is bit-identical to HF's and the scores match). Results are
+order-stable, at the cost of N passes for N classes.
+
+## FIXED weights: `model-fixedmask.onnx`
+
+A re-export with a correct, dynamic mask lives at **`model-fixedmask.onnx`** (694.8 MB,
+opset 17), registered as the model **`grounding-dino-fixed`** (see
+`models/grounding-dino-fixed/manifest.yaml`). VisionServe **probes the weights at load**
+(`groundingdino.SupportsJointTextPass`, which looks for the `NonZero` op that only the
+baked-loop graph contains) and picks the regime automatically, so both manifests are safe to
+use — old weights keep the per-phrase path, new weights get a single joint pass.
+
+Measured on `demo/images/000000000139.jpg`, 12-class prompt, warm server, RTX A6000 CUDA EP,
+median of 3 (model resident):
+
+| weights | passes | latency | detections |
+|---|---|---|---|
+| `model.onnx` (community, per-phrase) | 12 | 1779.7 ms | 17 |
+| `model-fixedmask.onnx` (joint) | **1** | **149.3 ms** | **15** |
+
+**11.9× faster**, and the 15 detections are exactly HF PyTorch's
+(chair 7, clock 1, laptop 1, potted plant 2, tv 2, vase 2). The old path's 17 over-counted
+vases and missed `laptop`, because per-phrase inference cannot let the fusion layers see the
+other classes.
+
+Accuracy vs HF PyTorch on the same pixel tensor and `input_ids`: identical detection lists on
+all five prompts, max `|Δlogit|` 7.3e-3 and max `|Δsigmoid|` 1.1e-4 over the valid token range
+for the 12-class prompt. Permuting the class order changes scores by at most 3.529e-2 — and HF
+PyTorch drifts by exactly the same 3.529e-2, i.e. the residual order sensitivity is inherent
+to GroundingDINO (the fusion and decoder layers attend over all text tokens with only the
+padding mask), not an artifact of the export. "Order-stable" therefore means the same
+detections, not bit-identical coordinates.
+
+### How it was produced
+
+1. Monkeypatch `generate_masks_with_special_tokens_and_transfer_map` with a vectorized,
+   data-independent equivalent. transformers ≥5 already vectorizes it, but that version does
+   not export: the legacy exporter rejects `aten::isin` and ONNX has no `CumMax`/`CumMin`.
+   The substitutions are `isin` → `Equal`/`Or` chain, `cummax`/`cummin` → an `L×L` compare
+   plus `ReduceMax`/`ReduceMin` (`L ≤ max_text_len = 256`, so this is negligible), and
+   `torch.eye` → `(i == j)` (`EyeLike` on bool has no ORT kernel).
+2. `torch.onnx.export` (legacy, `dynamo=False`), opset 17, `dynamic_axes` on
+   `sequence_length` for the three text inputs, pixel inputs fixed at `[1,3,800,800]` /
+   `[1,800,800]` to match the old graph, and `config.disable_custom_kernels = True` so the
+   deformable attention traces. Trace with a **two-class** example so a baked single-phrase
+   loop could not pass unnoticed; the mask is then verified at L = 4, 6, 8, 12 and 26 tokens.
+3. **Demote float64 → float32.** The legacy exporter type-promotes mixed int64/float32
+   arithmetic to `DOUBLE`; in `GroundingDinoEncoder.get_reference_points`,
+   `ref_y / (valid_ratios[...] * height)` has `height` as a traced int64 spatial-shape tensor,
+   and the resulting double flows into the deformable-attention sampling grid. ORT then
+   refuses to load the model with *"Could not find an implementation for GridSample(16)"*.
+   PyTorch itself runs this in float32, so demoting every `Cast(to=DOUBLE)` and double
+   constant is a faithful correction (15 cast attributes, 20 attribute tensors here).
+
+Both weight files keep the same 5 input names and 2 output names, so
+`internal/models/groundingdino` binds them identically.
+
 ## Usage
 
 GroundingDINO requires a text prompt. Queries are lowercased and dot-separated:
