@@ -1,0 +1,45 @@
+# CLIP ViT-B/32 TEXT tower (openai/clip-vit-base-patch32, MIT) — the missing half of
+# models/clip, which ships the IMAGE tower only.
+#
+# Text-prompted single-session model (PipelineModel, architecture "clip-text"). The BPE
+# tokenizer is pure Go (internal/models/clip/tokenizer.go) and reads vocab.json +
+# merges.txt from THIS directory — no Python at runtime (CLAUDE.md).
+#
+# SAME EMBEDDING SPACE AS models/clip — verified, not assumed:
+#   - models/clip/model.onnx reproduces HF openai/clip-vit-base-patch32 vision tower with
+#     per-image cosine 1.000000 (max |Δ| 1.7e-06), i.e. it IS this checkpoint's image tower.
+#   - crop-vs-text zero-shot over 373 GT crops from the ETRI tabletop set, 22 classes:
+#     top-1 61.9%, top-5 93.0% (chance 4.5%). See README.md.
+#
+# Run: visionserve run clip-text <any-image> --prompt "cup. remote. water bottle."
+# (the image is IGNORED — this is the text branch; the CLI just always requires one.)
+name: clip-text
+task: embed
+license: MIT
+architecture: clip-text
+
+source_url: https://huggingface.co/openai/clip-vit-base-patch32
+sha256:
+  model: a104b96e1a9ce466e24dac4e32f406ffc412eb1a459049b4040eab97b196b580
+
+# Single ONNX graph (role "model"): input_ids [batch,77] int64 -> text_embeds [batch,512].
+# vocab.json / merges.txt sit next to it and are loaded in Go.
+files:
+  model: model.onnx
+
+input:
+  # There is NO image input. The manifest validator requires width/height > 0, so these
+  # describe the TOKEN input instead: 77 = CLIP's context length, 1 row per prompt.
+  # Nothing reads them — tokenization happens in Go.
+  width: 77
+  height: 1
+  layout: NCHW
+
+postprocess:
+  # Rows of text_embeds are L2-normalised in Go, so cosine similarity against a
+  # models/clip image embedding is a plain dot product.
+  type: embed
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

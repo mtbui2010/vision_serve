@@ -1,10 +1,15 @@
-// Package clip implements the CLIP image encoder (OpenAI, MIT license).
+// Package clip implements BOTH CLIP towers (OpenAI ViT-B/32, MIT license), which
+// produce 512-d L2-normalised embeddings in ONE shared space:
 //
-// V1: image encoder only — produces 512-d L2-normalised embeddings (ViT-B/32).
-// Text encoder is deferred: it requires a BPE tokenizer which is too complex for v1.
+//   - architecture "clip"      — the IMAGE encoder. A plain Model (single ONNX
+//     session, no prompt): this file + preprocess.go + postprocess.go.
+//   - architecture "clip-text" — the TEXT encoder (text.go). A PipelineModel, because
+//     its input is a PROMPT, not an image. Its pure-Go BPE tokenizer lives in
+//     tokenizer.go — no Python at runtime (CLAUDE.md).
 //
-// The model is a plain Model (single ONNX session, no prompt). Registered under the
-// architecture name "clip" via init() — no core modifications required.
+// Both register themselves via init(), so no core modification is required. Because the
+// spaces match, cosine(image_embedding, text_embedding) is a plain dot product; see
+// models/clip-text/README.md for the measured verification.
 package clip
 
 import (
