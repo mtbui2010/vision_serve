@@ -1,0 +1,51 @@
+# RF-DETR small, COCO-91 — SAME weights as models/rfdetr-small, re-exported with one extra
+# output: query_feats [1,300,256], the per-query decoder features feeding the class head.
+#
+# WHY THIS AND NOT rfdetr-small-etri-qf: an ablation on node-for-node identical graphs showed
+# the 22-class ETRI fine-tune lost 30.2 points of class-agnostic localization recall on
+# out-of-domain objects (98.3% -> 68.1% @IoU0.5) and its box tightness became class-conditional
+# (77.4% on trained categories vs 55.3% on novel, where these COCO-91 weights show no split at
+# all). These weights are the better frozen backbone for an open-vocabulary head.
+#
+# EQUIVALENCE (verified): max|delta| == 0.0 on dets, labels AND cross_attn_weights versus
+# models/rfdetr-small/model.onnx, and labels == query_feats @ class_embed.weight + bias to
+# 0.0 error. Produced by graph surgery (scratchpad/export_small_qf.py) — no retraining, no new
+# weights: the tensor was already internal.
+#
+# OUTPUT ORDER MATTERS: internal/models/rfdetr/postprocess.go takes the first output with last
+# dim == 4 as boxes and the FIRST REMAINING one as class logits, so query_feats must stay AFTER
+# labels. Order: dets, labels, cross_attn_weights, query_feats.
+# Deploy on VisionServe: drop this folder (model.onnx + manifest.yaml + labels.txt)
+# into the model registry. No vocab needed (RF-DETR has no text encoder).
+name: rfdetr-small-qf
+task: detection
+license: Apache-2.0
+architecture: rf-detr
+model_file: model.onnx
+
+input:
+  width: 512
+  height: 512
+  layout: NCHW
+  letterbox: true
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr
+  box_format: cxcywh
+  conf_threshold: 0.5
+  max_detections: 300
+
+labels: labels.txt
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300
+
+explain:
+  type: attention
+  outputs:
+    attention: cross_attn_weights
+  spatial_stride: 16
