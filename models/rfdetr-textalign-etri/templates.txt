@@ -1,0 +1,12 @@
+# Prompt templates head B was TRAINED with (headb/targets.py::TEMPLATES).
+# The runtime builds T-hat from these, so they are part of the P contract.
+a photo of a {}.
+a photo of the {}.
+a close-up photo of a {}.
+a cropped photo of a {}.
+a photo of a {} on a table.
+a bad photo of a {}.
+a blurry photo of a {}.
+itap of a {}.
+a photo of one {}.
+there is a {} in the scene.

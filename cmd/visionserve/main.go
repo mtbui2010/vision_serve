@@ -28,6 +28,7 @@ import (
 	_ "visionserve/internal/models/rtdetr"
 	_ "visionserve/internal/models/sam2"
 	_ "visionserve/internal/models/scrfd"
+	_ "visionserve/internal/models/textalign"
 )
 
 func main() {

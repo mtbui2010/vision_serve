@@ -1,0 +1,106 @@
+# Text-aligned ("head B") open-vocabulary detection head on the FROZEN RF-DETR ETRI
+# detector. Architecture "rfdetr-textalign" (internal/models/textalign).
+#
+#   score(query i, class c) = a * cos( P·f_i , CLIP_text(c) ) + b
+#
+# f_i = the detector's 256-d object-query feature, exposed by models/rfdetr-small-etri-qf
+# as the extra ONNX output `query_feats`. P is the ONLY trained tensor and lives in the
+# side-car proj.bin next to this manifest (512 KB) — NOT in the ONNX graph, so retraining
+# the head or changing the vocabulary never needs a re-export.
+#
+# Run:
+#   visionserve run rfdetr-textalign-etri img.png --prompt "cup. cola can. banana."
+#   (no prompt -> the vocabulary is labels.txt; --method folded -> drop the ||P f|| term)
+#
+# LICENSE: RF-DETR export Apache-2.0, CLIP ViT-B/32 text tower MIT — both permissive.
+# The manifest declares the more restrictive of the two, Apache-2.0.
+#
+# WEIGHTS ARE NOT COMMITTED. The CLIP text tower and the explain graph are reused from the
+# sibling model directories by relative path — download those first (see their READMEs).
+# The one local copy, detector-noattn.onnx, is regenerated in one command; see README.md.
+name: rfdetr-textalign-etri
+task: open_vocab
+license: Apache-2.0
+architecture: rfdetr-textalign
+
+# ONNX graphs by role. The detector MUST expose query_feats [1,300,256] — a plain
+# rfdetr-small-etri export is rejected at inference with a clear error.
+#
+# WHY files.rfdetr IS A LOCAL COPY AND NOT ../rfdetr-small-etri-qf/model.onnx:
+# lifecycle.Manager builds every PipelineModel role session with engine.NewSession(path,
+# nil, nil, ...) = BIND EVERY ONNX OUTPUT. A plain Model can filter the explain tensors out
+# (manifest `explain:` → ExplainOutputNames), a pipeline role cannot. The qf export emits
+# cross_attn_weights [3,1,16,300,1024] = 59 MB PER INFERENCE, which this head never reads.
+# MEASURED cost of that one unread tensor (same server, interleaved, 100 warm requests):
+# p50 135.2 → 61.6 ms, p99 200.2 → 99.4 ms. It is a bandwidth-bound device→host copy, so it
+# gets worse under contention — bigger than the head itself. detector-noattn.onnx is that
+# graph with only the cross_attn_weights entry removed from graph.output
+# (headb_deploy/strip_attn.py); the remaining 3 outputs are bit-identical (verified through
+# the server: 78 detections, max|Δ| = 0 on bbox and conf). Cost: 114 MB of disk.
+#
+# The `explain` role below is NOT in textalign's Roles(), so it gets NO session at load —
+# lifecycle only opens it lazily, on the first /api/explain call (loadExplainSession reads
+# files[explain.role] directly). So /api/explain still works, at zero steady-state cost.
+files:
+  rfdetr:  detector-noattn.onnx
+  text:    ../clip-text/model.onnx
+  explain: ../rfdetr-small-etri-qf/model.onnx
+
+# Binds the license claim above to these exact bytes (same digests the sibling manifests
+# pin; `rfdetr` is the stripped re-export of `explain`). proj.bin is NOT covered — it is
+# this repo's own trained artifact, not third-party weights, and carries no license
+# question.
+sha256:
+  rfdetr:  efcf3af08d5e0512095946b69866425645fca81dc5e05aaea775eff9abc11b4c
+  text:    a104b96e1a9ce466e24dac4e32f406ffc412eb1a459049b4040eab97b196b580
+  explain: 5d87e22067458c9af1f679a8eeb85588569a84881a060ac0f1d8f8f252379818
+
+# This block carries the DETECTOR's preprocessing/postprocess values: the rf-detr
+# sub-model that does letterboxing and box decoding is built from it. Keep in sync with
+# models/rfdetr-small-etri-qf/manifest.yaml.
+input:
+  width: 512
+  height: 512
+  layout: NCHW
+  letterbox: true
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr
+  box_format: cxcywh
+  # Applied to sigmoid(logit) of the TEXT-ALIGNED head, whose calibration comes from the
+  # trained (a, b) in proj.bin — NOT from the frozen 22-class head.
+  #
+  # NOT 0.5 — and that is not a bug. Head B's confidence is sigmoid(a·cos + b) with the
+  # TRAINED a = 13.774, b = -5.042, and a cosine the CLIP-distillation term keeps small
+  # (cos(z, t_gt) ≈ 0.31 on val). Measured over all 74100 object queries of the 247 ETRI
+  # images, the max-class confidence NEVER exceeds 0.4997 (p50 0.083, p99 0.344): a 0.5
+  # threshold returns literally nothing. This head's scores are on their OWN scale and the
+  # frozen detector's threshold does not transfer.
+  #
+  # 0.28 is where F1 peaks on the 62 HELD-OUT images (headb_deploy/threshold.py, TP =
+  # IoU >= 0.5 AND correct label): 0.20 → F1 0.707, 0.25 → 0.723, 0.28 → 0.730,
+  # 0.30 → 0.698, 0.35 → 0.573. It is a flat optimum — anywhere in 0.22…0.30 is defensible.
+  # RE-RUN threshold.py AFTER INSTALLING A NEW proj.bin; a and b are retrained with P.
+  conf_threshold: 0.28
+  max_detections: 300
+
+# Fallback vocabulary when a request carries no prompt ("N/A" is skipped).
+labels: ../rfdetr-small-etri-qf/labels.txt
+
+# /api/explain runs against the UN-STRIPPED qf export (role `explain`), which still carries
+# cross_attn_weights. It is loaded lazily and only for explain, so the fast detect path
+# never pays for that 59 MB tensor. Boxes/attention are the same graph, so the heatmap
+# explains exactly the detections /api/predict returned.
+explain:
+  type: attention
+  role: explain
+  outputs:
+    attention: cross_attn_weights
+  spatial_stride: 16
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300
