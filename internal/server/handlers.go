@@ -297,6 +297,7 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 		prompt.BgMaxArea, prompt.FgMinArea = req.BgMaxArea, req.FgMinArea
 		prompt.GridSize = req.GridSize
 		prompt.Method = req.Method
+		prompt.ClaimThresh = req.ClaimThreshold
 		prompt.ROI = roipkg.Parse(req.ROI)
 		prompt.Dilate = req.Dilate
 		prompt.TemplateName = req.TemplateName
@@ -349,6 +350,7 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 	prompt.BgMaxArea, prompt.FgMinArea = bgMaxArea, fgMinArea
 	prompt.GridSize = gridSize
 	prompt.Method = r.FormValue("method")
+	prompt.ClaimThresh, _ = strconv.ParseFloat(r.FormValue("claim_threshold"), 64)
 	prompt.ROI = roipkg.Parse(r.FormValue("roi"))
 	dilate, _ := strconv.Atoi(r.FormValue("dilate"))
 	prompt.Dilate = dilate

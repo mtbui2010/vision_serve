@@ -7,12 +7,12 @@ package api
 type Task string
 
 const (
-	TaskDetection      Task = "detection"
-	TaskSegmentation   Task = "segmentation"
-	TaskOpenVocab      Task = "open_vocab"      // open-vocab feature (Grounding DINO)
-	TaskDepth          Task = "depth"            // monocular depth estimation
-	TaskClassification Task = "classification"   // image classification
-	TaskEmbed          Task = "embed"            // image/text embedding (CLIP, ArcFace)
+	TaskDetection         Task = "detection"
+	TaskSegmentation      Task = "segmentation"
+	TaskOpenVocab         Task = "open_vocab"         // open-vocab feature (Grounding DINO)
+	TaskDepth             Task = "depth"              // monocular depth estimation
+	TaskClassification    Task = "classification"     // image classification
+	TaskEmbed             Task = "embed"              // image/text embedding (CLIP, ArcFace)
 	TaskGrasp             Task = "grasp"              // planar parallel-jaw grasp synthesis
 	TaskInstanceDetection Task = "instance_detection" // one-shot / template-based object detection
 )
@@ -27,8 +27,8 @@ type Result struct {
 	Masks           []Mask           `json:"masks,omitempty"`
 	Grasps          []Grasp          `json:"grasps,omitempty"`
 	Classifications []Classification `json:"classifications,omitempty"` // top-K class predictions
-	Embeddings      [][]float32      `json:"embeddings,omitempty"`       // one embedding vector per image/input
-	DepthMap        []float32        `json:"depth_map,omitempty"`        // row-major HxW relative depth
+	Embeddings      [][]float32      `json:"embeddings,omitempty"`      // one embedding vector per image/input
+	DepthMap        []float32        `json:"depth_map,omitempty"`       // row-major HxW relative depth
 	DepthWidth      int              `json:"depth_width,omitempty"`
 	DepthHeight     int              `json:"depth_height,omitempty"`
 	DurationMs      float64          `json:"duration_ms"`
@@ -111,6 +111,11 @@ type PredictJSONRequest struct {
 	// Method selects the algorithm for models that offer several (the `background` model:
 	// "depth" | "sam" | "cv" | "automask"). "" = model default.
 	Method string `json:"method,omitempty"`
+	// ClaimThreshold applies to textalign's `method: dual`. It is the probability in (0,1)
+	// the supervised closed head must reach on a requested word before it names a detection
+	// instead of the open head. 0 = model default. It is NOT conf_threshold: that decides
+	// what is reported, and evaluation runs set it to 0.001.
+	ClaimThreshold float64 `json:"claim_threshold,omitempty"`
 	// ROI restricts processing to a region of interest "x,y,w,h" in ORIGINAL image pixels:
 	// the server crops to it, runs the model on the crop, and maps results back. "" = full image.
 	ROI string `json:"roi,omitempty"`

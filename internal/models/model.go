@@ -175,6 +175,12 @@ type Prompt struct {
 	// Method: per-request algorithm selector for models that offer several (the
 	// `background` model: "depth" | "sam" | "cv" | "automask"). "" = the model default.
 	Method string
+	// ClaimThresh: textalign `method: dual` only. The PROBABILITY in (0,1) the supervised
+	// closed head must reach on a requested word before it names a query instead of the open
+	// head. 0 = the model default. Deliberately NOT the manifest's conf_threshold, which
+	// decides what is REPORTED and is set to 0.001 during evaluation — reusing that would make
+	// the closed head claim every query and hide the failure this knob exists to prevent.
+	ClaimThresh float64
 	// ROI: optional region of interest [x, y, w, h] in ORIGINAL image pixels. When set
 	// (w>0 && h>0), the SERVER crops the image to this rectangle, runs the model on the
 	// crop only, and maps results back to original coordinates. Handled in the HTTP layer,

@@ -6,7 +6,7 @@
 //
 // The frozen detector emits, per object query i, a 256-d decoder feature f_i (the tensor
 // its own class head reads) — exposed as the extra ONNX output `query_feats` by
-// models/rfdetr-small-etri-qf. Head B is ONE trained matrix P (512×256) that maps f_i into
+// models/rfdetr-small-etri-qf. Head B is ONE trained matrix P (d_text×256) that maps f_i into
 // CLIP text space, so a class score is a cosine:
 //
 //	logit_ic = a · ⟨ t̂_c , P f_i / ‖P f_i‖ ⟩ + b
@@ -44,8 +44,14 @@
 //
 //	--prompt "cup. water bottle. cola can."   the vocabulary (GroundingDINO/CLIP convention).
 //	                                          Empty prompt → the manifest's labels file.
-//	--method exact | folded                   exact (default) keeps the ‖P f‖ normalisation,
-//	                                          folded drops it (a literal linear head).
+//	--method exact | folded | gated           exact (default) keeps the ‖P f‖ normalisation;
+//	                                          folded drops it (a literal linear head);
+//	                                          gated names with the folded head but selects
+//	                                          boxes with the detector's own objectness.
+//
+// Pick `gated` when the detector export still carries its own class head: folding is
+// provably exact for naming and provably wrong for ranking queries against each other, and
+// `gated` is the split that keeps only the exact half. See gated.go for the algebra.
 package textalign
 
 import (
@@ -92,7 +98,7 @@ var defaultTemplates = []string{"a photo of a {}."}
 type textAlign struct {
 	cfg  models.Config
 	proj *Projection
-	tok  *clip.Tokenizer
+	tok  textTokenizer
 	tmpl []string
 
 	// base is the rf-detr sub-model built from the manifest labels; it also serves
@@ -122,11 +128,12 @@ func New(cfg models.Config) (models.Base, error) {
 		return nil, err
 	}
 
-	// The tokenizer assets live next to the text weights (files.text is typically
-	// "../clip-text/model.onnx"), exactly like hybrid resolves GroundingDINO's vocab.txt.
-	tok, err := clip.LoadTokenizer(filepath.Dir(cfg.Files[roleText]))
+	// The tokenizer assets live next to the text weights (files.text is "../clip-text/model.onnx"
+	// or "../siglip-text/model.onnx"), exactly like hybrid resolves GroundingDINO's vocab.txt.
+	// WHICH tokenizer is decided by what that directory contains — see tokenizer.go.
+	tok, err := loadTextTokenizer(filepath.Dir(cfg.Files[roleText]))
 	if err != nil {
-		return nil, fmt.Errorf("textalign: load CLIP tokenizer: %w", err)
+		return nil, err
 	}
 
 	tmpl, err := loadTemplates(filepath.Join(cfg.Dir, templatesFile))
@@ -221,7 +228,7 @@ func (m *textAlign) ExplainPreprocess(img image.Image) (engine.Tensor, models.Pr
 // frozen detector once, score every query against W, and hand the detector's own boxes +
 // our logits to RF-DETR's postprocess.
 func (m *textAlign) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
-	normalize, err := parseMethod(prompt.Method)
+	mode, err := parseMethod(prompt.Method)
 	if err != nil {
 		return models.Result{}, err
 	}
@@ -256,7 +263,17 @@ func (m *textAlign) Infer(img image.Image, prompt models.Prompt, r models.Runner
 	if err != nil {
 		return models.Result{}, err
 	}
-	return m.decode(h, boxes, feats, meta, normalize)
+	if mode == modeGated || mode == modeDual {
+		cls, err := classLogits(outs, boxes, m.proj.DFeat, len(m.cfg.Labels))
+		if err != nil {
+			return models.Result{}, err
+		}
+		if mode == modeDual {
+			return m.decodeDual(h, boxes, cls, feats, meta, claimThreshold(prompt.ClaimThresh))
+		}
+		return m.decodeGated(h, boxes, cls, feats, meta)
+	}
+	return m.decode(h, boxes, feats, meta, mode.normalize())
 }
 
 // decode scores every object query against the compiled vocabulary and turns the result
@@ -276,22 +293,28 @@ func (m *textAlign) decode(h *head, boxes, feats engine.Tensor, meta models.Prep
 		[]engine.Tensor{boxes, engine.F32(logits, 1, int64(q), int64(len(h.classes)))}, meta)
 }
 
-// parseMethod maps the per-request `method` option to "keep the ‖P f‖ normalisation?".
-func parseMethod(method string) (bool, error) {
+// parseMethod maps the per-request `method` option to a scoring mode. See gated.go for why
+// "folded" and "gated" differ: they compute the same names and select different boxes.
+func parseMethod(method string) (scoreMode, error) {
 	switch strings.ToLower(strings.TrimSpace(method)) {
 	case "", "exact", "cosine":
-		return true, nil
+		return modeExact, nil
 	case "folded", "linear":
-		return false, nil
+		return modeFolded, nil
+	case "gated", "split":
+		return modeGated, nil
+	case "dual", "twohead":
+		return modeDual, nil
 	default:
-		return false, fmt.Errorf("textalign: unknown method %q (want \"exact\" or \"folded\")", method)
+		return modeExact, fmt.Errorf("textalign: unknown method %q (want \"exact\", \"folded\", \"gated\" or \"dual\")", method)
 	}
 }
 
 // splitOutputs picks the box tensor and the query-feature tensor out of the detector's
 // outputs BY SHAPE (names differ between exports): boxes = last dim 4, query_feats = last
-// dim DFeat with the same query count. `labels` (the frozen 22-class head) and
-// `cross_attn_weights` are ignored — head B replaces the former.
+// dim DFeat with the same query count. `labels` (the frozen class head) and
+// `cross_attn_weights` are ignored — head B replaces the former for naming. modeGated wants
+// `labels` back for SELECTION; it asks for it separately via classLogits.
 func splitOutputs(outs []engine.Tensor, dFeat int) (boxes, feats engine.Tensor, err error) {
 	for _, t := range outs {
 		if t.Dim(-1) == 4 && boxes.Data == nil {
@@ -313,6 +336,24 @@ func splitOutputs(outs []engine.Tensor, dFeat int) (boxes, feats engine.Tensor, 
 			q, dFeat, roleDetector)
 	}
 	return boxes, feats, nil
+}
+
+// classLogits finds the detector's OWN class head among its outputs: the [1,Q,C] tensor that
+// is neither the boxes (C=4) nor query_feats (C=DFeat). Only modeGated needs it.
+//
+// It is matched against the manifest's label count rather than "whatever is left", so a
+// mismatch between the export and labels.txt is reported here instead of silently scoring
+// the wrong columns.
+func classLogits(outs []engine.Tensor, boxes engine.Tensor, dFeat, nLabels int) (engine.Tensor, error) {
+	q := boxes.Dim(1)
+	for _, t := range outs {
+		if len(t.Shape) == 3 && t.Dim(1) == q && t.Dim(-1) == int64(nLabels) && int(t.Dim(-1)) != dFeat {
+			return t, nil
+		}
+	}
+	return engine.Tensor{}, fmt.Errorf(
+		"textalign: method \"gated\" needs the detector's own class head, but no output has shape [1,%d,%d] (the manifest lists %d labels) — use method \"exact\" or \"folded\" with this export",
+		q, nLabels, nLabels)
 }
 
 // headFor returns the compiled head for a vocabulary, embedding the class names through
@@ -370,7 +411,10 @@ func (m *textAlign) put(key string, h *head) {
 // trailing period of a template like "a photo of a {}.".
 func (m *textAlign) embedVocab(classes []string, r models.Runner) ([][]float32, error) {
 	texts := applyTemplates(m.tmpl, classes)
-	ids := m.tok.EncodeBatch(texts)
+	ids, err := m.tok.EncodeBatch(texts)
+	if err != nil {
+		return nil, err
+	}
 
 	name := "input_ids"
 	if in := r.InputNames(roleText); len(in) > 0 {
@@ -386,13 +430,13 @@ func (m *textAlign) embedVocab(classes []string, r models.Runner) ([][]float32, 
 		}
 	}
 	outs, err := r.Run(roleText, map[string]engine.Tensor{
-		name: engine.I64(ids, int64(len(texts)), int64(clip.ContextLength)),
+		name: engine.I64(ids, int64(len(texts)), int64(m.tok.ContextLength())),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("textalign: clip-text inference: %w", err)
+		return nil, fmt.Errorf("textalign: text tower inference: %w", err)
 	}
 	if len(outs) == 0 || len(outs[0].Shape) != 2 {
-		return nil, fmt.Errorf("textalign: clip-text returned an unexpected output (want [N,D])")
+		return nil, fmt.Errorf("textalign: text tower returned an unexpected output (want [N,D])")
 	}
 	t := outs[0]
 	n, dim := int(t.Shape[0]), int(t.Shape[1])

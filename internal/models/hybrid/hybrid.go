@@ -127,20 +127,36 @@ func (m *hybrid) Infer(img image.Image, prompt models.Prompt, r models.Runner) (
 	defer groundingdino.PipelineMu.Unlock()
 
 	classes := parseClasses(prompt.Text)
+	known, unknown := m.partition(classes)
 
+	// Each detector is asked ONLY about the words it is the right tool for, and the two answers
+	// are concatenated. The alternative — the whole request going to GroundingDINO as soon as one
+	// word is out of vocabulary — threw away the in-domain specialist for the words it was trained
+	// on: "cup. zebra." lost RF-DETR's cup entirely.
 	var dets []models.Detection
-	var err error
-	if m.routeRFDETR(classes) {
-		if dets, err = m.detectRFDETR(img, r); err != nil {
+	if len(classes) == 0 || len(known) > 0 {
+		d, err := m.detectRFDETR(img, r)
+		if err != nil {
 			return models.Result{}, err
 		}
-		if len(classes) > 0 {
-			dets = filterByClass(dets, classes) // keep only the requested COCO classes
+		if len(known) > 0 {
+			d = filterByClass(d, known)
 		}
-	} else {
-		if dets, err = m.detectGDINO(img, prompt, r); err != nil {
+		dets = append(dets, d...)
+	}
+	if len(unknown) > 0 {
+		// GroundingDINO now sees only the words RF-DETR could not serve. That is the point, but
+		// it is not a pure subset of the old behaviour: the fusion and decoder layers attend over
+		// the whole prompt, so dropping the in-vocabulary words removes them as distractors and
+		// can move the remaining scores slightly. Prompt splitting is a modelling decision, not
+		// just a dispatch optimisation.
+		sub := prompt
+		sub.Text = joinClasses(unknown)
+		d, err := m.detectGDINO(img, sub, r)
+		if err != nil {
 			return models.Result{}, err
 		}
+		dets = append(dets, d...)
 	}
 
 	res := models.Result{Detections: dets}
@@ -182,19 +198,29 @@ func parseClasses(text string) []string {
 	return out
 }
 
-// routeRFDETR reports whether RF-DETR can serve the request: no prompt (detect everything it
-// knows), or EVERY requested class is in RF-DETR's vocabulary. A single out-of-vocab class
-// routes the whole request to GroundingDINO (open-vocab).
-func (m *hybrid) routeRFDETR(classes []string) bool {
-	if len(classes) == 0 {
-		return true
-	}
+// partition splits the requested classes into the ones RF-DETR was trained on and the ones only
+// GroundingDINO can serve. The router reads text and dispatches; it never detects anything itself.
+// An empty prompt yields two empty slices and is handled by the caller as "RF-DETR, everything it
+// knows" — its own vocabulary IS the prompt in that case.
+func (m *hybrid) partition(classes []string) (known, unknown []string) {
 	for _, c := range classes {
-		if !m.vocab[c] {
-			return false
+		if m.vocab[c] {
+			known = append(known, c)
+		} else {
+			unknown = append(unknown, c)
 		}
 	}
-	return true
+	return known, unknown
+}
+
+// joinClasses rebuilds a GroundingDINO prompt from class names ([cat, remote] -> "cat. remote.").
+func joinClasses(classes []string) string {
+	var b strings.Builder
+	for _, c := range classes {
+		b.WriteString(c)
+		b.WriteString(". ")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // filterByClass keeps only detections whose class is among the requested names.
