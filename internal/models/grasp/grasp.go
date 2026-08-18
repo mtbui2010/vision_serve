@@ -127,7 +127,10 @@ func newDetector(name string, cfg models.Config) (detector, error) {
 		if text <= 0 {
 			text = defaultTextThresh
 		}
-		return &gdinoDetector{tok: tok, box: box, text: text}, nil
+		return &gdinoDetector{
+			tok: tok, box: box, text: text,
+			joint: groundingdino.JointTextPassOrSafe(cfg.Files[roleDet]),
+		}, nil
 	}
 	base, err := models.New(name, cfg)
 	if err != nil {
@@ -374,6 +377,7 @@ func (d *modelDetector) detect(img image.Image, _ models.Prompt, r models.Runner
 type gdinoDetector struct {
 	tok       *groundingdino.Tokenizer
 	box, text float64
+	joint     bool // gdino weights take the whole prompt in ONE pass
 }
 
 func (d *gdinoDetector) detect(img image.Image, prompt models.Prompt, r models.Runner) ([]models.Detection, error) {
@@ -391,7 +395,8 @@ func (d *gdinoDetector) detect(img image.Image, prompt models.Prompt, r models.R
 	if prompt.TextThresh > 0 {
 		text = prompt.TextThresh
 	}
-	return groundingdino.Detect(img, prompt.Text, d.tok, run, r.OutputNames(roleDet), box, text)
+	return groundingdino.Detect(img, prompt.Text, d.tok, run, r.OutputNames(roleDet), box, text,
+		groundingdino.WithJointTextPass(d.joint))
 }
 
 // --- helpers ---

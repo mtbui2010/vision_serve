@@ -50,6 +50,19 @@ func SupportsJointTextPass(path string) (bool, error) {
 	return joint, err
 }
 
+// JointTextPassOrSafe reports whether the weights at path may be scored in ONE pass, and
+// answers false whenever the probe cannot decide. It exists so that every model driving
+// Detect — the standalone one and the composites (grounded-sam, rfdetr-gdino, grasp-gd) —
+// selects the regime from the same rule: a probe failure must never fail the load, and the
+// safe answer is per-phrase, which only costs time. Call it once at load time.
+func JointTextPassOrSafe(path string) bool {
+	if path == "" {
+		return false
+	}
+	joint, err := SupportsJointTextPass(path)
+	return err == nil && joint
+}
+
 func probeJointTextPass(path string) (bool, error) {
 	f, err := os.Open(path)
 	if err != nil {

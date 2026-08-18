@@ -50,6 +50,7 @@ type hybrid struct {
 	tok     *groundingdino.Tokenizer // GroundingDINO tokenizer (vocab next to files.gdino)
 	vocab   map[string]bool          // RF-DETR class names, lowercased (the routing set)
 	withSAM bool                     // encoder+decoder present → also emit one mask per box
+	joint   bool                     // gdino weights take the whole prompt in ONE pass
 }
 
 // New builds the router. The RF-DETR sub-model is created from the SAME cfg, so the
@@ -84,7 +85,10 @@ func New(cfg models.Config) (models.Base, error) {
 	}
 
 	withSAM := cfg.Files[roleEncoder] != "" && cfg.Files[roleDecoder] != ""
-	return &hybrid{cfg: cfg, rf: rf, tok: tok, vocab: vocab, withSAM: withSAM}, nil
+	return &hybrid{
+		cfg: cfg, rf: rf, tok: tok, vocab: vocab, withSAM: withSAM,
+		joint: groundingdino.JointTextPassOrSafe(cfg.Files[roleGDINO]),
+	}, nil
 }
 
 // resolveVocab finds vocab.txt next to the GroundingDINO weights (files.gdino is typically
@@ -242,7 +246,15 @@ func (m *hybrid) detectGDINO(img image.Image, prompt models.Prompt, r models.Run
 		text = prompt.TextThresh
 	}
 	run := func(in map[string]engine.Tensor) ([]engine.Tensor, error) { return r.Run(roleGDINO, in) }
-	return groundingdino.Detect(img, prompt.Text, m.tok, run, r.OutputNames(roleGDINO), box, text)
+	return groundingdino.Detect(img, prompt.Text, m.tok, run, r.OutputNames(roleGDINO), box, text,
+		groundingdino.WithJointTextPass(m.joint))
+}
+
+// ExplainPreprocess implements models.ExplainPreprocessor.
+// Delegates to the rfdetr sub-model so the lifecycle can preprocess images for
+// the rfdetr role's explain session without knowing the hybrid internals.
+func (m *hybrid) ExplainPreprocess(img image.Image) (engine.Tensor, models.PreprocessMeta, error) {
+	return m.rf.Preprocess(img)
 }
 
 func firstName(names []string, fallback string) string {

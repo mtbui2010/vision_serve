@@ -115,14 +115,9 @@ func New(cfg models.Config) (models.Base, error) {
 	if err != nil {
 		return nil, err
 	}
-	// A probe failure must NOT fail the load: fall back to the safe per-phrase path.
-	joint := false
-	if path := cfg.Files[roleModel]; path != "" {
-		if ok, err := SupportsJointTextPass(path); err == nil {
-			joint = ok
-		}
-	}
-	return &groundingDINO{cfg: cfg, tok: tok, joint: joint}, nil
+	// A probe failure must NOT fail the load: JointTextPassOrSafe answers false in that case,
+	// which selects the safe per-phrase path.
+	return &groundingDINO{cfg: cfg, tok: tok, joint: JointTextPassOrSafe(cfg.Files[roleModel])}, nil
 }
 
 func (m *groundingDINO) Name() string      { return m.cfg.Name }

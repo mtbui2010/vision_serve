@@ -37,8 +37,9 @@ const (
 )
 
 type groundedSAM struct {
-	cfg models.Config
-	tok *groundingdino.Tokenizer
+	cfg   models.Config
+	tok   *groundingdino.Tokenizer
+	joint bool // gdino weights rebuild the text mask for any phrase count -> score in one pass
 }
 
 // New loads the GroundingDINO tokenizer once. The vocab lives next to the GroundingDINO
@@ -55,7 +56,11 @@ func New(cfg models.Config) (models.Base, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &groundedSAM{cfg: cfg, tok: tok}, nil
+	return &groundedSAM{
+		cfg:   cfg,
+		tok:   tok,
+		joint: groundingdino.JointTextPassOrSafe(cfg.Files[roleGDINO]),
+	}, nil
 }
 
 // resolveVocab finds vocab.txt robustly: prefer the directory of the gdino weights
@@ -91,7 +96,8 @@ func (m *groundedSAM) Infer(img image.Image, prompt models.Prompt, r models.Runn
 	gdinoRun := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
 		return r.Run(roleGDINO, inputs)
 	}
-	dets, err := groundingdino.Detect(img, prompt.Text, m.tok, gdinoRun, r.OutputNames(roleGDINO), boxThresh, textThresh)
+	dets, err := groundingdino.Detect(img, prompt.Text, m.tok, gdinoRun, r.OutputNames(roleGDINO), boxThresh, textThresh,
+		groundingdino.WithJointTextPass(m.joint))
 	if err != nil {
 		return models.Result{}, err
 	}
