@@ -10,6 +10,9 @@
 #      a conda env's pip wheels (nvidia-*-cu12), NOT in /usr — so the CUDA EP can't find
 #      libcudnn.so.9 unless we add them here (this is the usual cause of a SILENT fallback
 #      to CPU; run with VISIONSERVE_TRACE=1 to see it).
+#   3) LD_LIBRARY_PATH -> TensorRT 10 (libnvinfer.so.10 + libnvonnxparser.so.10), so the
+#      TensorRT EP can load. Optional: without it the chain just degrades to the CUDA EP.
+#      The `tensorrt-cu12-libs` pip wheel puts these under site-packages/tensorrt_libs/.
 #
 # Override the ORT lib by exporting VISIONSERVE_ORT_GPU=/path/to/libonnxruntime.so first.
 
@@ -53,7 +56,31 @@ else
     _nv=""
   fi
 fi
-export LD_LIBRARY_PATH="$(dirname "$ORT_DYLIB_PATH"):${_nv}:${LD_LIBRARY_PATH:-}"
+# 3) Add TensorRT 10 libs (libnvinfer.so.10, libnvonnxparser.so.10). Same "find the wheel
+# dir" dance as cuDNN above: the `tensorrt-cu12-libs` wheel installs them into
+# site-packages/tensorrt_libs/. This is OPTIONAL — the manifest chain is tensorrt → cuda →
+# cpu, so a missing TensorRT is a warning, not an error. Override with
+# VISIONSERVE_TRT_LIBS=/path/to/tensorrt/lib if TRT is installed outside a wheel
+# (e.g. an NVIDIA .tar.gz install, or JetPack's /usr/lib/aarch64-linux-gnu).
+if [ -n "${VISIONSERVE_TRT_LIBS:-}" ]; then
+  _trt="$VISIONSERVE_TRT_LIBS"
+else
+  # Prefer the ACTIVE conda env, then the env that ships the ORT lib we just picked,
+  # then any env under miniconda.
+  _trt=""
+  for _cand in "${CONDA_PREFIX:-}" "${ORT_DYLIB_PATH%/lib/python*}"; do
+    [ -n "$_cand" ] || continue
+    _d="$(ls -d "$_cand"/lib/python*/site-packages/tensorrt_libs 2>/dev/null | head -1)"
+    if [ -n "$_d" ] && [ -e "$_d"/libnvinfer.so.10 ]; then _trt="$_d"; break; fi
+  done
+  if [ -z "$_trt" ]; then
+    _nvinfer="$(find "$HOME"/miniconda3 -maxdepth 8 -name 'libnvinfer.so.10' 2>/dev/null | head -1)"
+    [ -n "$_nvinfer" ] && _trt="$(dirname "$_nvinfer")"
+  fi
+  [ -z "$_trt" ] && echo "gpu-env: warning: libnvinfer.so.10 not found — TensorRT EP disabled, will use CUDA EP." >&2
+fi
+
+export LD_LIBRARY_PATH="$(dirname "$ORT_DYLIB_PATH"):${_nv}${_trt:+:$_trt}:${LD_LIBRARY_PATH:-}"
 
 # One concise line to stderr (never pollutes JSON on stdout, e.g. `make run`).
-echo "gpu-env: GPU on (ORT=$(basename "$ORT_DYLIB_PATH"), cuDNN=$([ -n "${_nv:-}" ] && echo found || echo MISSING)); set VISIONSERVE_TRACE=1 for EP details" >&2
+echo "gpu-env: GPU on (ORT=$(basename "$ORT_DYLIB_PATH"), cuDNN=$([ -n "${_nv:-}" ] && echo found || echo MISSING), TensorRT=$([ -n "${_trt:-}" ] && echo found || echo absent)); set VISIONSERVE_TRACE=1 for EP details" >&2

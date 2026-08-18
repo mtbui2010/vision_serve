@@ -271,6 +271,12 @@ func applyProvider(opts *ort.SessionOptions, p Provider) {
 	switch p {
 	case ProviderTensorRT:
 		if trt, err := ort.NewTensorRTProviderOptions(); err == nil {
+			// Persist compiled engines; without this every load re-compiles (minutes). See TRTOptions.
+			if trtOpts := TRTOptions(); len(trtOpts) > 0 {
+				if err := trt.Update(trtOpts); err != nil && Trace {
+					fmt.Fprintf(os.Stderr, "engine: [trace] TensorRT options rejected (%v) — continuing without engine cache\n", err)
+				}
+			}
 			_ = opts.AppendExecutionProviderTensorRT(trt)
 			trt.Destroy()
 		}
