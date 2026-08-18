@@ -365,11 +365,6 @@ func (m *Manager) loadExplainSession(name string) error {
 	}
 	man := entry.Manifest
 
-	// Pipeline models do not support explain sessions at this time.
-	if s.pipeline != nil {
-		return fmt.Errorf("model %q is a pipeline model — explain session is not supported for pipeline models", name)
-	}
-
 	if man.Explain == nil {
 		return fmt.Errorf("model %q does not support explain (no explain block in manifest)", name)
 	}
@@ -379,10 +374,28 @@ func (m *Manager) loadExplainSession(name string) error {
 		return err
 	}
 
-	// Create session with ALL outputs (detect + explain).
-	explainEng, err := engine.NewSession(man.ModelFilePath(), nil, nil, providers)
-	if err != nil {
-		return fmt.Errorf("lifecycle: failed to create explain session for %q: %w", name, err)
+	var explainEng engine.Runnable
+
+	if s.pipeline != nil {
+		// PipelineModel: create explain session for the role that owns the explain outputs.
+		if man.Explain.Role == "" {
+			return fmt.Errorf("model %q is a pipeline model — explain block must set 'role' (e.g. role: rfdetr)", name)
+		}
+		filesAbs := man.FilesAbs()
+		rolePath, ok := filesAbs[man.Explain.Role]
+		if !ok {
+			return fmt.Errorf("lifecycle: explain role %q not in files map for model %q", man.Explain.Role, name)
+		}
+		explainEng, err = engine.NewSession(rolePath, nil, nil, providers)
+		if err != nil {
+			return fmt.Errorf("lifecycle: failed to create explain session for role %q in %q: %w", man.Explain.Role, name, err)
+		}
+	} else {
+		// Plain Model: create session with ALL outputs (detect + explain tensors).
+		explainEng, err = engine.NewSession(man.ModelFilePath(), nil, nil, providers)
+		if err != nil {
+			return fmt.Errorf("lifecycle: failed to create explain session for %q: %w", name, err)
+		}
 	}
 
 	m.mu.Lock()
@@ -427,16 +440,46 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 		return ExplainResult{}, err
 	}
 
-	// Simple models only (pipeline models are rejected by loadExplainSession above).
-	mdl := s.model
-	if mdl == nil {
-		return ExplainResult{}, fmt.Errorf("lifecycle: model %q has no simple Model — explain requires a plain Model", name)
-	}
+	// Preprocess: plain Model uses its own Preprocess(); PipelineModel uses ExplainPreprocessor.
+	var inputTensor engine.Tensor
+	var meta models.PreprocessMeta
+	detectionIdx := req.DetectionIdx
 
-	// Preprocess the image using the model's own preprocess logic.
-	inputTensor, meta, err := mdl.Preprocess(img)
-	if err != nil {
-		return ExplainResult{}, fmt.Errorf("lifecycle: preprocess for explain failed: %w", err)
+	if s.pipeline != nil {
+		ep, ok := s.pipeline.(models.ExplainPreprocessor)
+		if !ok {
+			return ExplainResult{}, fmt.Errorf(
+				"lifecycle: pipeline model %q does not implement ExplainPreprocessor", name)
+		}
+		inputTensor, meta, err = ep.ExplainPreprocess(img)
+		if err != nil {
+			return ExplainResult{}, fmt.Errorf("lifecycle: preprocess for explain failed: %w", err)
+		}
+		// Class-based detection index not supported for pipeline models; use req.DetectionIdx.
+	} else {
+		mdl := s.model
+		if mdl == nil {
+			return ExplainResult{}, fmt.Errorf("lifecycle: model %q has no simple Model", name)
+		}
+		inputTensor, meta, err = mdl.Preprocess(img)
+		if err != nil {
+			return ExplainResult{}, fmt.Errorf("lifecycle: preprocess for explain failed: %w", err)
+		}
+		// Resolve class → detectionIdx (plain models only).
+		if req.Class != "" {
+			detectOuts, derr := s.engine.Run([]engine.Tensor{inputTensor})
+			if derr == nil {
+				res, derr2 := mdl.Postprocess(detectOuts, meta)
+				if derr2 == nil {
+					for i, d := range res.Detections {
+						if d.Class == req.Class {
+							detectionIdx = i
+							break
+						}
+					}
+				}
+			}
+		}
 	}
 
 	// Run the explain session (all outputs: detect + explain tensors).
@@ -449,25 +492,6 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 
 	origW := meta.OrigWidth
 	origH := meta.OrigHeight
-
-	// Resolve the detection index: if Class is given, run a detect inference to
-	// find the first detection matching that class, then use its index.
-	detectionIdx := req.DetectionIdx
-	if req.Class != "" {
-		detectOuts, derr := s.engine.Run([]engine.Tensor{inputTensor})
-		if derr == nil {
-			res, derr2 := mdl.Postprocess(detectOuts, meta)
-			if derr2 == nil {
-				for i, d := range res.Detections {
-					if d.Class == req.Class {
-						detectionIdx = i
-						break
-					}
-				}
-			}
-		}
-		// If class lookup fails we fall back to req.DetectionIdx (already set above).
-	}
 
 	// Override topChannels in the explain config for this request.
 	if req.TopChannels > 0 && man.Explain.TopChannels != req.TopChannels {
@@ -504,8 +528,12 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 			topK = req.TopChannels
 		}
 
+		plainMdl := s.model // Score-CAM requires a plain Model (pipeline models not supported)
+		if plainMdl == nil {
+			return ExplainResult{}, fmt.Errorf("lifecycle: score_cam explain requires a plain Model, not a pipeline")
+		}
 		detectRunner := func(masked image.Image) (float32, error) {
-			in, meta2, err2 := mdl.Preprocess(masked)
+			in, meta2, err2 := plainMdl.Preprocess(masked)
 			if err2 != nil {
 				return 0, err2
 			}
@@ -513,7 +541,7 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 			if err2 != nil {
 				return 0, err2
 			}
-			res, err2 := mdl.Postprocess(outs, meta2)
+			res, err2 := plainMdl.Postprocess(outs, meta2)
 			if err2 != nil {
 				return 0, err2
 			}

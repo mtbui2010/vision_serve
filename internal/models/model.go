@@ -217,6 +217,14 @@ type Runner interface {
 	OutputNames(role string) []string
 }
 
+// ExplainPreprocessor is an optional interface for PipelineModels that support
+// heatmap explain on one of their roles. The lifecycle creates an explain session
+// for the role named by ExplainConfig.Role; the model provides preprocess for
+// that role's input format (e.g. the hybrid model delegates to its rfdetr.Preprocess).
+type ExplainPreprocessor interface {
+	ExplainPreprocess(img image.Image) (engine.Tensor, PreprocessMeta, error)
+}
+
 // PoolSizer is an optional interface for PipelineModels that want multiple concurrent
 // session copies for specific roles. Returning n > 1 for a role makes lifecycle create
 // a SessionPool of n identical sessions, allowing n concurrent inferences on that role

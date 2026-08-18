@@ -38,16 +38,21 @@ import (
 // If another export returns C=80, change the manifest labels to match — do not guess.
 // =========================================================
 func (m *rfDETR) postprocess(outs []engine.Tensor, meta models.PreprocessMeta) (models.Result, error) {
-	if len(outs) != 2 {
-		return models.Result{}, fmt.Errorf("rfdetr: expected exactly 2 outputs (logits + boxes), got %d — verify the ONNX export", len(outs))
+	if len(outs) < 2 {
+		return models.Result{}, fmt.Errorf("rfdetr: expected at least 2 outputs (logits + boxes), got %d — verify the ONNX export", len(outs))
 	}
 
+	// Identify boxes (last dim == 4) and logits among the first outputs.
+	// Extra outputs (e.g. cross_attn_weights for explain) are ignored.
 	var boxes, logits engine.Tensor
-	if outs[0].Dim(-1) == 4 {
-		boxes, logits = outs[0], outs[1]
-	} else if outs[1].Dim(-1) == 4 {
-		boxes, logits = outs[1], outs[0]
-	} else {
+	for _, t := range outs {
+		if t.Dim(-1) == 4 && boxes.Data == nil {
+			boxes = t
+		} else if logits.Data == nil {
+			logits = t
+		}
+	}
+	if boxes.Data == nil || logits.Data == nil {
 		return models.Result{}, fmt.Errorf("rfdetr: could not identify the boxes tensor (no output has a last dimension == 4)")
 	}
 
