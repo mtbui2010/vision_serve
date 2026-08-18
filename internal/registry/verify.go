@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -60,6 +61,18 @@ func (s SHA256Field) IsEmpty() bool {
 	return s.single == "" && len(s.byRole) == 0
 }
 
+// declared returns every digest this field pins, for cross-checking the whole set at once.
+func (s SHA256Field) declared() []string {
+	if s.single != "" {
+		return []string{s.single}
+	}
+	out := make([]string, 0, len(s.byRole))
+	for _, d := range s.byRole {
+		out = append(out, d)
+	}
+	return out
+}
+
 // expectedFor returns the declared digest for a given files: role (or for the
 // single model_file when role is ""). ok is false when nothing is pinned for it.
 func (s SHA256Field) expectedFor(role string) (digest string, ok bool) {
@@ -101,15 +114,37 @@ var VerifiedSourcePrefixes []string
 // verified-source allowlist. It is called at LOAD time, AFTER weights are known
 // to exist on disk. Behavior:
 //
-//   - No sha256 declared  → no hash check (returns nil unless the source allowlist
-//     is configured and rejects the source_url). Fully backward compatible.
-//   - sha256 declared      → every covered weight file's computed SHA-256 must match
-//     the declared digest, else a clear error (refuse to load).
+//   - Default gate, no sha256 declared → no hash check. Fully backward compatible.
+//   - sha256 declared → every covered weight file's computed SHA-256 must match the
+//     declared digest, else a clear error (refuse to load).
+//   - Hardened gate (verified mode, or a configured source allowlist) → a content pin is
+//     REQUIRED, for every weight file. See the comment at the check below for why.
 //
 // This converts "the author typed Apache-2.0" into "these exact bytes came from an
 // audited source" — it closes the relabeling hole but still TRUSTS the declared
 // license itself (see docs/manifest-spec.md threat model).
-func (m *Manifest) VerifyWeights() error {
+func (m *Manifest) VerifyWeights() error { return m.verifyWeights(0) }
+
+// maxComposeDepth bounds the dependency walk for composed models. The real chains are one deep
+// (grounded-sam → grounding-dino + mobile-sam); the bound exists so a manifest cycle produces a
+// clear error instead of a stack overflow.
+const maxComposeDepth = 4
+
+func (m *Manifest) verifyWeights(depth int) error {
+	hardened := VerifiedModeEnabled() || len(VerifiedSourcePrefixes) > 0
+
+	// A COMPOSED model (grounded-sam, rfdetr-gdino, grasp-gd) downloads nothing of its own: every
+	// weight it names lives in another model's directory. It therefore has no source_url and no
+	// digests to declare, and the checks below would refuse it — which would mean turning verified
+	// mode on disables exactly the pipelines this project exists to serve. Its admission comes from
+	// the models that DO own those bytes, which is also the honest answer: a composition is as
+	// audited as what it composes.
+	if hardened {
+		if paths, ok := m.composedWeights(); ok {
+			return m.verifyComposed(paths, depth)
+		}
+	}
+
 	// Verified mode: cross-check the contributor-declared license against the maintainer-audited
 	// ledger (see ledger.go). No-op when verified mode is off. This is the control that catches a
 	// manifest mislabeled by its author even when bytes/origin are consistent.
@@ -123,7 +158,26 @@ func (m *Manifest) VerifyWeights() error {
 		}
 	}
 
+	// The manifest's own sha256 lives in the file an attacker rewriting the model directory would
+	// rewrite too, so on its own it proves only self-consistency. Require every declared digest to
+	// appear in the maintainer's in-binary record for this audited upstream (ledger.go), which that
+	// attacker cannot reach. Upstreams with no recorded digests fall back to the manifest pin alone.
+	if hardened {
+		if err := m.checkAnchoredPins(); err != nil {
+			return err
+		}
+	}
+
+	// Under a hardened gate an UNPINNED model must not load. An audited source_url records
+	// where the bytes were SUPPOSED to come from; it says nothing about the bytes now on disk.
+	// Binding the declared license to specific bytes is the whole point of verified mode, so
+	// leaving the pin optional there would let a manifest opt out of the control by omission —
+	// the quietest possible failure. The default gate keeps sha256 optional, unchanged.
 	if m.SHA256.IsEmpty() {
+		if hardened {
+			return fmt.Errorf("model %q: no sha256 content pin — refusing to load "+
+				"(verified mode binds the declared license to specific weight bytes; add sha256 to the manifest)", m.Name)
+		}
 		return nil // no content pin — backward-compatible path
 	}
 
@@ -132,6 +186,10 @@ func (m *Manifest) VerifyWeights() error {
 		for role, path := range files {
 			want, ok := m.SHA256.expectedFor(role)
 			if !ok {
+				if hardened {
+					return fmt.Errorf("model %q: role %q has no sha256 content pin — refusing to load "+
+						"(verified mode requires every weight file to be pinned)", m.Name, role)
+				}
 				continue // this role is not pinned — skip (optional per-role pinning)
 			}
 			if err := verifyFile(path, want); err != nil {
@@ -144,12 +202,130 @@ func (m *Manifest) VerifyWeights() error {
 	// Single-file model.
 	want, ok := m.SHA256.expectedFor("")
 	if !ok {
+		if hardened {
+			return fmt.Errorf("model %q: sha256 declares no digest for the model file — refusing to load "+
+				"(verified mode requires a content pin)", m.Name)
+		}
 		return nil
 	}
 	if err := verifyFile(m.ModelFilePath(), want); err != nil {
 		return fmt.Errorf("model %q: %w", m.Name, err)
 	}
 	return nil
+}
+
+// checkAnchoredPins requires every digest the manifest declares to be one the maintainer
+// recorded for this upstream in the in-binary ledger.
+//
+// It is a set membership test, not a per-role equality test, because local filenames are not
+// unique within an upstream (rf-detr and rf-detr-nano both land as rf-detr-base.onnx from the
+// same repo). What it establishes is the property that matters for a LICENCE gate: the bytes
+// about to be loaded are bytes a human audited. Distinguishing WHICH audited file belongs in
+// which role is the manifest pin's job, and that check still runs.
+func (m *Manifest) checkAnchoredPins() error {
+	led, ok := lookupLedger(m.SourceURL)
+	if !ok || len(led.WeightSHA256) == 0 {
+		return nil // upstream carries no recorded digests; the manifest pin is all there is
+	}
+	audited := make(map[string]bool, len(led.WeightSHA256))
+	for _, d := range led.WeightSHA256 {
+		audited[strings.ToLower(d)] = true
+	}
+	for _, d := range m.SHA256.declared() {
+		if !audited[strings.ToLower(d)] {
+			return fmt.Errorf("model %q: sha256 %s is not among the digests the maintainer audited "+
+				"for %s — refusing to load (a manifest cannot vouch for its own bytes; the audited "+
+				"record lives in the binary)", m.Name, shortDigest(d), led.SourcePrefix)
+		}
+	}
+	return nil
+}
+
+func shortDigest(d string) string {
+	if len(d) > 12 {
+		return d[:12] + "…"
+	}
+	return d
+}
+
+// composedWeights reports whether EVERY weight this manifest names lives outside its own
+// directory, and returns those paths. That is the signature of a composed pipeline: it declares
+// files: entries like "../grounding-dino/model-fixedmask.onnx" and ships no weights itself.
+//
+// A model with even one file of its own is not composed — it has bytes to answer for, and must
+// go through the normal source_url + pin path.
+func (m *Manifest) composedWeights() ([]string, bool) {
+	files := m.FilesAbs()
+	if len(files) == 0 {
+		return nil, false
+	}
+	own, err := filepath.Abs(m.dir)
+	if err != nil {
+		return nil, false
+	}
+	paths := make([]string, 0, len(files))
+	for _, p := range files {
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return nil, false
+		}
+		if filepath.Dir(abs) == own {
+			return nil, false
+		}
+		paths = append(paths, abs)
+	}
+	return paths, true
+}
+
+// verifyComposed admits a composed model exactly when every model that owns one of its weights
+// is itself admitted. Two conditions, and the second is the one worth stating: the owning
+// manifest must actually DECLARE the file. Without that, a composed manifest could point at any
+// stray file sitting inside an audited model's directory and inherit its admission.
+func (m *Manifest) verifyComposed(paths []string, depth int) error {
+	if depth >= maxComposeDepth {
+		return fmt.Errorf("model %q: composed-model chain deeper than %d — refusing to load "+
+			"(a manifest cycle?)", m.Name, maxComposeDepth)
+	}
+	owners := make(map[string]*Manifest)
+	for _, p := range paths {
+		dir := filepath.Dir(p)
+		owner, seen := owners[dir]
+		if !seen {
+			var err error
+			owner, err = LoadManifest(filepath.Join(dir, "manifest.yaml"))
+			if err != nil {
+				return fmt.Errorf("model %q: weight %s belongs to no model (%v) — refusing to load "+
+					"(a composed model may only reference another model's declared weights)",
+					m.Name, filepath.Base(p), err)
+			}
+			owners[dir] = owner
+		}
+		if !owner.declaresFile(p) {
+			return fmt.Errorf("model %q: references %s, which model %q does not declare — "+
+				"refusing to load", m.Name, filepath.Base(p), owner.Name)
+		}
+	}
+	for _, owner := range owners {
+		if err := owner.verifyWeights(depth + 1); err != nil {
+			return fmt.Errorf("model %q: dependency %q is not admitted: %w", m.Name, owner.Name, err)
+		}
+	}
+	return nil
+}
+
+// declaresFile reports whether abs is one of the weight files this manifest names.
+func (m *Manifest) declaresFile(abs string) bool {
+	for _, p := range m.FilesAbs() {
+		if a, err := filepath.Abs(p); err == nil && a == abs {
+			return true
+		}
+	}
+	if m.ModelFile != "" {
+		if a, err := filepath.Abs(m.ModelFilePath()); err == nil && a == abs {
+			return true
+		}
+	}
+	return false
 }
 
 // checkSourceAllowlist requires source_url to start with an audited prefix.

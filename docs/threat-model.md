@@ -29,10 +29,21 @@ contaminated. The gate makes that load **impossible by construction**, not by au
 | Weights are swapped/tampered but the manifest keeps a permissive label ("relabeling") | **Content pin (sha256)** — computed digest must equal the declared digest | `Manifest.VerifyWeights()` — load time, after weights exist | `B_hash_mismatch_refused` |
 | Weights come from an unvetted mirror (right hash, wrong origin) | **Verified-source allowlist** (`source_url` must start with an audited prefix; opt-in) | `Manifest.VerifyWeights()` / `checkSourceAllowlist` | `C_unaudited_source_refused` |
 | A manifest is **relabeled/mislabeled by its author** — a permissive *and allowlisted* license that nonetheless differs from the model's true upstream license (the allowlist alone cannot catch this; both are permissive) | **License provenance ledger** — the contributor-declared license must equal the *maintainer-audited* upstream license recorded for that `source_url` prefix (verified mode) | `Manifest.VerifyLicenseProvenance()` (`ledger.go`) | `D_ledger_license_mismatch_refused`, `E_unledgered_source_refused` |
+| A manifest simply **declares no `sha256` at all**, opting out of content pinning by omission | **Pin required under a hardened gate** — verified mode refuses an unpinned model rather than skipping the check | `Manifest.VerifyWeights()` | `F_missing_content_pin_refused` |
+| A manifest declares a `sha256` **of its own choosing** over substituted weights — self-consistent, so every check above passes | **In-binary digest anchor** — every declared digest must appear in `LedgerEntry.WeightSHA256`, the maintainer's record for that upstream, which is compiled into the binary rather than sitting in the directory under attack | `Manifest.VerifyWeights()` / `checkAnchoredPins` | `G_forged_pin_refused` |
+| A **composed** pipeline (`grounded-sam`, `rfdetr-gdino`, `grasp-gd`) owns no weights and has no `source_url` of its own | **Inherited admission** — admitted only when every model that owns one of its weights is admitted, and only for files that owner actually declares | `Manifest.VerifyWeights()` / `verifyComposed` | `TestGate_ComposedModels` |
 | Permissive license + correct bytes + audited origin + license matches the audited ledger | — (admitted) | all checks pass | `0_baseline_admitted` |
 
 Together: the gate **binds a declared-permissive license to specific bytes from an audited origin**,
 closing the relabeling and wrong-origin holes — entirely offline, no network call.
+
+**Why the anchor matters more than it looks.** Cases (0)–(E) all let the manifest supply its own
+digest, so what they collectively demonstrated was that a manifest agrees with *itself*. The pin
+lives in the same file an attacker rewriting the model directory would rewrite. (F) is that
+manifest opting out by omission; (G) is it opting in with a digest it chose. Both were admitted
+before. The anchor moves the trusted copy of the digest out of the attacked directory and into the
+binary, which is where the licence record already lived — after which rewriting the manifest no
+longer lets you vouch for your own bytes.
 
 ## What the gate does NOT guarantee (honest limits)
 
@@ -52,6 +63,19 @@ closing the relabeling and wrong-origin holes — entirely offline, no network c
 - It does not detect license obligations that require source/weight disclosure post-hoc; it prevents
   the load, which is the relevant control for an edge deployer.
 - sha256 is integrity, not authenticity — pair with model signing (below) for signer identity.
+- **The anchor's reach is exactly the enumerated upstreams.** `checkAnchoredPins` only bites where
+  `LedgerEntry.WeightSHA256` is non-empty. An audited upstream whose digests nobody has recorded
+  falls back to the manifest's self-supplied pin, i.e. to the weaker pre-anchor regime — silently,
+  because there is nothing to compare against. `TestAuditedEntriesArePinned` and
+  `TestCatalogPinsMatchTheLedger` keep the shipped catalog from landing in that state, but a
+  locally added model is on its honour.
+- **A model outside the catalog cannot be anchored at all.** Your own fine-tuned weights have no
+  audited upstream and no recorded digests, so verified mode refuses them outright. That is the
+  intended trade — verified mode is for deployments that serve only curated models — but it does
+  mean "verified mode" and "my own model" are mutually exclusive today.
+- The anchor is a **set** membership test per upstream, not a per-role identity: two audited files
+  from the same repo could be exchanged for one another without tripping it. The manifest's own
+  role→digest pin is what catches that, so the two checks are only strong together.
 
 ## Position vs existing tooling (the novelty boundary)
 

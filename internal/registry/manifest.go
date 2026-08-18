@@ -14,11 +14,31 @@ import (
 
 // licenseAllowlist — ONLY permissive licenses are accepted (CLAUDE.md principle #1).
 // AGPL is strictly rejected (YOLO/Ultralytics, FastSAM, YOLO-World).
-var licenseAllowlist = map[string]bool{
-	"Apache-2.0":   true,
-	"MIT":          true,
-	"BSD-3-Clause": true,
-	"BSD-2-Clause": true,
+//
+// The map is keyed by the LOWERCASED SPDX id and holds the canonical SPDX spelling as its
+// value. SPDX ids are case-insensitive by spec, and HuggingFace model cards write them
+// lowercase ("license: apache-2.0" in the YAML frontmatter), so a manifest copied from an HF
+// card must not be refused for its casing alone. Matching case-insensitively only widens HOW a
+// license may be spelled, never WHICH licenses pass: anything absent from this map (AGPL in any
+// casing, "AGPL-3.0-only", unknown ids, empty) is still refused.
+var licenseAllowlist = map[string]string{
+	"apache-2.0":   "Apache-2.0",
+	"mit":          "MIT",
+	"bsd-3-clause": "BSD-3-Clause",
+	"bsd-2-clause": "BSD-2-Clause",
+}
+
+// canonicalLicense resolves a declared license id to its canonical SPDX spelling,
+// case-insensitively. ok=false means the id is NOT permissive-allowlisted and the manifest
+// must be refused.
+//
+// Callers MUST store the canonical form back onto the manifest: downstream checks compare
+// license strings with == (notably VerifyLicenseProvenance against the maintainer-audited
+// LicenseLedger), so leaving "apache-2.0" as-declared would merely move the false rejection
+// from the allowlist to a bogus license *mismatch* in verified mode.
+func canonicalLicense(declared string) (string, bool) {
+	canon, ok := licenseAllowlist[strings.ToLower(strings.TrimSpace(declared))]
+	return canon, ok
 }
 
 var validTasks = map[api.Task]bool{
@@ -47,6 +67,7 @@ type InstanceConfig struct {
 // Khi không có block này, model không support /api/explain.
 type ExplainConfig struct {
 	Type          string            `yaml:"type"`           // "attention" | "score_cam"
+	Role          string            `yaml:"role"`           // PipelineModel only: which role's ONNX has the explain outputs (e.g. "rfdetr")
 	Outputs       map[string]string `yaml:"outputs"`        // role → ONNX output node name
 	                                                        // attention: {"attention": "cross_attn_weights"}
 	                                                        // score_cam: {"features": "backbone_features"}
@@ -182,10 +203,13 @@ func (m *Manifest) validate() error {
 	if strings.TrimSpace(m.Name) == "" {
 		return fmt.Errorf("missing 'name' field")
 	}
-	// License: required + must be in the permissive allowlist.
-	if !licenseAllowlist[m.License] {
+	// License: required + must be in the permissive allowlist (case-insensitive match,
+	// stored back in canonical SPDX form so later == comparisons see one spelling).
+	canonLicense, ok := canonicalLicense(m.License)
+	if !ok {
 		return fmt.Errorf("license %q is not allowed — only permissive licenses accepted (Apache-2.0/MIT/BSD); AGPL is strictly forbidden", m.License)
 	}
+	m.License = canonLicense
 	if !validTasks[api.Task(m.Task)] {
 		return fmt.Errorf("task %q is invalid (detection/segmentation/open_vocab)", m.Task)
 	}
