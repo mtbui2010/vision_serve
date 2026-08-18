@@ -190,17 +190,30 @@ curl -s -F model=grounding-dino -F image=@img.jpg -F prompt="canned coffee." \
 
 ## Performance
 
-Measured on NVIDIA RTX A6000 via VisionServe HTTP server (warm, `duration_ms`):
+Measured 18 Aug 2026 on an NVIDIA RTX A6000 via the VisionServe HTTP server (warm,
+`duration_ms`, median of 3, ORT 1.26.0 **CUDA EP, no TensorRT**), 12-class prompt on
+`demo/images/000000000139.jpg`. The GPU was **shared with other tenants**, so these are ranges,
+not a single figure:
 
-| Device | p50 latency | Notes |
-|--------|-------------|-------|
-| GPU + TensorRT EP (`gpu:0+trt`) | **~70 ms** | requires `libnvinfer.so.10` |
-| GPU CUDA EP only (`gpu:0`) | ~6 000 ms | same as CPU — deformable attention ops fall back to CPU |
-| CPU | ~6 000 ms | standard ORT |
+| weights | passes | latency | vs. joint |
+|---|---|---|---|
+| `model.onnx` (community, per-phrase) | 12 | 3 860 – 4 166 ms | — |
+| `model-fixedmask.onnx` (joint) | **1** | **227 – 285 ms** | **~15×** |
 
-> **Why CUDA EP ≈ CPU:** GroundingDINO uses deformable multi-scale attention and
-> BERT-style cross-attention ops that have no CUDA kernels in ORT's standard build.
-> TRT compiles the full graph to GPU, eliminating the fallback entirely.
+Per single-phrase pass that is ~320 ms on CUDA, which is also roughly what the joint path costs
+for the whole prompt — the win is entirely in doing one pass instead of N.
+
+> **An earlier version of this table claimed ~6 000 ms for the CUDA EP**, on the theory that
+> GroundingDINO's deformable attention has no CUDA kernels in ORT's standard build. The
+> measurements above and the 1 779.7 / 149.3 ms pair recorded earlier in this file both
+> contradict that by more than an order of magnitude. The ~6 000 ms figure is far more likely to
+> have been a **silent fallback to CPU** — the failure mode `scripts/gpu-env.sh` exists to
+> prevent, where the CUDA EP cannot find `libcudnn.so.9` and ORT quietly drops to CPU without
+> erroring. Run with `VISIONSERVE_TRACE=1` to see which EP was actually selected.
+
+TensorRT is expected to be substantially faster still, but no TensorRT number is quoted here
+because `libnvinfer.so.10` is not installed on this host and the previously recorded `~70 ms`
+has not been reproduced on the current ORT build.
 
 VisionServe auto-detects TRT at startup. Check status with `visionserve version` — the
 response also includes a `hint` field when TRT is absent.

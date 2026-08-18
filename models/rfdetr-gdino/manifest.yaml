@@ -15,7 +15,7 @@ architecture: rfdetr-gdino
 # Two ONNX graphs by role, referenced from the sibling model directories.
 files:
   rfdetr: ../rf-detr/rf-detr-base-real.onnx
-  gdino:  ../grounding-dino/model.onnx
+  gdino:  ../grounding-dino/model-fixedmask.onnx
 
 # This block carries RF-DETR's preprocessing/postprocess values (GroundingDINO ignores it and
 # preprocesses to its own 800×800 internally). Keep in sync with models/rf-detr/manifest.yaml.

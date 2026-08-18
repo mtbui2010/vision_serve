@@ -55,6 +55,11 @@ type File struct {
 	//   "https://..."       — any direct HTTPS URL
 	// Leave empty for normal HF downloads.
 	DirectURL string
+	// SHA256 is the expected hex digest of the downloaded bytes. Optional, but WITHOUT it
+	// a pulled model carries no content pin, and the registry's verified mode refuses to
+	// load an unpinned model (registry.Manifest.VerifyWeights). Pull checks it after
+	// downloading; RenderManifest writes it into the generated manifest.
+	SHA256 string
 }
 
 // Normalize is the optional mean/std normalization baked into the manifest.
@@ -138,6 +143,7 @@ var builtin = []Entry{
 				Role:          "model",
 				HFFilename:    "rf-detr-base-coco.onnx",
 				LocalFilename: "rf-detr-base.onnx",
+				SHA256:        "b3321965003f11020701987a2de6e3d88f7c9a1298c1a7d4fec2d32e7f179987",
 			},
 		},
 		InputWidth:        560,
@@ -160,14 +166,21 @@ var builtin = []Entry{
 		Task:         "open_vocab",
 		License:      "Apache-2.0",
 		Architecture: "grounding-dino",
-		Description:  "Grounding DINO tiny — open-vocabulary detection (text-prompted).",
-		HFRepo:       "onnx-community/grounding-dino-tiny-ONNX",
+		Description:  "Grounding DINO tiny — open-vocabulary detection (text-prompted), corrected text-mask export.",
+		// The CORRECTED re-export, not onnx-community's. That export baked a Python loop's trip
+		// count into the graph and only builds the text self-attention mask for the first
+		// "."-separated phrase; VisionServe serves it correctly but must then run one pass per
+		// class. Measured on a 12-class prompt: ~15x slower AND a different (wrong) detection
+		// list. Nobody should be pulling the defective graph by default — models/grounding-dino/
+		// README.md keeps the analysis and the recipe for reproducing it.
+		HFRepo: "mtbui2010/grounding-dino-tiny-fixedmask-ONNX",
 		Files: []File{
 			{
 				Role:          "model",
-				HFFilename:    "onnx/model.onnx",
-				LocalFilename: "model.onnx",
+				HFFilename:    "model-fixedmask.onnx",
+				LocalFilename: "model-fixedmask.onnx",
 				ManifestRole:  "model",
+				SHA256:        "ae9a0026953c6d5ce5a97b421af84c065d7f07173971cb105edb0071868fc180",
 			},
 			{
 				// Tokenizer vocab side-file (not an ONNX graph). Resolved by the
@@ -175,6 +188,7 @@ var builtin = []Entry{
 				Role:          "vocab",
 				HFFilename:    "vocab.txt",
 				LocalFilename: "vocab.txt",
+				SHA256:        "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3",
 			},
 		},
 		InputWidth:        800,
@@ -192,6 +206,54 @@ var builtin = []Entry{
 		Verified:          true,
 	},
 	{
+		// DEPRECATED ALIAS of `grounding-dino`, which now ships these same corrected weights.
+		// Kept because the name was published and manifests/scripts may already reference it;
+		// it pulls the identical files into its own directory. Prefer `grounding-dino`.
+		Name:         "grounding-dino-fixed",
+		Task:         "open_vocab",
+		License:      "Apache-2.0",
+		Architecture: "grounding-dino",
+		Description:  "DEPRECATED alias of grounding-dino (same corrected text-mask weights) — pull `grounding-dino` instead.",
+		HFRepo:       "mtbui2010/grounding-dino-tiny-fixedmask-ONNX",
+		Files: []File{
+			{
+				Role:          "model",
+				HFFilename:    "model-fixedmask.onnx",
+				LocalFilename: "model-fixedmask.onnx",
+				ManifestRole:  "model",
+				SHA256:        "ae9a0026953c6d5ce5a97b421af84c065d7f07173971cb105edb0071868fc180",
+			},
+			{
+				// Same tokenizer vocab as grounding-dino, re-downloaded here so a
+				// pulled model directory is self-contained (no cross-model deps).
+				Role:          "vocab",
+				HFFilename:    "vocab.txt",
+				LocalFilename: "vocab.txt",
+				SHA256:        "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3",
+			},
+		},
+		InputWidth:        800,
+		InputHeight:       800,
+		InputLayout:       "NCHW",
+		Letterbox:         false,
+		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		PostprocessType:   "grounding-dino",
+		BoxFormat:         "cxcywh",
+		ConfThreshold:     0.3,
+		TextThreshold:     0.25,
+		MaxDetections:     300,
+		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		Verified:          true,
+		Note: "Re-export of IDEA-Research/grounding-dino-tiny (Apache-2.0), same 5 inputs / 2 outputs as " +
+			"onnx-community/grounding-dino-tiny-ONNX. The community export baked the trip count of the " +
+			"transformers-4.48 mask loop, so only the FIRST '.'-separated phrase got its attention block; " +
+			"this graph rebuilds the mask with a vectorized subgraph. sha256 " +
+			"ae9a0026953c6d5ce5a97b421af84c065d7f07173971cb105edb0071868fc180 (694.8 MB, opset 17). " +
+			"internal/models/groundingdino probes the graph (SupportsJointTextPass) and picks the regime, " +
+			"so old and new weights are both safe.",
+	},
+	{
 		Name:         "rf-detr-nano",
 		Task:         "detection",
 		License:      "Apache-2.0",
@@ -203,6 +265,7 @@ var builtin = []Entry{
 				Role:          "model",
 				HFFilename:    "rf-detr-nano.onnx",
 				LocalFilename: "rf-detr-base.onnx",
+				SHA256:        "3fcbba0f68bad4939fdf1c38f432783b95691e2869af3be369780aa5be67abb2",
 			},
 		},
 		InputWidth:        384,
@@ -233,12 +296,14 @@ var builtin = []Entry{
 				HFFilename:    "mobile_sam_image_encoder.onnx",
 				LocalFilename: "mobile_sam_encoder.onnx",
 				ManifestRole:  "encoder",
+				SHA256:        "580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749",
 			},
 			{
 				Role:          "decoder",
 				HFFilename:    "sam_mask_decoder_single.onnx",
 				LocalFilename: "mobile_sam_decoder_single.onnx",
 				ManifestRole:  "decoder",
+				SHA256:        "93915fc7c993ab9d59ab8c9ccd3bce37f7509c81ab4150a74abd4d2abbd8570d",
 			},
 		},
 		InputWidth:        1024,
@@ -435,7 +500,7 @@ var builtin = []Entry{
 		Task:         "detection",
 		License:      "Apache-2.0",
 		Architecture: "rt-detr",
-		Description:  "RT-DETR-l (COCO) — real-time NMS-free detector, 640×640.",
+		Description:  "RT-DETR-l (COCO) — real-time NMS-free detector, 640×640. UPSTREAM GONE, see Note.",
 		HFRepo:       "onnx-community/RT-DETR-l-hf",
 		Files: []File{
 			{Role: "model", HFFilename: "onnx/model.onnx", LocalFilename: "model.onnx"},
@@ -452,7 +517,12 @@ var builtin = []Entry{
 		LabelsFile:        "coco80.txt",
 		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
 		IdleUnloadSeconds: 300,
-		Verified:          true,
+		Verified:          false,
+		Note: "UPSTREAM REMOVED: huggingface.co/onnx-community/RT-DETR-l-hf returns 401 as of " +
+			"2026-08-18, so this entry cannot be pulled and cannot be sha256-pinned. Candidate " +
+			"replacements exist under different names (onnx-community/rtdetr_r50vd, rtdetr_v2_r18vd-ONNX). " +
+			"Do NOT repoint blindly — a different export can change input/output names and the " +
+			"postprocess contract; verify the real tensor shapes first (CLAUDE.md).",
 	},
 	{
 		Name:         "efficient-sam",
@@ -462,8 +532,8 @@ var builtin = []Entry{
 		Description:  "EfficientSAM ViT-Tiny — promptable segmentation, lighter than MobileSAM.",
 		HFRepo:       "yunyangx/EfficientSAM",
 		Files: []File{
-			{Role: "encoder", HFFilename: "efficientsam_ti_encoder.onnx", LocalFilename: "efficient_sam_encoder.onnx", ManifestRole: "encoder"},
-			{Role: "decoder", HFFilename: "efficientsam_ti_decoder.onnx", LocalFilename: "efficient_sam_decoder.onnx", ManifestRole: "decoder"},
+			{Role: "encoder", HFFilename: "efficientsam_ti_encoder.onnx", LocalFilename: "efficient_sam_encoder.onnx", ManifestRole: "encoder", SHA256: "84ed466ffcc5c1f8d08409bc34a23bb364ab2c15e402cb12d4335a42be0e0951"},
+			{Role: "decoder", HFFilename: "efficientsam_ti_decoder.onnx", LocalFilename: "efficient_sam_decoder.onnx", ManifestRole: "decoder", SHA256: "a62f8fa5ea080447c0689418d69e58f1e83e0b7adf9c142e2bd9bcc8045c0b11"},
 		},
 		InputWidth:        1024,
 		InputHeight:       1024,
@@ -485,8 +555,8 @@ var builtin = []Entry{
 		Description:  "SAM2-Tiny — promptable segmentation with multi-scale features (Meta AI).",
 		HFRepo:       "SharpAI/sam2-hiera-tiny-onnx",
 		Files: []File{
-			{Role: "encoder", HFFilename: "encoder.onnx", LocalFilename: "sam2_tiny_encoder.onnx", ManifestRole: "encoder"},
-			{Role: "decoder", HFFilename: "decoder.onnx", LocalFilename: "sam2_tiny_decoder.onnx", ManifestRole: "decoder"},
+			{Role: "encoder", HFFilename: "encoder.onnx", LocalFilename: "sam2_tiny_encoder.onnx", ManifestRole: "encoder", SHA256: "df265cb552475e1b3a6cb57c939e57c95ed849bfc2f985c06efab85d8bca6db9"},
+			{Role: "decoder", HFFilename: "decoder.onnx", LocalFilename: "sam2_tiny_decoder.onnx", ManifestRole: "decoder", SHA256: "63198f1f1e273d8f2f4a9d1baf926e53a01d78dc50e0674640e1513dc00d9927"},
 		},
 		InputWidth:        1024,
 		InputHeight:       1024,
@@ -504,7 +574,7 @@ var builtin = []Entry{
 		Task:         "depth",
 		License:      "Apache-2.0",
 		Architecture: "depth-anything-v2",
-		Description:  "Depth Anything V2 small — monocular depth estimation, 518×518.",
+		Description:  "Depth Anything V2 small — monocular depth estimation, 518×518. UPSTREAM GONE, see Note.",
 		HFRepo:       "onnx-community/depth-anything-v2-small-hf",
 		Files: []File{
 			{Role: "model", HFFilename: "onnx/model.onnx", LocalFilename: "model.onnx"},
@@ -517,7 +587,12 @@ var builtin = []Entry{
 		PostprocessType:   "depth",
 		RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
 		IdleUnloadSeconds: 300,
-		Verified:          true,
+		Verified:          false,
+		Note: "UPSTREAM REMOVED: huggingface.co/onnx-community/depth-anything-v2-small-hf returns " +
+			"401 as of 2026-08-18, so this entry cannot be pulled and cannot be sha256-pinned. " +
+			"Candidate replacements exist under different names (onnx-community/depth-anything-v2-small, " +
+			"…-small-ONNX). Do NOT repoint blindly — verify the real tensor shapes first (CLAUDE.md). " +
+			"`midas` is a working MIT-licensed depth model in the meantime.",
 	},
 	{
 		Name:         "midas",
@@ -527,7 +602,7 @@ var builtin = []Entry{
 		Description:  "MiDaS v2.1-small — monocular depth estimation, 256×256, MIT license.",
 		HFRepo:       "Heliosoph/midas-small-onnx",
 		Files: []File{
-			{Role: "model", HFFilename: "midas_v21_small_256.onnx", LocalFilename: "midas_v21_small_256.onnx"},
+			{Role: "model", HFFilename: "midas_v21_small_256.onnx", LocalFilename: "midas_v21_small_256.onnx", SHA256: "b0a5b3f12625137e626805167907fe0410665bec671685d59daaa2daab19f977"},
 		},
 		InputWidth:        256,
 		InputHeight:       256,
@@ -547,7 +622,7 @@ var builtin = []Entry{
 		Description:  "EfficientNet-B0 — ImageNet-1k classification, 224×224.",
 		HFRepo:       "onnxmodelzoo/efficientnet_b0_Opset17",
 		Files: []File{
-			{Role: "model", HFFilename: "efficientnet_b0_Opset17.onnx", LocalFilename: "model.onnx"},
+			{Role: "model", HFFilename: "efficientnet_b0_Opset17.onnx", LocalFilename: "model.onnx", SHA256: "e76596a2b9e27c7c734c38550859105b43fec926f13447a84dad175eb994068a"},
 		},
 		InputWidth:        224,
 		InputHeight:       224,
@@ -571,7 +646,7 @@ var builtin = []Entry{
 		Description:  "MobileNetV3-Small — ImageNet-1k classification, 224×224, ultra-lightweight.",
 		HFRepo:       "onnxmodelzoo/mobilenet_v3_small_Opset17",
 		Files: []File{
-			{Role: "model", HFFilename: "mobilenet_v3_small_Opset17.onnx", LocalFilename: "model.onnx"},
+			{Role: "model", HFFilename: "mobilenet_v3_small_Opset17.onnx", LocalFilename: "model.onnx", SHA256: "9152343d120cf7b03b6b775a5fccd53813cc21891e376060a8edd2dfc0c35193"},
 		},
 		InputWidth:        224,
 		InputHeight:       224,
@@ -595,7 +670,7 @@ var builtin = []Entry{
 		Description:  "CLIP ViT-B/32 image encoder — 512-d embeddings for zero-shot classification (MIT, OpenAI).",
 		HFRepo:       "khasinski/clip-ViT-B-32-onnx",
 		Files: []File{
-			{Role: "model", HFFilename: "visual.onnx", LocalFilename: "model.onnx"},
+			{Role: "model", HFFilename: "visual.onnx", LocalFilename: "model.onnx", SHA256: "78e896b2c7301d01eda84e280d7c7297299aa6f8bacc0f5f8fe5bd60d42d8aae"},
 		},
 		InputWidth:        224,
 		InputHeight:       224,
@@ -652,7 +727,7 @@ var builtin = []Entry{
 		Description:  "SCRFD-10GF — InsightFace face detector, 640×640, with keypoints, MIT license.",
 		HFRepo:       "cromsc/scrfd-10g",
 		Files: []File{
-			{Role: "model", HFFilename: "scrfd_10g_bnkps.onnx", LocalFilename: "det_10g.onnx"},
+			{Role: "model", HFFilename: "scrfd_10g_bnkps.onnx", LocalFilename: "det_10g.onnx", SHA256: "5838f7fe053675b1c7a08b633df49e7af5495cee0493c7dcf6697200b85b5b91"},
 		},
 		InputWidth:        640,
 		InputHeight:       640,
@@ -677,8 +752,8 @@ var builtin = []Entry{
 		Description:  "PP-OCRv4 — Chinese+English OCR (text detection + recognition).",
 		HFRepo:       "webnn/PP-OCRv4-ONNX",
 		Files: []File{
-			{Role: "det", HFFilename: "ch_PP-OCRv4_det.onnx", LocalFilename: "det_model.onnx", ManifestRole: "det"},
-			{Role: "rec", HFFilename: "ch_PP-OCRv4_rec.onnx", LocalFilename: "rec_model.onnx", ManifestRole: "rec"},
+			{Role: "det", HFFilename: "ch_PP-OCRv4_det.onnx", LocalFilename: "det_model.onnx", ManifestRole: "det", SHA256: "30a86f5731181461d08021402766601e4302a9b9b9666be8aff402696339cdff"},
+			{Role: "rec", HFFilename: "ch_PP-OCRv4_rec.onnx", LocalFilename: "rec_model.onnx", ManifestRole: "rec", SHA256: "06b3e6af6c59a1ba5d53790ed8c2e4b2de389870b6cf5a97f349f3412cb269c0"},
 			{Role: "keys", HFFilename: "ch_PP-OCR_keys_v1.txt", LocalFilename: "ppocr_keys_v1.txt"},
 		},
 		InputWidth:        960,

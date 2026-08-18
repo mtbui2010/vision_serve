@@ -33,7 +33,7 @@ segmenter: mobile-sam
 
 # Three ONNX graphs by role, referenced from the sibling model directories.
 files:
-  det: ../grounding-dino/model.onnx
+  det: ../grounding-dino/model-fixedmask.onnx
   encoder: ../mobile-sam/mobile_sam_encoder.onnx
   decoder: ../mobile-sam/mobile_sam_decoder_single.onnx
 

@@ -1,19 +1,31 @@
 # GroundingDINO — open-vocabulary detection, Apache-2.0. Text-prompted single-session model
 # (PipelineModel). A fully free community feature — no AGPL, no Python at runtime (CLAUDE.md).
 # Run: `visionserve run grounding-dino img.jpg --prompt "cat. remote."`.
-# Weights are NOT committed (model.onnx is 719MB) — see README.md to download them.
+#
+# THESE ARE THE CORRECTED WEIGHTS (model-fixedmask.onnx). The community export
+# onnx-community/grounding-dino-tiny-ONNX baked a Python loop's trip count into the graph, so it
+# rebuilds the block-diagonal text self-attention mask for the FIRST "."-separated phrase only:
+# a multi-class prompt silently drops classes and depends on ordering. VisionServe still serves
+# those weights CORRECTLY — SupportsJointTextPass detects them and falls back to one pass per
+# phrase — but that costs N passes and, measured, mislabels (over-counts one class, misses
+# another) because per-phrase inference hides the other classes from the fusion layers.
+# README.md has the defect analysis, the re-export recipe and the numbers.
+#
+# Weights are NOT committed — `visionserve pull grounding-dino` fetches them.
 name: grounding-dino
 task: open_vocab
 license: Apache-2.0
 architecture: grounding-dino
 
 # Single ONNX graph (role "model"). The BERT vocab.txt sits next to it (loaded in Go).
-source_url: https://huggingface.co/onnx-community/grounding-dino-tiny-ONNX/resolve/main/onnx/model.onnx
+# source_url is the re-export repo; its weight lineage (IDEA-Research/grounding-dino-tiny,
+# Apache-2.0) is the audited record in internal/registry/ledger.go.
+source_url: https://huggingface.co/mtbui2010/grounding-dino-tiny-fixedmask-ONNX/
 sha256:
-  model: 267c8b00d269dc2dda0d8592812d3027abd5fb59f1cabf8e3d56f8fdf07f68ec
+  model: ae9a0026953c6d5ce5a97b421af84c065d7f07173971cb105edb0071868fc180
 
 files:
-  model: model.onnx
+  model: model-fixedmask.onnx
 
 input:
   # Reference only — preprocess (resize 800x800 + ImageNet normalize) happens in Go.

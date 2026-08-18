@@ -18,7 +18,7 @@ architecture: grounded-sam
 # Three ONNX graphs by role, referenced from the sibling model directories (relative paths).
 # vocab.txt for the tokenizer is resolved next to files.gdino (../grounding-dino/vocab.txt).
 files:
-  gdino: ../grounding-dino/model.onnx
+  gdino: ../grounding-dino/model-fixedmask.onnx
   encoder: ../mobile-sam/mobile_sam_encoder.onnx
   decoder: ../mobile-sam/mobile_sam_decoder_single.onnx
 

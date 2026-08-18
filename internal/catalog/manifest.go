@@ -23,6 +23,13 @@ func (e Entry) RenderManifest() string {
 	fmt.Fprintf(&b, "name: %s\n", e.Name)
 	fmt.Fprintf(&b, "task: %s\n", e.Task)
 	fmt.Fprintf(&b, "license: %s\n", e.License)
+	// source_url and sha256 are what turn "the manifest says Apache-2.0" into "these exact
+	// bytes came from this audited upstream". The registry's verified mode refuses a model
+	// missing either, so a pulled model has to carry both to be usable there.
+	if src := e.SourceURL(); src != "" {
+		fmt.Fprintf(&b, "source_url: %s\n", src)
+	}
+	b.WriteString(e.renderSHA256())
 	if e.Architecture != "" {
 		fmt.Fprintf(&b, "architecture: %s\n", e.Architecture)
 	}
@@ -148,6 +155,53 @@ func (e Entry) RenderManifest() string {
 		}
 	}
 
+	return b.String()
+}
+
+// SourceURL is the audited upstream this entry's weights come from. Derived rather than
+// stored, so it cannot drift from HFRepo. The trailing slash matters: registry's ledger and
+// verified-source allowlist both match by URL prefix, and the ledger records repo roots in
+// exactly this form. Entries served from DirectURL have no single canonical repo page, so
+// they get no source_url and stay outside verified mode until one is recorded by hand.
+func (e Entry) SourceURL() string {
+	if e.HFRepo == "" {
+		return ""
+	}
+	return "https://huggingface.co/" + e.HFRepo + "/"
+}
+
+// renderSHA256 emits the manifest `sha256:` field, or "" when nothing is pinned. The shape
+// mirrors what registry.SHA256Field parses: a scalar for a single-file model, a role→digest
+// map for a multi-session one. Side files that carry no ManifestRole (a vocab, say) are not
+// in the manifest's `files:` map and so cannot be pinned there — Pull still verifies them
+// against the catalog.
+func (e Entry) renderSHA256() string {
+	if len(e.VirtualFiles) > 0 {
+		return "" // composed model: the pins live in the dependencies it references
+	}
+	if mf := e.modelFile(); mf != "" {
+		for _, f := range e.Files {
+			if f.LocalFilename == mf && f.SHA256 != "" {
+				return fmt.Sprintf("sha256: %s\n", f.SHA256)
+			}
+		}
+		return ""
+	}
+	var pinned []File
+	for _, f := range e.manifestFiles() {
+		if f.SHA256 != "" {
+			pinned = append(pinned, f)
+		}
+	}
+	if len(pinned) == 0 {
+		return ""
+	}
+	sort.Slice(pinned, func(i, j int) bool { return pinned[i].ManifestRole < pinned[j].ManifestRole })
+	var b strings.Builder
+	b.WriteString("sha256:\n")
+	for _, f := range pinned {
+		fmt.Fprintf(&b, "  %s: %s\n", f.ManifestRole, f.SHA256)
+	}
 	return b.String()
 }
 

@@ -16,7 +16,7 @@ architecture: rfdetr-gdino
 # Four ONNX graphs by role, referenced from the sibling model directories.
 files:
   rfdetr:  ../rf-detr/rf-detr-base-real.onnx
-  gdino:   ../grounding-dino/model.onnx
+  gdino:   ../grounding-dino/model-fixedmask.onnx
   encoder: ../mobile-sam/mobile_sam_encoder.onnx
   decoder: ../mobile-sam/mobile_sam_decoder_single.onnx
 

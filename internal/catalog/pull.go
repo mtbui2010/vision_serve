@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -66,6 +68,12 @@ func Pull(name string, opts PullOptions) error {
 
 		if !opts.Force {
 			if info, err := os.Stat(destPath); err == nil && info.Size() >= minSaneSize {
+				// A file already on disk is still checked against the catalog digest when
+				// there is one. Skipping the check here would make "already present" the
+				// one way to get unverified bytes into the registry.
+				if err := verifyDigest(destPath, file.SHA256); err != nil {
+					return fmt.Errorf("pull %s: %w (re-download with --force)", entry.Name, err)
+				}
 				fmt.Fprintf(out, "  %s  already present (%s), skipping\n",
 					file.LocalFilename, humanBytes(info.Size()))
 				continue
@@ -88,6 +96,10 @@ func Pull(name string, opts PullOptions) error {
 			return fmt.Errorf("pull %s: %w", entry.Name, dlErr)
 		}
 		if err := verifyFile(destPath, n); err != nil {
+			_ = os.Remove(destPath)
+			return fmt.Errorf("pull %s: %w", entry.Name, err)
+		}
+		if err := verifyDigest(destPath, file.SHA256); err != nil {
 			_ = os.Remove(destPath)
 			return fmt.Errorf("pull %s: %w", entry.Name, err)
 		}
@@ -128,6 +140,31 @@ func Pull(name string, opts PullOptions) error {
 
 // verifyFile sanity-checks a downloaded file: non-empty, above the minimum
 // plausible size, and not an HTML error page.
+// verifyDigest checks a file against the catalog's expected SHA-256. An empty want is a
+// no-op: not every entry is pinned yet, and pull must keep working for those. Where a pin
+// DOES exist this is the check that makes `visionserve pull` trustworthy — it is also what
+// lets the generated manifest carry a sha256 the registry's verified mode can enforce.
+func verifyDigest(path, want string) error {
+	if want == "" {
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("verify %s: %w", path, err)
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("verify %s: %w", path, err)
+	}
+	got := hex.EncodeToString(h.Sum(nil))
+	if !strings.EqualFold(got, want) {
+		return fmt.Errorf("verify %s: sha256 mismatch (catalog pins %s, downloaded bytes are %s)",
+			filepath.Base(path), want, got)
+	}
+	return nil
+}
+
 func verifyFile(path string, reported int64) error {
 	info, err := os.Stat(path)
 	if err != nil {

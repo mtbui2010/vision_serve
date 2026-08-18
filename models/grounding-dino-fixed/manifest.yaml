@@ -1,8 +1,9 @@
-# GroundingDINO with a CORRECT text self-attention mask — open-vocabulary detection,
-# Apache-2.0. Same architecture and weights-lineage as ../grounding-dino; the ONLY difference
-# is the ONNX graph.
+# DEPRECATED ALIAS of `grounding-dino`, which now ships these exact weights. Kept because the
+# name was published; prefer `grounding-dino` in new manifests and scripts.
 #
-# The community export (../grounding-dino/model.onnx) baked the trip count of the
+# GroundingDINO with a CORRECT text self-attention mask — open-vocabulary detection, Apache-2.0.
+#
+# The superseded community export (onnx-community/grounding-dino-tiny-ONNX) baked the trip count of the
 # transformers-4.48 Python loop in generate_masks_with_special_tokens_and_transfer_map, so
 # only the FIRST "."-separated phrase ever got its attention block: multi-class prompts were
 # order-dependent and silently dropped classes. This re-export rebuilds the mask with a
@@ -13,8 +14,11 @@
 # regime automatically, so both manifests are safe to use — this one is just ~8x faster on
 # multi-class prompts.
 #
-# Weights are NOT committed (694 MB). Re-export them with the recipe in
-# ../grounding-dino/README.md; the vocab is shared via the symlink in this directory.
+# Weights are NOT committed (663 MiB / 694.8 MB). Get them with
+#   visionserve pull grounding-dino-fixed
+# which downloads model-fixedmask.onnx + vocab.txt from
+# https://huggingface.co/mtbui2010/grounding-dino-tiny-fixedmask-ONNX (Apache-2.0) into this
+# directory. Fallback: re-export them yourself with the recipe in ../grounding-dino/README.md.
 #
 # Run: `visionserve run grounding-dino-fixed img.jpg --prompt "chair. tv. vase."`
 name: grounding-dino-fixed
@@ -22,12 +26,18 @@ task: open_vocab
 license: Apache-2.0
 architecture: grounding-dino
 
-source_url: https://huggingface.co/IDEA-Research/grounding-dino-tiny
+# The repo these bytes are served FROM. It must be the audited prefix in
+# internal/registry/ledger.go, not the weights' lineage URL (IDEA-Research/grounding-dino-tiny) —
+# the ledger entry records that lineage as the licence evidence, but verified mode matches
+# source_url against the prefix it audited.
+source_url: https://huggingface.co/mtbui2010/grounding-dino-tiny-fixedmask-ONNX/
 sha256:
   model: ae9a0026953c6d5ce5a97b421af84c065d7f07173971cb105edb0071868fc180
 
 files:
-  model: ../grounding-dino/model-fixedmask.onnx
+  # Self-contained: `visionserve pull grounding-dino-fixed` downloads the weights HERE.
+  # A local re-export can instead be symlinked in (ln -s ../grounding-dino/model-fixedmask.onnx).
+  model: model-fixedmask.onnx
 
 input:
   # Reference only — preprocess (resize 800x800 + ImageNet normalize) happens in Go.
