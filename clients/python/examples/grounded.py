@@ -5,8 +5,12 @@ Usage:
     python examples/grounded.py path/to/image.jpg --prompt "cat. remote." [--model grounded-sam]
 
 NOTE: the target model must be available on the server (check `client.list_models()`).
-Full Grounding DINO / Grounded-SAM may be a paid tier or not yet shipped — this example
-will print a clear error from the server if the model is unavailable.
+Every model is free and Apache-2.0 — VisionServe has no paid tier — but the weights are
+downloaded on demand, so a model shows up as `not_downloaded` until you run
+`visionserve pull <name>`. This example prints a clear error from the server in that case.
+
+Prompts are lowercase and dot-separated: "cat. remote.". Pass `box_threshold=` /
+`text_threshold=` to override the manifest defaults per request.
 """
 
 import argparse
