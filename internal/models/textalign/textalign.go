@@ -216,7 +216,13 @@ func (m *textAlign) Name() string      { return m.cfg.Name }
 func (m *textAlign) Task() models.Task { return models.TaskOpenVocab }
 
 // Roles: the frozen detector + the CLIP text tower.
-func (m *textAlign) Roles() []string { return []string{roleDetector, roleText} }
+func (m *textAlign) Roles() []string {
+	roles := []string{roleDetector, roleText}
+	if m.hasCropHead() {
+		roles = append(roles, roleCrop)
+	}
+	return roles
+}
 
 // ExplainPreprocess implements models.ExplainPreprocessor so /api/explain works on the
 // detector role (the qf export still carries cross_attn_weights).
@@ -269,7 +275,11 @@ func (m *textAlign) Infer(img image.Image, prompt models.Prompt, r models.Runner
 			return models.Result{}, err
 		}
 		if mode == modeDual {
-			return m.decodeDual(h, boxes, cls, feats, meta, claimThreshold(prompt.ClaimThresh))
+			claim := claimThreshold(prompt.ClaimThresh)
+			if m.hasCropHead() {
+				return m.decodeDualCrop(h, img, boxes, cls, meta, claim, r)
+			}
+			return m.decodeDual(h, boxes, cls, feats, meta, claim)
 		}
 		return m.decodeGated(h, boxes, cls, feats, meta)
 	}

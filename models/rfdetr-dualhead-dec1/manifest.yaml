@@ -1,0 +1,56 @@
+# TWO-HEAD open-vocabulary detector: RF-DETR proposes boxes once, and two heads share the naming.
+#
+#   closed head  the detector's OWN supervised 22-class head, for the words it was trained on.
+#                On those names a supervised head beats head B by 16 points (FINDINGS §8), and
+#                `method: dual` measured +16.1 mAP over `gated` for exactly this reason.
+#   open head    SigLIP-crop, for everything else: crop the box, embed it, compare against the
+#                requested words. On five names held out of every trained component SigLIP-crop
+#                scores 85.3 where head B scores 46.7 — head B loses to running the teacher.
+#
+# The router reads text and dispatches; it detects nothing. Declaring files.crop is what selects
+# SigLIP-crop over head B as the open head — without it this model is `rfdetr-textalign-dec1`.
+#
+# WHY THE CROP HEAD IS A SECOND PASS. It reads pixels, ~1.4 ms per crop batched. Naming all 300
+# object queries would cost ~420 ms against a 20 ms detector, so unclaimed queries are marked,
+# survive postprocess on the detector's own objectness, and only the 3-15 that get through are
+# cropped — in ONE batched call.
+#
+# NOT YET MEASURED end to end. `dual` with head B is measured (77.19/77.27 mAP at |V|=22/78);
+# this swaps the open head and the resulting number is unknown. claim_threshold (0.25) and the
+# crop-name floor have not been swept.
+name: rfdetr-dualhead-dec1
+task: open_vocab
+license: Apache-2.0
+architecture: rfdetr-textalign
+
+files:
+  rfdetr: detector.onnx                    # dec1, exports query_feats
+  text:   ../siglip-text/model.onnx        # SigLIP text tower — MUST match the crop tower
+  crop:   ../siglip-image/model.onnx       # SigLIP vision tower: the open head
+
+# proj.bin is the SigLIP-distilled projection (d_text 768). The crop head does not use it, but
+# textalign loads it and validates the text tower's width against its d_text, so it must be the
+# SigLIP-dimension one — a CLIP projection (512) fails to load against a 768-wide tower.
+
+input:
+  width: 512
+  height: 512
+  layout: NCHW
+  letterbox: true
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr
+  box_format: cxcywh
+  # Thresholds the DETECTOR's objectness, as `gated`/`dual` do. dec1 was fine-tuned with the
+  # encoder and box head frozen so its logits sit low; 0.35 is the value tuned for the sibling.
+  conf_threshold: 0.35
+  max_detections: 300
+
+labels: labels.txt
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300
