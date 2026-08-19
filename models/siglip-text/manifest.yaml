@@ -1,0 +1,45 @@
+# SigLIP text tower — the "text" role for a head B distilled from SigLIP.
+#
+# WHY THIS EXISTS. Head B cannot beat the teacher it was distilled from on words it has never
+# seen. On five names held out of every trained component, SigLIP-crop scores 85.3 % where
+# CLIP-crop scores 65.3 %, and a head distilled from SigLIP reaches 69.3 % where the
+# CLIP-distilled one reaches 46.7 %. Raising the teacher is the only lever that moves that
+# ceiling — paper/FINDINGS-2026-08.md §9–§10.
+#
+# LICENSE: google/siglip-base-patch16-224 is apache-2.0, confirmed from the model card via the
+# Hub API (not assumed from "it is on HuggingFace"), and inside the CLAUDE.md allowlist.
+#
+# WEIGHTS ARE NOT COMMITTED (*.onnx is ignored). Regenerate with
+# scratchpad/ovclean/export_siglip_text.py, which verifies the export against PyTorch before
+# writing it (max|delta| and a per-prompt cosine floor of 0.9999).
+name: siglip-text
+task: embed
+license: apache-2.0
+architecture: siglip-text
+
+files:
+  model: model.onnx
+
+# The tokenizer is pure Go (internal/models/siglip): SentencePiece Unigram, 32000 pieces, byte
+# fallback. tokenizer.json IS committed — it is 2.4 MB of vocabulary, not weights, and the Go
+# tokenizer is verified token-for-token against the reference on 525 strings.
+#
+# BOUNDARY, enforced rather than documented away: the reference normalizer ends with a
+# Precompiled charsmap this package does not implement. It is the identity on ASCII, so the
+# tokenizer is exact there and REFUSES non-ASCII input instead of guessing.
+
+input:
+  # There is NO image input. The manifest validator requires width/height > 0, so these describe
+  # the TOKEN input instead: 64 = SigLIP's context length (CLIP's is 77), 1 row per prompt.
+  # Nothing reads them — tokenization happens in Go. Same workaround as ../clip-text.
+  #
+  # Without this block the manifest is REJECTED at registry scan with "input.width/height must be
+  # > 0". The model then never appears, and anything needing it fails with "not found in
+  # registry" — a message that points nowhere near the cause.
+  width: 64
+  height: 1
+  layout: NCHW
+
+runtime:
+  prefer: [cuda, cpu]
+  idle_unload_seconds: 300

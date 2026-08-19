@@ -1,0 +1,49 @@
+# SigLIP image tower — the crop namer's visual encoder.
+#
+# WHY THIS EXISTS. The two-head detector names anything outside head A's trained vocabulary by
+# cropping the box, embedding the crop and comparing against text embeddings. Measured on the
+# identical 75 held-out rows, identical crops, identical prompt ensemble, SigLIP-crop scores
+# 85.3 % on the five held-out names where CLIP ViT-B/32-crop scores 65.3 % (+20.0), and 80.2 %
+# vs 70.9 % over all 22 — paper/FINDINGS-2026-08.md §9–§10.
+#
+# LICENSE: google/siglip-base-patch16-224 is apache-2.0, confirmed from the model card via the
+# Hub API (not assumed from "it is on HuggingFace"), and inside the CLAUDE.md allowlist. Same
+# checkpoint as models/siglip-text — one download, two towers.
+#
+# WEIGHTS ARE NOT COMMITTED (*.onnx and *.onnx.data are ignored; the pair is 372 MB). Regenerate
+# with the script named in README.md, which verifies the export against PyTorch on 32 real
+# tabletop crops before writing it and refuses to write a graph that disagrees.
+name: siglip-image
+task: embed
+license: apache-2.0
+architecture: siglip-image
+
+files:
+  model: model.onnx   # + model.onnx.data sidecar (external weights), same directory
+
+# The crop is resized to exactly 224x224 (squash, bicubic) and mapped to [-1, 1]. mean/std are
+# 0.5 — SigLIP's own, NOT CLIP's — see the comment below; they are declared here so a Go
+# preprocessor reads them from the manifest instead of hard-coding the wrong constants.
+input:
+  width: 224
+  height: 224
+  layout: NCHW
+  letterbox: false      # SigLIP SQUASHES to 224x224; letterboxing would change the embedding
+  normalize:
+    mean: [0.5, 0.5, 0.5]
+    std: [0.5, 0.5, 0.5]
+
+# I/O CONTRACT — this is what a Go wrapper must produce, and it is NOT CLIP's:
+#   input   pixel_values float32 [N, 3, 224, 224]   N dynamic (verified at 1/4/8/16/32)
+#   output  image_embeds float32 [N, 768]           NOT L2-normalised here; the caller normalises
+#
+# Preprocessing, from the checkpoint's own preprocessor_config.json:
+#   resize to exactly 224x224, BICUBIC, SQUASH — no aspect-preserving shortest-side resize and
+#   NO centre crop (a centre crop would throw away part of the box)
+#   rescale 1/255, then normalise with mean = std = 0.5 per channel  ->  range [-1, 1]
+# CLIP's constants (0.481.., 0.457.., 0.408.. / 0.268.., 0.261.., 0.275..) and CLIP's
+# resize+centre-crop are BOTH wrong here and fail silently: plausible embeddings, worse names.
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300
