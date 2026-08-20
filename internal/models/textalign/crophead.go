@@ -143,19 +143,20 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, open
 		return dropIndices(dets, idx), nil
 	}
 
-	crops, err := siglip.EmbedCrops(img, boxes,
+	// Degenerate boxes are skipped rather than fatal, so `kept` says which of `boxes` actually
+	// produced a row. Losing that mapping would rename detections with another box's embedding.
+	crops, kept, err := siglip.EmbedCrops(img, boxes,
 		func(in map[string]engine.Tensor) ([]engine.Tensor, error) { return r.Run(roleCrop, in) },
 		r.InputNames(roleCrop))
 	if err != nil {
 		return nil, fmt.Errorf("textalign: crop namer: %w", err)
 	}
 
-	text, err := m.embedVocab(openClasses, r)
+	// Cached: the text tower is ~4.3 ms per word per request, and a 78-word vocabulary re-embedded
+	// on every image was costing more than the crops it exists to name.
+	text, err := m.openVocabEmbeddings(openClasses, r)
 	if err != nil {
 		return nil, err
-	}
-	for i := range text {
-		text[i] = l2Normalize(text[i]) // averageTemplates does not renormalise
 	}
 
 	scores, err := siglip.ScoreCrops(crops, text)
@@ -164,8 +165,20 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, open
 	}
 
 	n := len(openClasses)
+	// Every marked detection is dropped unless the loop below names it. A box that was skipped as
+	// degenerate never reaches the namer, and must not survive carrying the sentinel.
 	drop := make([]int, 0, len(idx))
-	for j, di := range idx {
+	named := make(map[int]bool, len(kept))
+	for _, k := range kept {
+		named[idx[k]] = true
+	}
+	for _, di := range idx {
+		if !named[di] {
+			drop = append(drop, di)
+		}
+	}
+	for j, k := range kept {
+		di := idx[k]
 		best, bestK := float32(math.Inf(-1)), -1
 		for k := 0; k < n; k++ {
 			if s := scores[j*n+k]; s > best {
@@ -185,6 +198,45 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, open
 		dets = dropIndices(dets, drop)
 	}
 	return dets, nil
+}
+
+// openVocabEmbeddings is embedVocab with a cache, keyed the same way head B's is: by the prompt
+// templates plus the class list, so two requests asking for the same open words share one text
+// tower call.
+//
+// Without it the tower ran on EVERY request. Measured, latency scaled with the number of open
+// WORDS rather than the number of crops — about 4.3 ms per word, 12 templates each — so a 78-word
+// vocabulary cost ~306 ms per image, far more than the crops the head exists to name.
+func (m *textAlign) openVocabEmbeddings(classes []string, r models.Runner) ([][]float32, error) {
+	key := vocabKey(m.tmpl, classes)
+
+	m.mu.RLock()
+	rows := m.textCache[key]
+	m.mu.RUnlock()
+	if rows != nil {
+		return rows, nil
+	}
+
+	rows, err := m.embedVocab(classes, r) // already template-averaged and L2-normalised
+	if err != nil {
+		return nil, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if existing := m.textCache[key]; existing != nil {
+		return existing, nil // lost a race; both are identical, keep the published one
+	}
+	if m.textCache == nil {
+		m.textCache = map[string][][]float32{}
+	}
+	if len(m.textOrder) >= maxVocabCache {
+		delete(m.textCache, m.textOrder[0])
+		m.textOrder = m.textOrder[1:]
+	}
+	m.textCache[key] = rows
+	m.textOrder = append(m.textOrder, key)
+	return rows, nil
 }
 
 // cropNameFloor is the cosine below which no requested open word describes the crop well enough

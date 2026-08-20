@@ -109,6 +109,11 @@ type textAlign struct {
 	mu    sync.RWMutex
 	cache map[string]*head
 	order []string // insertion order, for FIFO eviction of the vocabulary cache
+
+	// textCache holds RAW text embeddings, which the crop head needs and head B does not: head B
+	// consumes them folded into `cache`'s W matrix, so that cache cannot serve them.
+	textCache map[string][][]float32
+	textOrder []string
 }
 
 // New builds the head. The manifest's input/postprocess/labels block MUST carry the

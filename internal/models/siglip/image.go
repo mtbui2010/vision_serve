@@ -58,7 +58,7 @@ func (m *imageModel) Roles() []string   { return []string{roleModel} }
 func (m *imageModel) Infer(img image.Image, _ models.Prompt, r models.Runner) (models.Result, error) {
 	b := img.Bounds()
 	full := [][4]float64{{0, 0, float64(b.Dx()), float64(b.Dy())}}
-	embs, err := EmbedCrops(img, full, func(in map[string]engine.Tensor) ([]engine.Tensor, error) {
+	embs, _, err := EmbedCrops(img, full, func(in map[string]engine.Tensor) ([]engine.Tensor, error) {
 		return r.Run(roleModel, in)
 	}, r.InputNames(roleModel))
 	if err != nil {
@@ -75,32 +75,47 @@ func (m *imageModel) Infer(img image.Image, _ models.Prompt, r models.Runner) (m
 // over single crops is not a slower version of this function, it is a different cost class.
 //
 // Boxes are [x, y, w, h] in ORIGINAL image coordinates (the convention every Detection uses) and
-// are clamped to the image. A box that does not intersect the image, or is degenerate after
-// clamping, is an error rather than a silently black crop: it means the caller's coordinates are
-// wrong, and a black crop would embed to something plausible and be scored like any other.
-func CropTensor(img image.Image, boxes [][4]float64) (engine.Tensor, error) {
+// are clamped to the image. It returns the tensor and the INDICES of the boxes that produced a
+// row, which the caller needs to stay index-aligned.
+//
+// A degenerate box — zero width after clamping, or entirely off-frame — is SKIPPED, not embedded
+// as a black rectangle: black embeds to something plausible and would be scored like any real
+// detection. It is skipped rather than fatal because a low detection threshold produces real
+// zero-width queries, and one of those used to abort the whole request (measured: 62 of 62
+// images failed). If EVERY box is degenerate that is a different situation — the caller's
+// coordinates are probably not in original-image space — and it is an error.
+func CropTensor(img image.Image, boxes [][4]float64) (engine.Tensor, []int, error) {
 	if len(boxes) == 0 {
-		return engine.Tensor{}, fmt.Errorf("siglip-image: no boxes to embed")
+		return engine.Tensor{}, nil, fmt.Errorf("siglip-image: no boxes to embed")
 	}
 	plane := ImageSize * ImageSize
-	data := make([]float32, len(boxes)*3*plane)
+	data := make([]float32, 0, len(boxes)*3*plane)
+	kept := make([]int, 0, len(boxes))
 	bounds := img.Bounds()
+	var firstErr error
 
 	for i, b := range boxes {
 		rect, err := clampBox(b, bounds)
 		if err != nil {
-			return engine.Tensor{}, fmt.Errorf("siglip-image: box %d: %w", i, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("siglip-image: box %d: %w", i, err)
+			}
+			continue
 		}
 		crop := imaging.Crop(img, rect)
 		resized := imageproc.ResizeBicubic(crop, ImageSize, ImageSize)
 		t := imageproc.ImageToCHWFloat(resized, siglipMean, siglipStd)
 		if len(t.Data) != 3*plane {
-			return engine.Tensor{}, fmt.Errorf("siglip-image: box %d produced %d values, want %d",
+			return engine.Tensor{}, nil, fmt.Errorf("siglip-image: box %d produced %d values, want %d",
 				i, len(t.Data), 3*plane)
 		}
-		copy(data[i*3*plane:], t.Data)
+		data = append(data, t.Data...)
+		kept = append(kept, i)
 	}
-	return engine.F32(data, int64(len(boxes)), 3, ImageSize, ImageSize), nil
+	if len(kept) == 0 {
+		return engine.Tensor{}, nil, firstErr
+	}
+	return engine.F32(data, int64(len(kept)), 3, ImageSize, ImageSize), kept, nil
 }
 
 // clampBox turns an [x,y,w,h] float box into an integer rectangle inside bounds.
@@ -131,18 +146,19 @@ func clampBox(b [4]float64, bounds image.Rectangle) (image.Rectangle, error) {
 	return image.Rect(x0, y0, x1, y1), nil
 }
 
-// EmbedCrops crops, preprocesses and embeds every box in ONE session call, returning one
-// L2-normalised row per box, in box order.
+// EmbedCrops crops, preprocesses and embeds every usable box in ONE session call. It returns one
+// L2-normalised row per EMBEDDED box plus the indices of the boxes those rows came from, since
+// degenerate boxes are skipped and the two lists would otherwise silently drift apart.
 //
 // The tower does not normalise internally — neither does the text tower — so both sides are
 // normalised here and a score is a plain dot product. Getting this wrong yields cosines that are
 // merely proportional to the right ones, which preserves an argmax and quietly breaks any
 // threshold.
 func EmbedCrops(img image.Image, boxes [][4]float64,
-	run func(map[string]engine.Tensor) ([]engine.Tensor, error), inputNames []string) ([][]float32, error) {
-	in, err := CropTensor(img, boxes)
+	run func(map[string]engine.Tensor) ([]engine.Tensor, error), inputNames []string) ([][]float32, []int, error) {
+	in, kept, err := CropTensor(img, boxes)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	name := pixelValuesName
 	if len(inputNames) > 0 {
@@ -159,9 +175,13 @@ func EmbedCrops(img image.Image, boxes [][4]float64,
 	}
 	outs, err := run(map[string]engine.Tensor{name: in})
 	if err != nil {
-		return nil, fmt.Errorf("siglip-image: inference: %w", err)
+		return nil, nil, fmt.Errorf("siglip-image: inference: %w", err)
 	}
-	return DecodeImageEmbeddings(outs, len(boxes))
+	embs, err := DecodeImageEmbeddings(outs, len(kept))
+	if err != nil {
+		return nil, nil, err
+	}
+	return embs, kept, nil
 }
 
 // DecodeImageEmbeddings reshapes an [N, D] output into N L2-normalised rows. D is not asserted to

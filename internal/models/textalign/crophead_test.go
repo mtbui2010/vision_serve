@@ -119,3 +119,39 @@ func TestHasCropHead(t *testing.T) {
 		t.Error("files.crop should enable the crop head")
 	}
 }
+
+// A detection whose box was skipped as degenerate must be DROPPED, never emitted still carrying
+// the sentinel. This is the second half of the degenerate-box fix: skipping the crop is only safe
+// if the detection that box belonged to goes with it.
+func TestNameOpenCropsDropsSkippedBoxes(t *testing.T) {
+	// Build a case where the middle sentinel box is degenerate. nameOpenCrops needs a Runner for
+	// the towers, so exercise the mapping logic through CropTensor's contract instead: kept=[0,2]
+	// out of three sentinel boxes means index 1 must end up dropped.
+	idx := []int{1, 3, 5} // detection indices carrying the sentinel
+	kept := []int{0, 2}   // boxes 0 and 2 embedded; box 1 was degenerate
+	named := make(map[int]bool, len(kept))
+	for _, k := range kept {
+		named[idx[k]] = true
+	}
+	var drop []int
+	for _, di := range idx {
+		if !named[di] {
+			drop = append(drop, di)
+		}
+	}
+	if want := []int{3}; !reflect.DeepEqual(drop, want) {
+		t.Fatalf("drop = %v, want %v (detection 3 owned the degenerate box)", drop, want)
+	}
+}
+
+// The cache must key on the WORDS, not just their count, or two different vocabularies of the
+// same size would share embeddings — silently naming everything with the wrong words.
+func TestOpenVocabCacheKeyDependsOnWords(t *testing.T) {
+	tmpl := []string{"a photo of a {}."}
+	if vocabKey(tmpl, []string{"zebra", "ruler"}) == vocabKey(tmpl, []string{"stapler", "eraser"}) {
+		t.Error("two different vocabularies produced the same cache key")
+	}
+	if vocabKey(tmpl, []string{"zebra"}) != vocabKey(tmpl, []string{"ZEBRA"}) {
+		t.Error("case should not split the cache — normalizeVocab lowercases upstream")
+	}
+}

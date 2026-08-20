@@ -4,6 +4,7 @@ import (
 	"image"
 	"image/color"
 	"math"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -32,9 +33,12 @@ func TestCropTensorShapeAndOrder(t *testing.T) {
 
 	// box 0 is entirely in the black half, box 1 entirely in the white half.
 	boxes := [][4]float64{{0, 0, 40, 60}, {60, 0, 40, 60}}
-	tn, err := CropTensor(img, boxes)
+	tn, kept, err := CropTensor(img, boxes)
 	if err != nil {
 		t.Fatalf("CropTensor: %v", err)
+	}
+	if len(kept) != 2 || kept[0] != 0 || kept[1] != 1 {
+		t.Fatalf("kept = %v, want [0 1]", kept)
 	}
 	want := []int64{2, 3, ImageSize, ImageSize}
 	if len(tn.Shape) != 4 || tn.Shape[0] != want[0] || tn.Shape[1] != want[1] ||
@@ -61,7 +65,7 @@ func TestCropTensorShapeAndOrder(t *testing.T) {
 func TestCropTensorClamps(t *testing.T) {
 	img := solid(100, 60, color.RGBA{10, 10, 10, 255}, color.RGBA{200, 200, 200, 255})
 	// A box hanging off every edge must still produce a valid crop rather than panicking.
-	if _, err := CropTensor(img, [][4]float64{{-20, -10, 200, 200}}); err != nil {
+	if _, _, err := CropTensor(img, [][4]float64{{-20, -10, 200, 200}}); err != nil {
 		t.Fatalf("an over-large box should clamp, got: %v", err)
 	}
 }
@@ -71,9 +75,9 @@ func TestCropTensorClamps(t *testing.T) {
 // this must be an error, loudly.
 func TestCropTensorRejectsBoxOutsideImage(t *testing.T) {
 	img := solid(100, 60, color.RGBA{}, color.RGBA{})
-	_, err := CropTensor(img, [][4]float64{{500, 500, 10, 10}})
+	_, _, err := CropTensor(img, [][4]float64{{500, 500, 10, 10}})
 	if err == nil {
-		t.Fatal("a box entirely outside the image must be an error, not a black crop")
+		t.Fatal("a box entirely outside the image must be an error when it is the ONLY box")
 	}
 	if !strings.Contains(err.Error(), "original-image space") {
 		t.Errorf("error should say what is probably wrong, got: %v", err)
@@ -82,7 +86,7 @@ func TestCropTensorRejectsBoxOutsideImage(t *testing.T) {
 
 func TestCropTensorRejectsEmptyBatch(t *testing.T) {
 	img := solid(10, 10, color.RGBA{}, color.RGBA{})
-	if _, err := CropTensor(img, nil); err == nil {
+	if _, _, err := CropTensor(img, nil); err == nil {
 		t.Fatal("an empty box list must be an error, not an empty tensor")
 	}
 }
@@ -142,5 +146,48 @@ func TestScoreCropsRejectsMismatchedWidths(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "different checkpoints") {
 		t.Errorf("error should name the likely cause, got: %v", err)
+	}
+}
+
+// The bug that made the crop head unusable: ONE degenerate box among many aborted the entire
+// request with HTTP 500. At a low detection threshold real zero-width queries occur, and this
+// failed on 62 of 62 evaluation images. A degenerate box must be skipped, and `kept` must say so
+// — a caller that assumed row i belongs to box i would rename detections with someone else's
+// embedding.
+func TestCropTensorSkipsDegenerateBoxesAmongGoodOnes(t *testing.T) {
+	img := solid(100, 60, color.RGBA{0, 0, 0, 255}, color.RGBA{255, 255, 255, 255})
+	boxes := [][4]float64{
+		{0, 0, 40, 60},     // good
+		{80, 10, 0, 30},    // zero width -> skipped
+		{500, 500, 10, 10}, // entirely off-frame -> skipped
+		{60, 0, 40, 60},    // good
+	}
+	tn, kept, err := CropTensor(img, boxes)
+	if err != nil {
+		t.Fatalf("a degenerate box among good ones must not fail the batch, got: %v", err)
+	}
+	if want := []int{0, 3}; !reflect.DeepEqual(kept, want) {
+		t.Fatalf("kept = %v, want %v", kept, want)
+	}
+	if tn.Shape[0] != 2 {
+		t.Fatalf("batch = %d, want 2 (only the usable boxes)", tn.Shape[0])
+	}
+	// Row 0 is box 0 (black half), row 1 is box 3 (white half). If the skip logic shifted rows,
+	// these signs swap.
+	plane := ImageSize * ImageSize
+	centre := (ImageSize/2)*ImageSize + ImageSize/2
+	if got := tn.Data[centre]; math.Abs(float64(got+1)) > 1e-5 {
+		t.Errorf("row 0 centre = %v, want -1 (box 0 is black)", got)
+	}
+	if got := tn.Data[3*plane+centre]; math.Abs(float64(got-1)) > 1e-5 {
+		t.Errorf("row 1 centre = %v, want +1 (box 3 is white) — rows drifted from boxes", got)
+	}
+}
+
+func TestCropTensorAllDegenerateIsStillAnError(t *testing.T) {
+	img := solid(100, 60, color.RGBA{}, color.RGBA{})
+	_, _, err := CropTensor(img, [][4]float64{{10, 10, 0, 0}, {500, 500, 4, 4}})
+	if err == nil {
+		t.Fatal("if NO box is usable the caller's coordinates are wrong; that must be an error")
 	}
 }
