@@ -283,13 +283,23 @@ func dropIndices(dets []models.Detection, drop []int) []models.Detection {
 func (m *textAlign) hasCropHead() bool { return strings.TrimSpace(m.cfg.Files[roleCrop]) != "" }
 
 // cropTemp is the softmax temperature that turns SigLIP cosines into a distribution over the
-// requested words. It is a free parameter and an approximation: SigLIP's own head is sigmoid-based
-// with a learned scale and bias which this export does not carry, so no temperature here is the
-// "true" one. Lower means more decisive.
+// requested words. Lower is more decisive.
 //
-// Like dualClaimThresh before its sweep, this is a starting value. Override per request with
-// `crop_temp` so it can be swept without a rebuild.
-const cropTemp = 0.07
+// 0.03 is the peak of a measured sweep, not a calibration. On the held-out-names protocol the
+// curve is clean and unimodal — mAP over five genuinely unseen names climbs monotonically from
+// temperature 100 down to 0.03 and falls again at 0.01 — and `hat`, the class that motivated this
+// scoring change, goes 3.8 -> 24.7 AP across it. The initial guess of 0.07 sat half-way up the
+// slope and left about 6.5 mAP unclaimed.
+//
+// IT IS ALMOST CERTAINLY VOCABULARY-DEPENDENT, and that is mechanical rather than a suspicion: a
+// softmax over n words tends to 1/n as the temperature grows, so the temperature and n interact
+// directly. 0.03 was fitted on ONE 22-name vocabulary. Expect to re-sweep for a materially
+// different vocabulary size, which is why `crop_temp` is a per-request field rather than only a
+// constant.
+//
+// No temperature here is the "true" one in any case: SigLIP's own head is sigmoid-based with a
+// learned scale and bias that this export does not carry.
+const cropTemp = 0.03
 
 // softmaxAt returns the softmax probability of index k, computed in a numerically stable way. A
 // non-positive temperature would divide by zero or invert the ordering, so it falls back to the
