@@ -1,6 +1,7 @@
 package textalign
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
@@ -80,7 +81,7 @@ func TestNameOpenCropsDropsWhenNoOpenWords(t *testing.T) {
 		{Class: openSentinel, Conf: 0.8},
 		{Class: "towel", Conf: 0.7},
 	}
-	got, err := m.nameOpenCrops(nil, dets, nil, nil)
+	got, err := m.nameOpenCrops(nil, dets, nil, 0, nil)
 	if err != nil {
 		t.Fatalf("nameOpenCrops: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestNameOpenCropsDropsWhenNoOpenWords(t *testing.T) {
 func TestNameOpenCropsNoOpIfNothingMarked(t *testing.T) {
 	m := &textAlign{}
 	dets := []models.Detection{{Class: "cup", Conf: 0.9}, {Class: "towel", Conf: 0.7}}
-	got, err := m.nameOpenCrops(nil, dets, []string{"zebra"}, nil)
+	got, err := m.nameOpenCrops(nil, dets, []string{"zebra"}, 0, nil)
 	if err != nil {
 		t.Fatalf("nameOpenCrops: %v", err)
 	}
@@ -189,5 +190,60 @@ func TestCropNamerScoresAgainstAllRequestedWords(t *testing.T) {
 	}
 	if got := len(classes); got != 4 {
 		t.Fatalf("the crop namer must receive all %d requested words, not the %d open ones", got, open)
+	}
+}
+
+// The confidence reported for an open-named detection is P(object) x P(name | crop). Before this,
+// it was the detector's objectness alone — its confidence that the box is one of the classes IT
+// knows, none of which is the name being reported. A hat went out carrying the detector's
+// confidence that it is a towel, which is why `hat` scored 3.82 AP at 88% naming accuracy.
+func TestSoftmaxAt(t *testing.T) {
+	// A decisive row: one clear winner should approach 1.
+	row := []float32{0.9, 0.1, 0.05}
+	if p := softmaxAt(row, 0, 0.07); p < 0.99 {
+		t.Errorf("clear winner got p=%v, want ~1", p)
+	}
+	if p := softmaxAt(row, 1, 0.07); p > 0.01 {
+		t.Errorf("clear loser got p=%v, want ~0", p)
+	}
+	// A tie must split evenly, whatever the temperature.
+	tie := []float32{0.5, 0.5}
+	if p := softmaxAt(tie, 0, 0.07); math.Abs(float64(p)-0.5) > 1e-6 {
+		t.Errorf("tie got p=%v, want 0.5", p)
+	}
+	// Probabilities over a row must sum to 1.
+	var sum float32
+	for k := range row {
+		sum += softmaxAt(row, k, 0.07)
+	}
+	if math.Abs(float64(sum)-1) > 1e-5 {
+		t.Errorf("row sums to %v, want 1", sum)
+	}
+}
+
+// Temperature must be monotone in the intended direction, or the sweep cannot be read.
+func TestSoftmaxTemperatureIsMonotone(t *testing.T) {
+	row := []float32{0.6, 0.4}
+	decisive := softmaxAt(row, 0, 0.01)
+	soft := softmaxAt(row, 0, 1.0)
+	if decisive <= soft {
+		t.Errorf("lower temperature must be MORE decisive: %v at T=0.01 vs %v at T=1.0", decisive, soft)
+	}
+}
+
+// A single candidate is certain by construction; a non-positive temperature would divide by zero
+// or invert the ordering, so it falls back to the default rather than producing silent nonsense.
+func TestSoftmaxAtEdgeCases(t *testing.T) {
+	if p := softmaxAt([]float32{0.3}, 0, 0.07); p != 1 {
+		t.Errorf("single candidate got p=%v, want 1", p)
+	}
+	if p := softmaxAt([]float32{0.9, 0.1}, 0, 0); p != softmaxAt([]float32{0.9, 0.1}, 0, cropTemp) {
+		t.Error("a non-positive temperature must fall back to the package default")
+	}
+	if p := softmaxAt([]float32{0.9, 0.1}, 5, 0.07); p != 0 {
+		t.Errorf("out-of-range index got p=%v, want 0", p)
+	}
+	if p := softmaxAt(nil, 0, 0.07); p != 0 {
+		t.Errorf("empty row got p=%v, want 0", p)
 	}
 }

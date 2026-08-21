@@ -282,7 +282,7 @@ func (m *textAlign) Infer(img image.Image, prompt models.Prompt, r models.Runner
 		if mode == modeDual {
 			claim := claimThreshold(prompt.ClaimThresh)
 			if m.hasCropHead() {
-				return m.decodeDualCrop(h, img, boxes, cls, meta, claim, r)
+				return m.decodeDualCrop(h, img, boxes, cls, meta, claim, prompt.CropTemp, r)
 			}
 			return m.decodeDual(h, boxes, cls, feats, meta, claim)
 		}

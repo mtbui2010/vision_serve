@@ -116,6 +116,10 @@ type PredictJSONRequest struct {
 	// instead of the open head. 0 = model default. It is NOT conf_threshold: that decides
 	// what is reported, and evaluation runs set it to 0.001.
 	ClaimThreshold float64 `json:"claim_threshold,omitempty"`
+	// CropTemp is the softmax temperature the crop namer uses to turn cosines into a
+	// probability over the requested words; that probability multiplies the reported
+	// confidence. 0 = model default. Lower is more decisive.
+	CropTemp float64 `json:"crop_temp,omitempty"`
 	// ROI restricts processing to a region of interest "x,y,w,h" in ORIGINAL image pixels:
 	// the server crops to it, runs the model on the crop, and maps results back. "" = full image.
 	ROI string `json:"roi,omitempty"`

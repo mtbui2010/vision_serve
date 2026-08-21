@@ -181,6 +181,11 @@ type Prompt struct {
 	// decides what is REPORTED and is set to 0.001 during evaluation — reusing that would make
 	// the closed head claim every query and hide the failure this knob exists to prevent.
 	ClaimThresh float64
+	// CropTemp: textalign `method: dual` with a crop head. Softmax temperature turning the crop
+	// namer's cosines into a distribution over the requested words, which multiplies the
+	// reported confidence. 0 = model default. An approximation: SigLIP's own head is
+	// sigmoid-based with a learned scale/bias this export does not carry.
+	CropTemp float64
 	// ROI: optional region of interest [x, y, w, h] in ORIGINAL image pixels. When set
 	// (w>0 && h>0), the SERVER crops the image to this rectangle, runs the model on the
 	// crop only, and maps results back to original coordinates. Handled in the HTTP layer,

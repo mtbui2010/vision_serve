@@ -72,7 +72,7 @@ func dualLogitsSentinel(obj []float32, clsRow func(int) []float32, closedOfCol [
 // the geometry, thresholding and top-k as usual. Pass 2 crops only the marked survivors and names
 // them in ONE batched vision-tower call.
 func (m *textAlign) decodeDualCrop(h *head, img image.Image, boxes, cls engine.Tensor,
-	meta models.PreprocessMeta, claim float32, r models.Runner) (models.Result, error) {
+	meta models.PreprocessMeta, claim float32, temp float64, r models.Runner) (models.Result, error) {
 	q := int(boxes.Dim(1))
 	c := len(h.classes)
 
@@ -106,7 +106,7 @@ func (m *textAlign) decodeDualCrop(h *head, img image.Image, boxes, cls engine.T
 		return models.Result{}, err
 	}
 
-	named, err := m.nameOpenCrops(img, res.Detections, h.classes, r)
+	named, err := m.nameOpenCrops(img, res.Detections, h.classes, temp, r)
 	if err != nil {
 		return models.Result{}, err
 	}
@@ -131,7 +131,7 @@ func (m *textAlign) decodeDualCrop(h *head, img image.Image, boxes, cls engine.T
 // This is the same rule head B already follows — once the closed head declines, exclusivity
 // lapses — and the inconsistency was an oversight, not a design.
 func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, classes []string,
-	r models.Runner) ([]models.Detection, error) {
+	temp float64, r models.Runner) ([]models.Detection, error) {
 	idx := make([]int, 0, len(dets))
 	boxes := make([][4]float64, 0, len(dets))
 	for i, d := range dets {
@@ -196,9 +196,23 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, clas
 			continue
 		}
 		dets[di].Class = classes[bestK]
-		// Conf stays the DETECTOR's objectness. The crop similarity decided the name, not
-		// whether the object is there, and mixing a cosine into a column postprocess already
-		// thresholded on a different scale is the bug gated.go exists to prevent.
+		// Conf becomes P(object) x P(this name | crop).
+		//
+		// It used to stay the detector's raw objectness, on the reasoning that the crop head
+		// decided the NAME and not whether the object is there. That reasoning conflated two
+		// decisions. Objectness is the detector's confidence that the box is one of the classes
+		// IT knows — and for a query the closed head declined, none of those is the name being
+		// reported. A hat was going out carrying the detector's confidence that it is a towel.
+		//
+		// Measured consequence: `hat` was named correctly 88% of the time and scored 3.82 AP,
+		// because correctly-named hats ranked below confidently-wrong queries.
+		//
+		// This does NOT reintroduce what gated.go warns about. Selection — thresholding, ranking
+		// and the top-k cut inside postprocess — still runs on pure objectness, one scale, and
+		// has already happened by the time this line executes. What changes is the number
+		// REPORTED for a detection whose name came from elsewhere, and reporting the joint
+		// quantity is the honest answer to "how sure are you this is a hat".
+		dets[di].Conf *= float64(softmaxAt(scores[j*n:(j+1)*n], bestK, temp))
 	}
 	if len(drop) > 0 {
 		dets = dropIndices(dets, drop)
@@ -267,3 +281,41 @@ func dropIndices(dets []models.Detection, drop []int) []models.Detection {
 
 // hasCropHead reports whether the manifest wired a SigLIP vision tower.
 func (m *textAlign) hasCropHead() bool { return strings.TrimSpace(m.cfg.Files[roleCrop]) != "" }
+
+// cropTemp is the softmax temperature that turns SigLIP cosines into a distribution over the
+// requested words. It is a free parameter and an approximation: SigLIP's own head is sigmoid-based
+// with a learned scale and bias which this export does not carry, so no temperature here is the
+// "true" one. Lower means more decisive.
+//
+// Like dualClaimThresh before its sweep, this is a starting value. Override per request with
+// `crop_temp` so it can be swept without a rebuild.
+const cropTemp = 0.07
+
+// softmaxAt returns the softmax probability of index k, computed in a numerically stable way. A
+// non-positive temperature would divide by zero or invert the ordering, so it falls back to the
+// package default rather than producing silent nonsense.
+func softmaxAt(row []float32, k int, temp float64) float32 {
+	if k < 0 || k >= len(row) || len(row) == 0 {
+		return 0
+	}
+	if len(row) == 1 {
+		return 1
+	}
+	if temp <= 0 {
+		temp = cropTemp
+	}
+	max := row[0]
+	for _, v := range row[1:] {
+		if v > max {
+			max = v
+		}
+	}
+	var sum float64
+	for _, v := range row {
+		sum += math.Exp(float64(v-max) / temp)
+	}
+	if sum == 0 {
+		return 0
+	}
+	return float32(math.Exp(float64(row[k]-max)/temp) / sum)
+}
