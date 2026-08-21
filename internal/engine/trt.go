@@ -1,6 +1,9 @@
 package engine
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,25 +52,59 @@ func TRTHint() string {
 // `--idle-unload-seconds` evicts the model, which would make idle-unload actively harmful.
 // Persisting the compiled engine turns the second and later loads into a file read.
 //
-// Returns nil (no options -> ORT defaults, no caching) if no cache directory can be resolved,
-// so a read-only or HOME-less environment degrades to the previous behavior instead of failing.
-func TRTOptions() map[string]string {
+// THE ENGINE CACHE MUST BE NAMESPACED PER WEIGHTS FILE. ORT derives its engine cache filename
+// from graph properties, and those COLLIDE between two fine-tunes of the same architecture:
+// measured here, a cache built from a 17-class RF-DETR made the 22-class sibling "load" in 14 s
+// and then serve the 17-class model's class head. Under `gated`/`dual` that surfaces as a loud
+// shape error. Under `exact`/`folded` it would NOT — those paths read only boxes and query_feats,
+// whose shapes match across checkpoints, so the server would return plausible numbers computed
+// from the wrong weights. A silent wrong answer is the worst failure this cache can produce, so
+// each weights file gets its own directory.
+//
+// The TIMING cache stays shared on purpose: it holds kernel-autotuning measurements for the GPU,
+// is graph-independent by design, and is what makes the FIRST build of an unseen model faster.
+//
+// Returns nil (no options -> ORT defaults, no caching) if no cache directory can be resolved, so
+// a read-only or HOME-less environment degrades to the previous behavior instead of failing.
+func TRTOptions(modelPath string) map[string]string {
 	dir := TRTCacheDir()
 	if dir == "" {
 		return nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	engineDir := filepath.Join(dir, "engines", engineKey(modelPath))
+	if err := os.MkdirAll(engineDir, 0o755); err != nil {
 		return nil // not fatal: fall back to uncached TRT
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil
 	}
 	return map[string]string{
 		"trt_engine_cache_enable": "1",
-		"trt_engine_cache_path":   dir,
-		// The timing cache stores kernel-autotuning measurements. It is reused across
-		// DIFFERENT graphs on the same GPU, so it also cuts the FIRST build of a model
-		// the engine cache has never seen.
+		"trt_engine_cache_path":   engineDir,
 		"trt_timing_cache_enable": "1",
 		"trt_timing_cache_path":   dir,
 	}
+}
+
+// engineKey identifies a weights FILE, not a model name: two registry entries may share one file
+// (and should share its engine), and one path may be rewritten in place by a re-export (and must
+// not). Size and modification time catch the rewrite without hashing hundreds of megabytes on
+// every session creation. The absolute path is resolved first so that a symlink and its target —
+// several models here are symlinks into the NAS — do not build the same engine twice.
+func engineKey(modelPath string) string {
+	key := modelPath
+	if abs, err := filepath.Abs(modelPath); err == nil {
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			key = resolved
+		} else {
+			key = abs
+		}
+	}
+	if st, err := os.Stat(key); err == nil {
+		key = fmt.Sprintf("%s|%d|%d", key, st.Size(), st.ModTime().UnixNano())
+	}
+	sum := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(sum[:16])
 }
 
 // TRTCacheDir resolves where compiled TensorRT engines are persisted:

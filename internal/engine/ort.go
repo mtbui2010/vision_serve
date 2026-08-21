@@ -190,7 +190,7 @@ func createSession(modelPath string, inputNames, outputNames []string, providers
 		}
 		var s *ort.DynamicAdvancedSession
 		captured, runErr := captureStderr(func() error {
-			applyProvider(opts, ep)
+			applyProvider(opts, ep, modelPath)
 			var e error
 			s, e = ort.NewDynamicAdvancedSession(modelPath, inputNames, outputNames, opts)
 			return e
@@ -267,12 +267,12 @@ func availableProviders(providers []Provider) []Provider {
 // applyProvider appends exactly ONE execution provider to opts. CPU needs no append
 // (ORT's built-in default); callers attempt providers one at a time so a per-graph EP
 // failure can fall back to the next candidate (see NewSession).
-func applyProvider(opts *ort.SessionOptions, p Provider) {
+func applyProvider(opts *ort.SessionOptions, p Provider, modelPath string) {
 	switch p {
 	case ProviderTensorRT:
 		if trt, err := ort.NewTensorRTProviderOptions(); err == nil {
 			// Persist compiled engines; without this every load re-compiles (minutes). See TRTOptions.
-			if trtOpts := TRTOptions(); len(trtOpts) > 0 {
+			if trtOpts := TRTOptions(modelPath); len(trtOpts) > 0 {
 				if err := trt.Update(trtOpts); err != nil && Trace {
 					fmt.Fprintf(os.Stderr, "engine: [trace] TensorRT options rejected (%v) — continuing without engine cache\n", err)
 				}
