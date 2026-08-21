@@ -198,6 +198,21 @@ func createSession(modelPath string, inputNames, outputNames []string, providers
 		opts.Destroy()
 		if runErr == nil {
 			sess, activeEP = s, ep
+			// Session creation can SUCCEED while ORT quietly drops the EP we registered and runs
+			// on CPU — what happens when libonnxruntime_providers_cuda.so cannot resolve
+			// libcudnn.so.9. runErr is nil, so nothing here notices, and activeEP goes on
+			// claiming "gpu:0" for CPU work. That silence cost a full measurement sweep in this
+			// project: it was caught only because the process held no VRAM, and it had already
+			// produced a plausible-looking table of wrong numbers.
+			if ep != ProviderCPU && epWasDropped(captured) {
+				fmt.Fprintf(os.Stderr,
+					"engine: WARNING %s requested %s but ONNX Runtime fell back to CPU — "+
+						"inference will be slow, and `device` would otherwise misreport it as GPU. "+
+						"Usually a missing cuDNN/CUDA runtime on LD_LIBRARY_PATH; try "+
+						"`source scripts/gpu-env.sh`. ORT said:\n%s",
+					filepath.Base(modelPath), providerNames([]Provider{ep}), captured)
+				activeEP = ProviderCPU
+			}
 			if Trace && captured != "" {
 				fmt.Fprintf(os.Stderr, "engine: [trace] ORT messages for %s on %s:\n%s",
 					filepath.Base(modelPath), providerNames([]Provider{ep}), captured)
@@ -408,4 +423,31 @@ func destroyValues(vals []ort.Value) {
 			v.Destroy()
 		}
 	}
+}
+
+// epWasDropped reports whether ORT's own diagnostics say it abandoned the execution provider we
+// registered and fell back to CPU, even though session creation returned no error.
+//
+// Matching log text is brittle and is chosen deliberately over the alternatives: the ORT Go
+// binding exposes no "which EP is this session actually using" query, and probing by running a
+// tensor would cost a real inference on every session creation. The markers below are the two
+// shapes ORT emits — a provider shared library that will not load, and its explicit fallback
+// notice. A missed match degrades to today's behaviour (silent), never to a false alarm on a
+// healthy session, because a working GPU session prints neither.
+func epWasDropped(ortOutput string) bool {
+	if ortOutput == "" {
+		return false
+	}
+	s := strings.ToLower(ortOutput)
+	for _, marker := range []string{
+		"failed to load library", // provider .so missing a dependency (libcudnn, libnvinfer)
+		"falling back to cpuexecutionprovider",
+		"failed to create cudaexecutionprovider",
+		"failed to create tensorrtexecutionprovider",
+	} {
+		if strings.Contains(s, marker) {
+			return true
+		}
+	}
+	return false
 }

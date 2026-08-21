@@ -83,17 +83,19 @@ func (m scoreMode) normalize() bool { return m == modeExact }
 const gatedLogitFloor = -30
 
 // dualClaimThresh is the default logit the closed head must reach on a requested word to claim a
-// query. -1.1 is sigmoid 0.25: below a quarter confidence the supervised head is not recognising
-// anything, so head B should get its chance.
+// query. -1.7346 is sigmoid 0.15, chosen from the held-out-names sweep rather than by intuition:
+// across claim thresholds 0.05-0.8 the open head's mAP on five genuinely unseen names peaks
+// broadly (21.5-22.3), while closed-set mAP starts falling above 0.15. 0.4 buys 0.8 more open mAP
+// — inside the ~1 mAP noise floor that sweep's control established — for 0.6 of real closed-set
+// accuracy, so 0.15 is the better trade.
 //
 // It is deliberately NOT the manifest's conf_threshold. That threshold decides which detections
 // are REPORTED and is routinely set to 0.001 for evaluation so the precision-recall curve is
 // complete; reusing it would make every evaluation run claim every query and hide exactly the
 // failure this constant exists to prevent.
 //
-// Override per request with `claim_threshold` (a probability in (0,1)); the sweep that picks the
-// production value has not been run yet.
-const dualClaimThresh = -1.1
+// Override per request with `claim_threshold` (a probability in (0,1)).
+const dualClaimThresh = -1.7346
 
 // realClassCols marks which columns of the detector's own class head are real classes, i.e.
 // everything except the "N/A" background column. Matching is by name and case-insensitive,
