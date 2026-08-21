@@ -80,14 +80,7 @@ func (m *textAlign) decodeDualCrop(h *head, img image.Image, boxes, cls engine.T
 	if err != nil {
 		return models.Result{}, err
 	}
-	closedOfCol, openCol := routeVocab(m.cfg.Labels, h.classes)
-
-	openClasses := make([]string, 0, c)
-	for k, isOpen := range openCol {
-		if isOpen {
-			openClasses = append(openClasses, h.classes[k])
-		}
-	}
+	closedOfCol, _ := routeVocab(m.cfg.Labels, h.classes)
 
 	nCls := int(cls.Dim(-1))
 	clsRow := func(i int) []float32 {
@@ -113,7 +106,7 @@ func (m *textAlign) decodeDualCrop(h *head, img image.Image, boxes, cls engine.T
 		return models.Result{}, err
 	}
 
-	named, err := m.nameOpenCrops(img, res.Detections, openClasses, r)
+	named, err := m.nameOpenCrops(img, res.Detections, h.classes, r)
 	if err != nil {
 		return models.Result{}, err
 	}
@@ -121,10 +114,23 @@ func (m *textAlign) decodeDualCrop(h *head, img image.Image, boxes, cls engine.T
 	return res, nil
 }
 
-// nameOpenCrops replaces every sentinel-labelled detection with a SigLIP-crop name, dropping the
-// ones no requested open word describes. Detections the closed head named pass through untouched,
-// and the surviving order is preserved: callers index masks against detections.
-func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, openClasses []string,
+// nameOpenCrops replaces every sentinel-labelled detection with a SigLIP-crop name. Detections
+// the closed head named pass through untouched, and the surviving order is preserved: callers
+// index masks against detections.
+//
+// It scores against ALL requested words, closed ones included, and that is the correction to an
+// earlier version that confined it to the open words. Confining it looked like the right way to
+// stop the crop head second-guessing the supervised head — but the closed head has already had
+// first refusal on these queries, so there is nothing left to protect, and the confinement forced
+// every declined background query to carry one of the open names. Measured on the held-out-names
+// protocol: the crop head named 21144 detections with a held-out name against head B's 7515, and
+// its precision at the top of the ranking was WORSE (16.5% vs 26.7%) despite naming detected
+// objects far better (91.3% vs 51.1% top-1). Head B was free to call those queries "cup" and be
+// scored as a cup; the crop head could only call them "hat".
+//
+// This is the same rule head B already follows — once the closed head declines, exclusivity
+// lapses — and the inconsistency was an oversight, not a design.
+func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, classes []string,
 	r models.Runner) ([]models.Detection, error) {
 	idx := make([]int, 0, len(dets))
 	boxes := make([][4]float64, 0, len(dets))
@@ -137,9 +143,9 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, open
 	if len(idx) == 0 {
 		return dets, nil
 	}
-	if len(openClasses) == 0 {
-		// Nothing was requested that the closed head does not own, so these boxes have no name
-		// available. Emitting them under the sentinel would leak an internal label.
+	if len(classes) == 0 {
+		// No vocabulary at all: these boxes have no name available, and emitting them under the
+		// sentinel would leak an internal label into a client's JSON.
 		return dropIndices(dets, idx), nil
 	}
 
@@ -154,7 +160,7 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, open
 
 	// Cached: the text tower is ~4.3 ms per word per request, and a 78-word vocabulary re-embedded
 	// on every image was costing more than the crops it exists to name.
-	text, err := m.openVocabEmbeddings(openClasses, r)
+	text, err := m.openVocabEmbeddings(classes, r)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +170,7 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, open
 		return nil, err
 	}
 
-	n := len(openClasses)
+	n := len(classes)
 	// Every marked detection is dropped unless the loop below names it. A box that was skipped as
 	// degenerate never reaches the namer, and must not survive carrying the sentinel.
 	drop := make([]int, 0, len(idx))
@@ -189,7 +195,7 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, open
 			drop = append(drop, di)
 			continue
 		}
-		dets[di].Class = openClasses[bestK]
+		dets[di].Class = classes[bestK]
 		// Conf stays the DETECTOR's objectness. The crop similarity decided the name, not
 		// whether the object is there, and mixing a cosine into a column postprocess already
 		// thresholded on a different scale is the bug gated.go exists to prevent.

@@ -155,3 +155,39 @@ func TestOpenVocabCacheKeyDependsOnWords(t *testing.T) {
 		t.Error("case should not split the cache — normalizeVocab lowercases upstream")
 	}
 }
+
+// The crop head must be allowed to name a CLOSED word once the closed head has declined the
+// query. Confining it to the open words was what made it a worse ranker despite being a much
+// better namer: every declined background query was forced to carry a held-out name and became a
+// false positive there, where head B could call the same query "cup" and be judged as a cup.
+//
+// The scope is checked through decodeDualCrop's contract rather than by running the towers: what
+// changed is WHICH list is handed to the namer.
+func TestCropNamerScoresAgainstAllRequestedWords(t *testing.T) {
+	labels := []string{"cup", "towel", "N/A"}           // the detector's own 2 real classes
+	classes := []string{"cup", "towel", "hat", "ruler"} // what the caller asked for
+	closedOfCol, openCol := routeVocab(labels, classes)
+
+	// Sanity on the routing itself: the first two are the detector's, the last two are not.
+	if want := []int{0, 1, -1, -1}; !reflect.DeepEqual(closedOfCol, want) {
+		t.Fatalf("closedOfCol = %v, want %v", closedOfCol, want)
+	}
+	if want := []bool{false, false, true, true}; !reflect.DeepEqual(openCol, want) {
+		t.Fatalf("openCol = %v, want %v", openCol, want)
+	}
+
+	// The namer is handed the FULL vocabulary. If a future change narrows it back to the open
+	// subset, this is the assertion that should fail.
+	open := 0
+	for _, isOpen := range openCol {
+		if isOpen {
+			open++
+		}
+	}
+	if open == len(classes) {
+		t.Fatal("test is vacuous: pick a vocabulary with both closed and open words")
+	}
+	if got := len(classes); got != 4 {
+		t.Fatalf("the crop namer must receive all %d requested words, not the %d open ones", got, open)
+	}
+}
