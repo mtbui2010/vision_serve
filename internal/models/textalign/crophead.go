@@ -285,21 +285,31 @@ func (m *textAlign) hasCropHead() bool { return strings.TrimSpace(m.cfg.Files[ro
 // cropTemp is the softmax temperature that turns SigLIP cosines into a distribution over the
 // requested words. Lower is more decisive.
 //
-// 0.03 is the peak of a measured sweep, not a calibration. On the held-out-names protocol the
-// curve is clean and unimodal — mAP over five genuinely unseen names climbs monotonically from
-// temperature 100 down to 0.03 and falls again at 0.01 — and `hat`, the class that motivated this
-// scoring change, goes 3.8 -> 24.7 AP across it. The initial guess of 0.07 sat half-way up the
-// slope and left about 6.5 mAP unclaimed.
+// 0.02 is a measured vertex, refined over 4 vocabulary sizes x 9 temperatures on the
+// held-out-names protocol. Two earlier beliefs about it were both wrong, and both were wrong in
+// instructive ways:
 //
-// IT IS ALMOST CERTAINLY VOCABULARY-DEPENDENT, and that is mechanical rather than a suspicion: a
-// softmax over n words tends to 1/n as the temperature grows, so the temperature and n interact
-// directly. 0.03 was fitted on ONE 22-name vocabulary. Expect to re-sweep for a materially
-// different vocabulary size, which is why `crop_temp` is a per-request field rather than only a
-// constant.
+//   - 0.03 was never the optimum. The first sweep used the grid {0.01, 0.03, 0.07}, and a
+//     factor-2 grid cannot locate a vertex it does not bracket tightly. 0.03 was the best of
+//     three coarse points, not a peak, and it costs 1.1-1.9 mAP at every vocabulary size.
 //
-// No temperature here is the "true" one in any case: SigLIP's own head is sigmoid-based with a
-// learned scale and bias that this export does not carry.
-const cropTemp = 0.03
+//   - The temperature is NOT usefully vocabulary-dependent, though the argument that it should be
+//     is sound and was checked directly. A softmax over n words does tend to 1/n, and the measured
+//     mean top-1 probability really does collapse with vocabulary: 0.208, 0.177, 0.132, 0.100 for
+//     n = 22, 30, 50, 78. But the OPTIMUM barely follows it. Over that 3.5x span the best
+//     temperature falls only by a factor of 0.80 — fitted exponent -0.165 with a confidence
+//     interval spanning zero, so this data cannot distinguish it from a constant. Correcting to
+//     hold the top-1 probability fixed over-shoots the measured optimum and LOSES 0.2-0.8 mAP.
+//     The optimum is far stickier than the distribution it controls.
+//
+// No rule tried (c/log n, c*n^p, constant top-1 probability) beat a constant by more than 0.2 mAP,
+// and the two evaluation splits rank the leaders in opposite orders — the definition of
+// within-noise. 1/n is excluded outright.
+//
+// `crop_temp` remains a per-request field, but for a different reason than a different vocabulary
+// SIZE: a different namer, or a domain whose cosines are distributed differently, would move this.
+// No temperature is "true" in any case, since this export drops SigLIP's learned scale and bias.
+const cropTemp = 0.02
 
 // softmaxAt returns the softmax probability of index k, computed in a numerically stable way. A
 // non-positive temperature would divide by zero or invert the ordering, so it falls back to the
