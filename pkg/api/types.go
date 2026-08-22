@@ -113,8 +113,9 @@ type PredictJSONRequest struct {
 	Method string `json:"method,omitempty"`
 	// ClaimThreshold applies to textalign's `method: dual`. It is the probability in (0,1)
 	// the supervised closed head must reach on a requested word before it names a detection
-	// instead of the open head. 0 = model default. It is NOT conf_threshold: that decides
-	// what is reported, and evaluation runs set it to 0.001.
+	// instead of the open head. 0 = model default; >= 1 means it never claims. It is NOT
+	// conf_threshold, which decides
+	// what is reported and is set to 0.001 by evaluation runs.
 	ClaimThreshold float64 `json:"claim_threshold,omitempty"`
 	// CropTemp is the softmax temperature the crop namer uses to turn cosines into a
 	// probability over the requested words; that probability multiplies the reported

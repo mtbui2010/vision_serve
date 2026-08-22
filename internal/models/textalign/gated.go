@@ -351,11 +351,24 @@ func routeVocab(labels, classes []string) (closedOfCol []int, openCol []bool) {
 // 1 are not thresholds a caller can have meant, and silently turning them into ±inf would make
 // the closed head claim everything or nothing with no error.
 func claimThreshold(p float64) float32 {
-	if p <= 0 || p >= 1 {
+	if p <= 0 {
+		// 0 is the zero value of an omitted field, so it has to mean "unset". A caller who
+		// genuinely wants the closed head to claim everything can pass a small positive number.
 		return dualClaimThresh
+	}
+	if p >= 1 {
+		// p >= 1 was ALSO treated as unset, which silently did the opposite of what it asks:
+		// "require certainty before claiming" came back as the default threshold. Nobody's zero
+		// value is 1, so there is no ambiguity to protect against, and "the closed head never
+		// claims" is both the plain reading and the configuration needed to measure the open
+		// head's ceiling. A finite sentinel rather than +Inf keeps every comparison well-defined.
+		return neverClaim
 	}
 	return float32(math.Log(p / (1 - p)))
 }
+
+// neverClaim is a logit no class score can reach, so the closed head declines every query.
+const neverClaim = float32(1e9)
 
 func (m *textAlign) decodeDual(h *head, boxes, cls, feats engine.Tensor, meta models.PreprocessMeta, claim float32) (models.Result, error) {
 	q := int(boxes.Dim(1))

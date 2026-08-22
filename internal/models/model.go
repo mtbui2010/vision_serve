@@ -177,7 +177,8 @@ type Prompt struct {
 	Method string
 	// ClaimThresh: textalign `method: dual` only. The PROBABILITY in (0,1) the supervised
 	// closed head must reach on a requested word before it names a query instead of the open
-	// head. 0 = the model default. Deliberately NOT the manifest's conf_threshold, which
+	// head. 0 = the model default; >= 1 means the closed head never claims, which is how the
+	// open head's ceiling is measured. Deliberately NOT the manifest's conf_threshold, which
 	// decides what is REPORTED and is set to 0.001 during evaluation — reusing that would make
 	// the closed head claim every query and hide the failure this knob exists to prevent.
 	ClaimThresh float64

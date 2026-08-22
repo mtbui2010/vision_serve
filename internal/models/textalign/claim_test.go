@@ -13,8 +13,8 @@ func TestClaimThreshold(t *testing.T) {
 	}{
 		{"unset falls back to the default", 0, dualClaimThresh},
 		{"negative is not a probability", -0.5, dualClaimThresh},
-		{"1 would mean +inf", 1, dualClaimThresh},
-		{"above 1 is not a probability", 2, dualClaimThresh},
+		{"1 means the closed head never claims", 1, neverClaim},
+		{"above 1 also means never", 2, neverClaim},
 		{"0.5 is the origin", 0.5, 0},
 	}
 	for _, c := range cases {
@@ -94,5 +94,38 @@ func TestDualLogitsThresholdIsMonotone(t *testing.T) {
 	}
 	if hiCols[0] != 1 {
 		t.Errorf("at threshold 2.0 the closed head (logit 1.0) should decline, got column %d", hiCols[0])
+	}
+}
+
+// `claim_threshold >= 1` is the configuration that measures the open head's ceiling: the closed
+// head must decline every query so every object reaches the namer. It used to fall back to the
+// package default, which measured the shipped configuration instead and would have looked like a
+// result.
+func TestClaimThresholdNeverClaims(t *testing.T) {
+	const q, c = 1, 2
+	closedOfCol := []int{0, -1}
+	openCol := []bool{false, true}
+	// The closed head is maximally confident about the requested word "cup".
+	cls := [][]float32{{50, 0}}
+	names := []float32{0, 9} // head B prefers the open column
+
+	out, err := dualLogits(names, []float32{50}, clsOf(cls), closedOfCol, openCol,
+		claimThreshold(1.0), q, c)
+	if err != nil {
+		t.Fatalf("dualLogits: %v", err)
+	}
+	cols, _ := won(t, out, q, c)
+	if cols[0] != 1 {
+		t.Errorf("named column %d, want 1 — at claim_threshold 1.0 the closed head must decline "+
+			"even a score of 50", cols[0])
+	}
+	// And the default must still claim it, or the test above proves nothing.
+	out, err = dualLogits(names, []float32{50}, clsOf(cls), closedOfCol, openCol,
+		claimThreshold(0), q, c)
+	if err != nil {
+		t.Fatalf("dualLogits: %v", err)
+	}
+	if cols, _ = won(t, out, q, c); cols[0] != 0 {
+		t.Errorf("at the default the closed head should claim a score of 50, got column %d", cols[0])
 	}
 }
