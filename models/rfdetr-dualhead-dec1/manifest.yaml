@@ -44,9 +44,21 @@ input:
 postprocess:
   type: detr
   box_format: cxcywh
-  # Thresholds the DETECTOR's objectness, as `gated`/`dual` do. dec1 was fine-tuned with the
-  # encoder and box head frozen so its logits sit low; 0.35 is the value tuned for the sibling.
-  conf_threshold: 0.35
+  # THIS THRESHOLD DECIDES WHETHER THE OPEN HEAD RUNS AT ALL, which is not obvious and is not
+  # local to this block. For a prompt covering the base vocabulary the closed head's claim score
+  # IS the objectness — both are the max over the same class logits — so anything surviving
+  # conf_threshold automatically clears claim_threshold (default 0.15) and the closed head takes
+  # every detection. At 0.35 this model returned a stream byte-identical to the plain closed
+  # detector: the crop head was loaded, resident in VRAM, and dead.
+  #
+  # 0.05 keeps it reachable. It is below the 0.15 default claim, so a box can survive selection
+  # and still be declined by the closed head.
+  #
+  # The cost of the lower threshold is real but small at this operating point: measured, held-out
+  # objects sit at median objectness 0.033 against 0.891 for trained ones, a 27x gap, so a
+  # threshold tuned for trained classes discards essentially every unseen object. 7.6% of
+  # held-out ground truth clears 0.35; 96.6% of trained ground truth does.
+  conf_threshold: 0.05
   max_detections: 300
 
 labels: labels.txt

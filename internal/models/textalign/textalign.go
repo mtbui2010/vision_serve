@@ -57,6 +57,7 @@ package textalign
 import (
 	"fmt"
 	"image"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -151,7 +152,7 @@ func New(cfg models.Config) (models.Base, error) {
 		return nil, err
 	}
 
-	return &textAlign{
+	m := &textAlign{
 		cfg:       cfg,
 		proj:      proj,
 		tok:       tok,
@@ -159,7 +160,38 @@ func New(cfg models.Config) (models.Base, error) {
 		base:      base,
 		baseVocab: baseVocab(cfg.Labels),
 		cache:     map[string]*head{},
-	}, nil
+	}
+	warnDeadOpenHead(cfg)
+	return m, nil
+}
+
+// warnDeadOpenHead catches a configuration whose open head can never fire.
+//
+// For a prompt containing the whole base vocabulary — the ordinary open-vocabulary case — the
+// closed head's claim score IS the objectness, because both are the max over the same class
+// logits. So every detection that survives `conf_threshold` automatically clears any
+// `claim_threshold` at or below it, the closed head takes all of them, and the crop head is
+// unreachable BY CONSTRUCTION rather than by tuning.
+//
+// Measured: at conf_threshold 0.35 with the default claim 0.15, the crop model returned a
+// detection stream byte-identical to the plain closed detector. The feature was wired, loaded,
+// paid for in VRAM, and dead. Nothing in the manifest hints at the coupling, because the two
+// knobs are set in different places and neither mentions the other.
+func warnDeadOpenHead(cfg models.Config) {
+	if strings.TrimSpace(cfg.Files[roleCrop]) == "" || cfg.ConfThresh <= 0 {
+		return
+	}
+	claim := 1 / (1 + math.Exp(-float64(dualClaimThresh))) // the default, as a probability
+	if claim > cfg.ConfThresh {
+		return
+	}
+	fmt.Fprintf(os.Stderr,
+		"textalign: WARNING %s has a crop head, but claim_threshold (%.3g) <= conf_threshold "+
+			"(%.3g). For a prompt covering the base vocabulary the claim score IS the objectness, "+
+			"so everything that survives conf_threshold is claimed by the closed head and the open "+
+			"head never runs. Lower conf_threshold below %.3g, or raise claim_threshold per "+
+			"request.\n",
+		cfg.Name, claim, cfg.ConfThresh, claim)
 }
 
 // newRFDETR builds an rf-detr sub-model carrying `labels` as its class names. It owns no
