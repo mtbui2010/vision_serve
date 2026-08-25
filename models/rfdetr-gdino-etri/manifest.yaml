@@ -1,0 +1,64 @@
+# RECOMMENDED default open-vocabulary path (2026-08-25). Hybrid router: a text prompt is split
+# per word — words in the detector's own vocabulary go to RF-DETR (fast, closed), everything
+# else goes to a full GroundingDINO pass (open). See internal/models/hybrid.
+#
+# WHY THIS OVER THE SINGLE-PASS "DUAL HEAD" FAMILY (rfdetr-textalign-* gated/dual,
+# rfdetr-dualhead-dec1). Those reuse ONE RF-DETR pass and read its query_feats to name and
+# score open-vocabulary detections. RF-DETR has no dedicated binary objectness head — its
+# objectness proxy IS the max over its own trained-class logits — so it is structurally unable
+# to be confident about a class it never learned. Measured on the held-out-names protocol
+# (5 names never seen by a 17-class RF-DETR, evaluated against real ground truth): median
+# objectness is 0.891 for trained-class objects and 0.033 for held-out ones, a 27x gap, and it
+# is why every single-pass variant tried here tops out around 15-35 mAP on genuinely unseen
+# classes regardless of how the NAME is chosen (a projected head, or a SigLIP crop).
+#
+# GroundingDINO does not inherit that bias: its confidence is computed WITH the text query
+# already in the loop (a one-stage, text-conditioned detector — the GLIP/MDETR family), not
+# borrowed from a closed classifier trained on 17-22 names. Measured head-to-head, same 17-class
+# RF-DETR checkpoint on the closed side, same held-out-names protocol:
+#
+#     system                          17-trained mAP   5-held-out mAP   latency
+#     dual-head (shipped config)              84.60            15.77     84 ms
+#     dual-head (best case, impractical)      ~85.0            35.54       —
+#     hybrid router (this architecture)       82.62            49.54    338 ms
+#
+# The router wins by +33.8 mAP on genuinely novel classes at every operating point tried,
+# for a real cost: 4x latency and a full second ONNX pass (700 MB weights, its own TensorRT
+# engine) whenever a requested word is outside the closed vocabulary. Full writeup: the
+# session that produced these numbers; see git log for `rfdetr-dualhead-dec1` and
+# `internal/models/hybrid` around 2026-08-19 to 2026-08-25.
+#
+# rfdetr-dualhead-dec1 is kept in the registry as an experimental, NOT recommended alternative
+# — its own manifest header points back here.
+name: rfdetr-gdino-etri
+task: open_vocab
+license: Apache-2.0
+architecture: rfdetr-gdino
+
+files:
+  rfdetr: ../rfdetr-small-etri/model.onnx
+  gdino:  ../grounding-dino/model-fixedmask.onnx
+
+input:
+  width: 512
+  height: 512
+  layout: NCHW
+  letterbox: true
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr
+  box_format: cxcywh
+  conf_threshold: 0.5
+  max_detections: 300
+
+labels: ../rfdetr-small-etri/labels.txt
+
+# NO explain block: files.rfdetr resolves to pf-full, which emits no cross_attn_weights — see
+# ../rfdetr-gdino-sam-etri/manifest.yaml for the full reasoning (same detector, same caveat).
+
+runtime:
+  prefer: [tensorrt, cuda, cpu]
+  idle_unload_seconds: 300

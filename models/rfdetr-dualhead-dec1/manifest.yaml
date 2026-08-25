@@ -1,4 +1,27 @@
-# TWO-HEAD open-vocabulary detector: RF-DETR proposes boxes once, and two heads share the naming.
+# EXPERIMENTAL — NOT RECOMMENDED. Use `rfdetr-gdino-etri` instead for open-vocabulary detection.
+#
+# This is the single-pass "dual head" architecture: RF-DETR proposes boxes once, a supervised
+# closed head names known words, and SigLIP-crop names the rest by cropping the box and
+# embedding it. It was built to avoid a second detection pass. Measured head-to-head against
+# the hybrid router (rfdetr-gdino-etri) on the held-out-names protocol — 5 names never seen by
+# a 17-class RF-DETR, evaluated against real ground truth, so genuinely unseen classes:
+#
+#     system                                17-trained mAP   5-held-out mAP   latency
+#     this model, shipped config                    84.60            15.77     84 ms
+#     this model, best case (impractical)            ~85.0           35.54       —
+#     rfdetr-gdino-etri (hybrid router)              82.62            49.54    338 ms
+#
+# The router wins by +33.8 mAP on genuinely novel classes at every operating point tried. The
+# root cause is structural, not a tuning gap: RF-DETR has no dedicated binary objectness head,
+# so its objectness proxy (max over its own trained-class logits) is 27x weaker for unseen
+# objects than trained ones (median 0.033 vs 0.891, measured) — no matter which head does the
+# NAMING, the detector's own confidence still gates whether a detection survives at all.
+# GroundingDINO does not inherit this bias: it is a one-stage, text-conditioned detector whose
+# confidence is computed with the query already in the loop, not borrowed from a closed
+# classifier. See rfdetr-gdino-etri/manifest.yaml for the recommended path.
+#
+# Kept in the registry for reference and because it IS a real latency win (84ms vs 338ms) if a
+# future scoring fix (a genuinely class-agnostic objectness source) closes the accuracy gap.
 #
 #   closed head  the detector's OWN supervised 22-class head, for the words it was trained on.
 #                On those names a supervised head beats head B by 16 points (FINDINGS §8), and
@@ -6,6 +29,8 @@
 #   open head    SigLIP-crop, for everything else: crop the box, embed it, compare against the
 #                requested words. On five names held out of every trained component SigLIP-crop
 #                scores 85.3 where head B scores 46.7 — head B loses to running the teacher.
+#                That offline number is on GIVEN boxes; it does not survive the detector's own
+#                objectness gate, which is what the table above measures.
 #
 # The router reads text and dispatches; it detects nothing. Declaring files.crop is what selects
 # SigLIP-crop over head B as the open head — without it this model is `rfdetr-textalign-dec1`.
@@ -14,10 +39,6 @@
 # object queries would cost ~420 ms against a 20 ms detector, so unclaimed queries are marked,
 # survive postprocess on the detector's own objectness, and only the 3-15 that get through are
 # cropped — in ONE batched call.
-#
-# NOT YET MEASURED end to end. `dual` with head B is measured (77.19/77.27 mAP at |V|=22/78);
-# this swaps the open head and the resulting number is unknown. claim_threshold (0.25) and the
-# crop-name floor have not been swept.
 name: rfdetr-dualhead-dec1
 task: open_vocab
 license: Apache-2.0

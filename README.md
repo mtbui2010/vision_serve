@@ -723,6 +723,7 @@ Quick reference for choosing the right model. All models are free (Apache-2.0 / 
 | Best COCO accuracy | `rf-detr` | 53.4 AP, NMS-free, 560×560 |
 | Balanced accuracy + speed | `rt-detr` | 53.0 AP, NMS-free, COCO-80, 640×640 |
 | No fixed class list (text query) | `grounding-dino` | zero-shot: `"cat. remote."` → boxes |
+| **Mix of known + novel classes** | `rfdetr-gdino` | hybrid router — known words go to RF-DETR (fast), unknown words to GroundingDINO (open-vocab); pays GroundingDINO's cost only when a request actually needs it |
 | Face detection | `scrfd` | WiderFace-tuned, returns 5 keypoints |
 
 ### Segmentation
