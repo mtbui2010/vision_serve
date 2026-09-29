@@ -71,7 +71,10 @@ docker exec -it visionserve visionserve pull rt-detr          # detection, COCO-
 docker exec -it visionserve visionserve pull mobile-sam       # segmentation
 docker exec -it visionserve visionserve pull efficient-sam    # segmentation
 docker exec -it visionserve visionserve pull sam2             # segmentation (SAM2)
-docker exec -it visionserve visionserve pull grounding-dino   # open-vocab detection
+docker exec -it visionserve visionserve pull grounding-dino   # open-vocab detection (alias: groundingdino)
+docker exec -it visionserve visionserve pull rfdetr-small-etri  # detection, 22 tabletop classes
+docker exec -it visionserve visionserve pull siglip-image     # SigLIP image tower (crop embeddings)
+docker exec -it visionserve visionserve pull siglip-text      # SigLIP text tower + Go tokenizer
 docker exec -it visionserve visionserve pull midas            # depth estimation
 docker exec -it visionserve visionserve pull depth-anything-v2
 docker exec -it visionserve visionserve pull efficientnet-b0  # classification
@@ -80,11 +83,25 @@ docker exec -it visionserve visionserve pull clip             # image embeddings
 docker exec -it visionserve visionserve pull scrfd            # face detection
 docker exec -it visionserve visionserve pull paddle-ocr       # OCR
 
-# Grounded-SAM (text → boxes → masks): pull dependencies first, then grounded-sam
-docker exec -it visionserve visionserve pull grounding-dino
-docker exec -it visionserve visionserve pull mobile-sam
-docker exec -it visionserve visionserve pull grounded-sam
+# Composed models — ONE command; missing dependencies are pulled automatically
+docker exec -it visionserve visionserve pull grounded-sam               # GroundingDINO → MobileSAM masks
+docker exec -it visionserve visionserve pull rfdetr-gdino               # hybrid router, COCO
+docker exec -it visionserve visionserve pull rfdetr-gdino-siglip        # + SigLIP-crop rescoring
+docker exec -it visionserve visionserve pull rfdetr-gdino-etri          # hybrid router, tabletop
+docker exec -it visionserve visionserve pull rfdetr-gdino-sam-etri      # + MobileSAM masks
+docker exec -it visionserve visionserve pull rfdetr-gdino-siglip-etri   # + SigLIP-crop rescoring
+docker exec -it visionserve visionserve pull rfdetr-gdino-siglip-sam-etri  # + rescoring + MobileSAM masks
+docker exec -it visionserve visionserve pull gdino-siglip               # GroundingDINO + SigLIP rescoring, no RF-DETR
+docker exec -it visionserve visionserve pull gdino-siglip-sam           # + MobileSAM masks
 ```
+
+`visionserve pull grounding-dino` (or `groundingdino`) always installs the **corrected**
+fixed-mask export (`mtbui2010/grounding-dino-tiny-fixedmask-ONNX`), never the onnx-community
+graph that only masks the first phrase. A dependency that is already installed is reused, not
+re-downloaded. Re-pulling a model refreshes a `manifest.yaml` that `pull` generated when the
+catalog changed (e.g. an old GroundingDINO install pointing at `model.onnx`); a manifest you
+edited by hand is kept unless you pass `--force`. If a composed model reports a missing file
+inside a dependency, re-pull that dependency with `--force`, as the message says.
 
 ### Step 3 — Call the API
 
@@ -153,6 +170,51 @@ docker run -d \
 
 ---
 
+## Updating to a new release
+
+Run the server from a small compose file, so you can update with one command whenever a new
+image is published. Create `~/visionserve/compose.yaml`:
+
+```yaml
+services:
+  visionserve:
+    image: mtbui2010/visionserve:latest
+    container_name: visionserve
+    command: ["serve", "--addr", ":11435", "--idle-unload-seconds", "0"]
+    ports: ["11435:11435"]
+    volumes: ["${HOME}/.visionserve_models:/root/.models"]
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+```
+
+- `${HOME}/.visionserve_models` is where your pulled models live on the host. They are kept
+  across updates, so you do not need to pull them again.
+- CPU-only machine: use `mtbui2010/visionserve:latest-cpu` and delete the `deploy:` block.
+
+Start it the first time with `cd ~/visionserve && docker compose up -d`. After that, each time a
+new version is released, one command updates it:
+
+```bash
+cd ~/visionserve && docker compose pull && docker compose up -d && docker image prune -f
+```
+
+This downloads the new image, recreates the container from it, and deletes the old image.
+
+Or add an alias to `~/.bashrc` and run `update_visionserve`:
+
+```bash
+alias update_visionserve='docker compose -f ~/visionserve/compose.yaml pull && { docker rm -f visionserve >/dev/null 2>&1; docker compose -f ~/visionserve/compose.yaml up -d; } && docker image prune -f'
+```
+
+The `docker rm -f visionserve` step removes a container named `visionserve` that was started
+earlier with a plain `docker run`. Without it, `docker compose up` fails with a
+container-name conflict.
+
+---
+
 ## One-shot inference (no server)
 
 `visionserve run` loads the model in-process, infers, and exits:
@@ -177,20 +239,20 @@ docker run --rm --gpus all \
 ## GPU image details (x86-64)
 
 The GPU image (`latest` / `latest-gpu`) bundles **CUDA 12.4 + cuDNN 9** and includes
-`libonnxruntime_providers_tensorrt.so`. TensorRT EP is used **automatically** when
-`libnvinfer.so.10` is found on the host; otherwise VisionServe silently falls back to
-CUDA EP — no crash.
+`libonnxruntime_providers_tensorrt.so`, but **every shipped model prefers `[cuda, cpu]`**:
+TensorRT is only used if you put `tensorrt` in a manifest's `runtime.prefer` yourself.
 
-**Why TRT matters:** GroundingDINO and MobileSAM use custom attention ops that ORT's
-CUDA EP falls back to CPU for. Without TRT they run at CPU speed (~6 s GDINO, ~1.7 s SAM).
-With TRT: ~70 ms GDINO, ~160 ms SAM.
+**Why not TensorRT by default:** measured on GroundingDINO (same weights, 247 tabletop images),
+TensorRT is ~1.5x faster but drops boxes and scores unseen object names **6.8 mAP lower**
+(37.78 vs 44.61), and it rebuilds its engine for every new prompt length (10-40 s stalls). The
+CUDA EP runs GroundingDINO in ~150 ms and the SigLIP-rescored routers in ~200 ms per request.
 
 **Check TRT status:**
 ```bash
 docker exec visionserve visionserve version
 # TensorRT: available (/usr/lib/x86_64-linux-gnu/libnvinfer.so.10)
 # — or —
-# TensorRT: not found — install for 10-50× faster GPU inference
+# TensorRT: not found — not needed: shipped models prefer [cuda, cpu]
 ```
 
 **To enable TRT:** install TensorRT 10.x on the host and mount the lib:

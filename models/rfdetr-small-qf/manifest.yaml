@@ -27,7 +27,7 @@ input:
   width: 512
   height: 512
   layout: NCHW
-  letterbox: true
+  letterbox: false     # squash, as RF-DETR is trained (square_resize_div_64) — BUGS_TO_FIX.md #1
   normalize:
     mean: [0.485, 0.456, 0.406]
     std: [0.229, 0.224, 0.225]
@@ -41,7 +41,7 @@ postprocess:
 labels: labels.txt
 
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300
 
 explain:

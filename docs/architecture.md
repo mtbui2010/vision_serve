@@ -192,7 +192,7 @@ Open-vocab detection populates `Detections` (text → boxes); Grounded-SAM popul
 | `server` | REST API, JSON | unified `Result` schema; parses `prompt`/`box`/`point` |
 | `registry` | scan + validate manifests | **rejects AGPL / non-permissive licenses**, checks ONNX files (incl. multi-file `files:`) |
 | `lifecycle` | load/unload, idle reaper, role→`engine.Session`, `Runner` | **every ONNX session goes through here** (simple and pipeline) |
-| `engine` | wraps ONNX Runtime | EP fallback chain (e.g. TensorRT→CUDA→CPU); supported EPs: tensorrt, cuda, coreml, directml, openvino, cpu; `Run` thread-safe |
+| `engine` | wraps ONNX Runtime | EP fallback chain (shipped default CUDA→CPU; TensorRT opt-in per manifest); supported EPs: tensorrt, cuda, coreml, directml, openvino, cpu; `Run` thread-safe |
 | `models/*` | per-architecture pre/postprocess (`Model`) or `Infer` orchestration (`PipelineModel`) | implement interface + `Register()` |
 | `imageproc` | letterbox/resize/nms/tensor/RLE/draw | pure Go, no cgo |
 | `extension` | community extension hooks | no-op by default |

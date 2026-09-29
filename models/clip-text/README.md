@@ -153,7 +153,7 @@ is — is unaffected; decomposed input (`"e"` + U+0301 rather than `"é"`) can d
     },
     InputWidth: 77, InputHeight: 1, InputLayout: "NCHW",
     PostprocessType:   "embed",
-    RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+    RuntimePrefer:     []string{"cuda", "cpu"},
     IdleUnloadSeconds: 300,
     Verified:          true,
 },

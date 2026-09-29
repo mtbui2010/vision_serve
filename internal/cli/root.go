@@ -11,7 +11,7 @@ import (
 )
 
 // Version is the binary version (overridden at build time via -ldflags).
-var Version = "0.1.14-dev"
+var Version = "0.1.17-dev"
 
 const usage = `visionserve — Ollama for Computer Vision (local-first, edge-GPU)
 
@@ -64,8 +64,8 @@ func Execute(args []string) error {
 		if engine.TRTAvailable() {
 			fmt.Printf("TensorRT: available (%s)\n", engine.TRTLibPath())
 		} else {
-			fmt.Println("TensorRT: not found — install for 10-50× faster GPU inference")
-			fmt.Println("          check LD_LIBRARY_PATH or visit https://developer.nvidia.com/tensorrt")
+			fmt.Println("TensorRT: not found — not needed: shipped models prefer [cuda, cpu]")
+			fmt.Println("          (opt in per manifest via runtime.prefer; https://developer.nvidia.com/tensorrt)")
 		}
 		return nil
 	case "help", "--help", "-h":

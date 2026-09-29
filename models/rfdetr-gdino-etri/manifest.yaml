@@ -17,6 +17,14 @@
 # borrowed from a closed classifier trained on 17-22 names. Measured head-to-head, same 17-class
 # RF-DETR checkpoint on the closed side, same held-out-names protocol:
 #
+# NOTE (3 Sep 2026): the dual head's 15.77 was measured with a SigLIP tokenizer that padded
+# prompts with "<pad>" (id 0) where this checkpoint pads with "</s>" (id 1) — every text
+# embedding was plausible and wrong. Fixed in internal/models/siglip; re-measured at the same
+# configuration the number is 84.99 / 17.98, so the router's margin is +31.6, not +33.8. The
+# conclusion is unchanged (the dual head's failure is RF-DETR's objectness proxy, which no text
+# tower touches) but the old figures below are superseded. See
+# ovd-edge/docs/FINDINGS.md §2b and ovd-edge/experiments/dualhead_recheck.json.
+#
 #     system                          17-trained mAP   5-held-out mAP   latency
 #     dual-head (shipped config)              84.60            15.77     84 ms
 #     dual-head (best case, impractical)      ~85.0            35.54       —
@@ -43,7 +51,7 @@ input:
   width: 512
   height: 512
   layout: NCHW
-  letterbox: true
+  letterbox: false     # squash, as RF-DETR is trained (square_resize_div_64) — BUGS_TO_FIX.md #1
   normalize:
     mean: [0.485, 0.456, 0.406]
     std: [0.229, 0.224, 0.225]
@@ -59,6 +67,18 @@ labels: ../rfdetr-small-etri/labels.txt
 # NO explain block: files.rfdetr resolves to pf-full, which emits no cross_attn_weights — see
 # ../rfdetr-gdino-sam-etri/manifest.yaml for the full reasoning (same detector, same caveat).
 
+# EXECUTION PROVIDER: cuda, NOT tensorrt (owner's decision, 29 Sep 2026: every model moved to
+# [cuda, cpu]). The figures quoted above are CUDA figures, and TensorRT does not reproduce them on
+# the open branch. Re-measured 29 Sep 2026, served, held-out-names protocol (247 images, 17 trained
+# / 5 held-out names), letterbox: false, same weights, entries identical except runtime.prefer:
+#
+#     prefer                  17-trained   5-held-out   median latency
+#     [cuda, cpu]                  89.75        49.54         177.7 ms   <- this manifest
+#     [tensorrt, cuda, cpu]        89.90        42.59         117.6 ms
+#
+# TensorRT is 1.5x faster and 6.95 mAP worse on the open (GroundingDINO) branch; both providers
+# return the same boxes, scored and labelled differently (ovd-edge/docs/FINDINGS.md §7b). Those
+# rows were taken with the protocol's own 17-name detector; the open-branch gap is GroundingDINO's.
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300

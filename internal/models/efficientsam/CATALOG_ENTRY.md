@@ -19,7 +19,7 @@ catalog is defined):
     InputHeight:         1024,
     InputLayout:         "NCHW",
     PostprocessType:     "sam",
-    RuntimePrefer:       []string{"tensorrt", "cuda", "cpu"},
+    RuntimePrefer:       []string{"cuda", "cpu"},
     IdleUnloadSeconds:   300,
     Verified:            false,
     Note: "Verify HF file names match encoder/decoder split before using. " +

@@ -166,6 +166,30 @@ var LicenseLedger = []LedgerEntry{
 			"b3321965003f11020701987a2de6e3d88f7c9a1298c1a7d4fec2d32e7f179987",
 		},
 	},
+
+	// --- first-party re-hosts (same caveat as grounding-dino-tiny-fixedmask above: auditing a
+	// repo you control certifies the weight LINEAGE, which the digests below then bind) ---
+	{SourcePrefix: "https://huggingface.co/mtbui2010/rfdetr-small-etri-ONNX/", License: "Apache-2.0",
+		LicenseURL: "https://github.com/roboflow/rf-detr/blob/main/LICENSE", AuditedBy: "tmbui", AuditedDate: "2026-09-29",
+		Note: "FIRST-PARTY fine-tune of Roboflow RF-DETR Small (Apache-2.0) on 22 tabletop classes; " +
+			"no third-party weights beyond the RF-DETR COCO checkpoint it starts from",
+		WeightSHA256: []string{
+			"c0373d2b8823767955e649fe03e43c3428cd9358c8ccf0ca906cad9fc1e5d3a9", // model.onnx
+			"fdd0d4e9dc1965b37e46959d1fd2f3964fb407e5b176ea84a357dbeb921d183e", // labels.txt
+		},
+	},
+	{SourcePrefix: "https://huggingface.co/mtbui2010/siglip-base-patch16-224-ONNX/", License: "Apache-2.0",
+		LicenseURL: "https://huggingface.co/google/siglip-base-patch16-224", AuditedBy: "tmbui", AuditedDate: "2026-09-29",
+		Note: "FIRST-PARTY ONNX export of both towers of google/siglip-base-patch16-224 (apache-2.0 on " +
+			"the model card, confirmed via the Hub API); weights unchanged, only the graph format differs",
+		WeightSHA256: []string{
+			"d13787ca7b0c0c3b780478f36b18bf729394752c0e868b0fc729e87122a338c9", // image/model.onnx
+			"4fbafa23edb2db76ee79def6879ea1717481380341b526890c8188363a298f84", // image/model.onnx.data
+			"7840f8ffa18f2d4b39f836ff8773c6dd8d01621703ce1675e7a56a44322f8878", // text/model.onnx
+			"e8ccd846fac6ceacb8add0fa809be25bfb91cc991fd06c86d1e8450f2afc2771", // text/model.onnx.data
+			"c6e405cb7c670d56636a9402c81023a55bc6c3c53d89cf02b92f5c5005bfe920", // text/tokenizer.json
+		},
+	},
 }
 
 // ledgerEnforced toggles the maintainer-audited cross-check. Off by default (local-first,

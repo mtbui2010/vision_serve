@@ -33,7 +33,7 @@ embedded (similar to coco91.txt — embed `labels/imagenet1k.txt`).
     MaxDetections:     5,
     LabelsFile:        "imagenet1k.txt",
     EmbeddedLabels:    imagenet1k, // embed labels/imagenet1k.txt (add //go:embed directive)
-    RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+    RuntimePrefer:     []string{"cuda", "cpu"},
     IdleUnloadSeconds: 300,
     Verified:          true,
 },
@@ -68,7 +68,7 @@ embedded (similar to coco91.txt — embed `labels/imagenet1k.txt`).
     MaxDetections:     5,
     LabelsFile:        "imagenet1k.txt",
     EmbeddedLabels:    imagenet1k, // embed labels/imagenet1k.txt (add //go:embed directive)
-    RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+    RuntimePrefer:     []string{"cuda", "cpu"},
     IdleUnloadSeconds: 300,
     Verified:          true,
 },

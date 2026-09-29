@@ -42,6 +42,12 @@ postprocess:
   conf_threshold: 0.3
   text_threshold: 0.25
 
+# CUDA, not TensorRT. Measured 29 Sep 2026, served, same weights, held-out-names protocol
+# (247 images, all 22 names in the prompt):
+#     [cuda, cpu]              45.25 17-trained / 44.61 5-held-out   1959 boxes   153 ms
+#     [tensorrt, cuda, cpu]    44.79            / 37.78              1716 boxes   104 ms
+# TensorRT drops 243 boxes and 6.83 mAP on the unseen names (BUGS_TO_FIX.md #3), and rebuilds its
+# engine for every new prompt length. The speed is not worth that.
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300

@@ -72,7 +72,7 @@ The weights are **not committed** (114 MB). To make this model pullable:
     Normalize:       &Normalize{Mean: [3]float64{0.485, 0.456, 0.406}, Std: [3]float64{0.229, 0.224, 0.225}},
     PostprocessType: "detr", BoxFormat: "cxcywh", ConfThreshold: 0.5, MaxDetections: 300,
     LabelsFile:      "labels.txt",
-    RuntimePrefer:   []string{"tensorrt", "cuda", "cpu"},
+    RuntimePrefer:   []string{"cuda", "cpu"},
     IdleUnloadSeconds: 300,
     Verified:          true,
 },

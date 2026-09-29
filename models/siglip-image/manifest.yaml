@@ -45,5 +45,5 @@ input:
 # resize+centre-crop are BOTH wrong here and fail silently: plausible embeddings, worse names.
 
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300

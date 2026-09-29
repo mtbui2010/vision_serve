@@ -1,0 +1,54 @@
+# GroundingDINO + SigLIP-crop rescoring, NO closed-set detector (Apache-2.0 throughout).
+#
+# Every requested word goes to GroundingDINO; every GroundingDINO detection is cropped, embedded
+# by the SigLIP vision tower, renamed to the best of the requested words and its confidence
+# multiplied by softmax(cos / crop_temp). It is ../rfdetr-gdino-siglip without the RF-DETR route:
+# for a domain no RF-DETR was trained on, where the router would send every word to
+# GroundingDINO anyway and the 560 COCO detector would only cost a pass.
+#
+# Why rescoring and not plain grounding-dino: GroundingDINO's failure on unfamiliar words is
+# REJECTION, not naming — most of its boxes land on nothing, and SigLIP's flat softmax on a
+# background crop sinks them below the true positives (ovd-edge/docs/FINDINGS.md §1-§2).
+#
+# MEASURED 29 Sep 2026, served, CUDA, held-out-names protocol (247 tabletop images; every one of
+# the 22 names goes to GroundingDINO here, the trained ones included):
+#
+#     GroundingDINO alone (same code path, no SigLIP)   45.25 17-trained / 44.61 5-held-out   159 ms
+#     THIS (crop_temp 0.05)                             57.41            / 61.07              223 ms
+#
+# Both rows return the same 1959 boxes: rescoring reorders them, it does not add any. On a domain
+# an RF-DETR WAS trained for, prefer the router: with the protocol's 17-name detector it scores
+# 89.75 / 62.47 (rfdetr-gdino-siglip-etri is that router with the 22-name detector).
+#
+# A text prompt is required ("cup. towel."); there is no closed vocabulary to answer an empty one.
+# crop_temp defaults to 0.05 (internal/models/hybrid/rescore.go) and stays a per-request field.
+#
+# LICENSES: GroundingDINO Apache-2.0 (model-fixedmask.onnx), SigLIP image/text Apache-2.0
+# (google/siglip-base-patch16-224).
+name: gdino-siglip
+task: open_vocab
+license: Apache-2.0
+architecture: gdino-siglip
+
+files:
+  gdino: ../grounding-dino/model-fixedmask.onnx
+  crop:  ../siglip-image/model.onnx
+  text:  ../siglip-text/model.onnx
+
+# Not read: GroundingDINO preprocesses to its own 800x800 and the SigLIP towers to 224x224. The
+# manifest validator requires the block, so it describes GroundingDINO's input.
+input:
+  width: 800
+  height: 800
+  layout: NCHW
+  letterbox: false
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+# CUDA, not TensorRT: the SigLIP text tower's batch is n_words x 10 templates, so every new word
+# COUNT is a new shape and TensorRT rebuilds (13.9-36.4 s stalls measured), and GroundingDINO
+# under TensorRT scores the open branch 6.95 mAP lower (BUGS_TO_FIX.md #3).
+runtime:
+  prefer: [cuda, cpu]
+  idle_unload_seconds: 300

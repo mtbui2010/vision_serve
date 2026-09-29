@@ -44,10 +44,9 @@ For text-driven segmentation (`"cat"` → mask), use the `grounded-sam` model in
 
 ## Expected speed
 
-On NVIDIA Jetson (TensorRT EP), NanoSAM is designed to run significantly faster than
-MobileSAM due to the smaller ResNet-18 encoder and TensorRT optimization. The
-`prefer: [tensorrt, cuda, cpu]` fallback chain in `manifest.yaml` ensures TRT is used
-when available and the model gracefully falls back to CUDA then CPU.
+NanoSAM is designed to run significantly faster than MobileSAM thanks to its smaller
+ResNet-18 encoder. The shipped manifest prefers `[cuda, cpu]`, like every model here; on a
+Jetson you may put `tensorrt` in front of that list, after checking its masks against CUDA's.
 
 ## How to get the ONNX files
 

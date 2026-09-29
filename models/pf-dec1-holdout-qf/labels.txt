@@ -1,0 +1,18 @@
+remote
+coffee
+phone
+banana
+cup
+water bottle
+juice bottle
+fork
+spoon
+snack box
+orange
+milk bottle
+coffee can
+medicine bottle
+apple
+sprite can
+cola can
+N/A

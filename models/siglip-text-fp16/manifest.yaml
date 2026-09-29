@@ -1,0 +1,50 @@
+# SigLIP text tower, fp16 — the same weights as ../siglip-text, halved in precision.
+#
+# WHY. Measured on an A6000 through ONNX Runtime's CUDA EP, batch 22 (the crop budget the fast
+# open branch uses, ovd-edge/docs/FINDINGS.md §11):
+#
+#     fp32   31.13 ms          fp16   16.58 ms          1.88x
+#
+# on 50 rows, which is the 5-word x 10-template ensemble the rescorer embeds. This tower is OFF
+# the critical path in the router -- hybrid/rescore.go caches embeddings per word list, so it
+# runs once per distinct vocabulary rather than once per request -- but it is 31 ms on the first
+# request for any new word list, and a user's prompt decides when that happens.
+#
+# ACCURACY. Verified the way ../siglip-image/README.md verifies the original — against the fp32
+# graph on identical inputs, with a cosine floor:
+#
+#     embedding cosine vs fp32:   mean 0.9999994   min 0.9999994    (the repo's floor is 0.9999)
+#
+# WHAT THIS IS NOT. fp16 in PyTorch on the same weights runs the same batch in 13.38 ms — 3.6x,
+# not 1.9x. ONNX Runtime does not close that gap, and it is not a precision problem: ORT already
+# has TF32 enabled (disabling it costs 1.5x), so the remaining ~1.9x against torch at matched
+# precision is an ORT kernel/layout issue and is still on the table. See FINDINGS §13.
+#
+# LICENSE: google/siglip-base-patch16-224, apache-2.0, unchanged — this is a precision cast of
+# the same weights, not a different checkpoint.
+#
+# WEIGHTS ARE NOT COMMITTED. Regenerate with onnxconverter_common:
+#   float16.convert_float_to_float16_model_path("../siglip-text/model.onnx", keep_io_types=True)
+# keep_io_types matters: the graph takes and returns fp32, so no caller changes.
+name: siglip-text-fp16
+task: embed
+license: apache-2.0
+architecture: siglip-text
+
+files:
+  model: model.onnx   # + siglip-text-fp16.data sidecar, same directory
+
+# No image input. As in ../siglip-text these describe the TOKEN input so the manifest validator
+# accepts it: 64 = SigLIP's context length. tokenizer.json is copied alongside, because
+# internal/models/siglip loads it from the model directory.
+input:
+  width: 64
+  height: 1
+  layout: NCHW
+
+runtime:
+  # cuda, not tensorrt: FINDINGS §7b measures the TensorRT provider costing 6.91 mAP on the open
+  # branch of this system, and §13 measures it returning NaN for GroundingDINO in fp16. The
+  # speedup here is from the precision, and needs no help from that provider.
+  prefer: [cuda, cpu]
+  idle_unload_seconds: 300

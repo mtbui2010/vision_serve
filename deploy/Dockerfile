@@ -4,8 +4,9 @@
 #   cpu (default): slim Debian + ONNX Runtime CPU build.            ~141 MB
 #   gpu           : CUDA 12.4 + cuDNN 9 + TensorRT 10 + ORT GPU.   ~3-5 GB
 #
-# The GPU variant includes libnvinfer.so.10 so the TensorRT EP is usable
-# (TRT is the fastest ORT EP: ~2-4× over the plain CUDA EP).
+# The GPU variant includes the TensorRT provider so it can be opted into per manifest; every
+# shipped manifest prefers [cuda, cpu] (TensorRT measured ~1.5x faster but 6.8 mAP lower on
+# GroundingDINO, and rebuilds its engine per prompt length).
 #
 # Usage:
 #   # CPU image (default):

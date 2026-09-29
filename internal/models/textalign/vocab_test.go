@@ -58,7 +58,7 @@ func newTestModel(t *testing.T, pr *Projection, templates []string) *textAlign {
 		t.Skipf("no CLIP tokenizer assets in %s: %v", dir, err)
 	}
 	cfg := models.Config{Name: "ta-test", Width: 512, Height: 512, BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300}
-	return &textAlign{cfg: cfg, proj: pr, tok: tok, tmpl: templates, cache: map[string]*head{}}
+	return &textAlign{cfg: cfg, proj: pr, tok: clipTokenizer{tok}, tmpl: templates, cache: map[string]*head{}}
 }
 
 // TestHeadForCachesVocabularies is the "one clip-text call per NEW vocabulary, never per

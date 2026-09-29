@@ -23,7 +23,7 @@ Add the following entry to the builtin slice in `internal/catalog/catalog.go`:
     ConfThreshold:   0.5,
     MaxDetections:   300,
     LabelsFile:      "coco80.txt",
-    RuntimePrefer:   []string{"tensorrt", "cuda", "cpu"},
+    RuntimePrefer:   []string{"cuda", "cpu"},
     IdleUnloadSeconds: 300,
     Verified:        true,
 },

@@ -1,0 +1,76 @@
+# The router with the GroundingDINO pass REPLACED by a distilled head — the fast open branch of
+# ovd-edge/docs/FINDINGS.md §10-§11, wired for the held-out-names protocol.
+#
+# Known words go to RF-DETR's supervised head, exactly as in ../rfdetr-gdino-siglip-etri. Unknown
+# words are answered by the distilled head (`head.onnx`, exported from `head.bin`) reading the
+# query features that SAME forward pass already produced, then rescored by SigLIP. GroundingDINO
+# is never consulted for them.
+#
+#     open branch                  5-held-out mAP    cost
+#     GroundingDINO + SigLIP               60.94     ~96 ms forward + crops
+#     distilled head + SigLIP, K=22        46.33     0.06 ms matmul + crops
+#     distilled head alone                 21.53     0.06 ms
+#
+# The head is worth 21.53 by itself and 46.33 with the rescorer on top, so this manifest REFUSES
+# to load without files.crop and files.text. That is not tidiness: serving the head alone would
+# give under half of what the configuration is worth, silently.
+#
+# WHY THE FEATURES ARE FREE. The detector runs once and serves both branches. FINDINGS §13
+# measures the head at 0.063 ms on GPU — an earlier numpy-on-CPU measurement said 7.85 ms and was
+# 230x wrong, which is why the number is quoted from the corrected source.
+#
+# CROP BUDGET. The head ranks 300 queries; the rescorer crops the top 22 (hybrid's
+# defaultBudget). §11's curve: 9 boxes reach 42.86, 22 reach 46.33, 44 reach 46.41 for twice the
+# crop cost. 44 is strictly dominated — it costs what a GroundingDINO pass costs and scores below
+# one — so it is deliberately not the default.
+#
+# THIS IS AN EXPERIMENTAL ENTRY. Every number above is an offline computation on stored features
+# (FINDINGS §10-§11); this manifest exists so they can be checked in a served system, which no
+# number here has been. `ovd-edge/experiments/ship_verify.py` is the harness that does it.
+#
+# LICENSES: RF-DETR Apache-2.0, SigLIP apache-2.0. The head is trained from GroundingDINO's
+# outputs (Apache-2.0) on COCO images and carries no third-party weights.
+name: rfdetr-gdino-fastpath
+task: open_vocab
+license: Apache-2.0
+architecture: rfdetr-gdino
+
+# files.gdino is still required by the architecture and is still the route for anything the head
+# cannot serve; with the head present it is not consulted for out-of-vocabulary words.
+#
+# files.head is the distilled head as ONNX, run by ONNX Runtime on the same provider chain as the
+# detector (BUGS_TO_FIX #4). It is head.bin exported by export_head_onnx.py in this directory —
+# re-run that script whenever head.bin changes; it prints the max abs diff against the Go math.
+# Remove the line to fall back to scoring head.bin in scalar Go (~19 ms per request).
+files:
+  head:   head.onnx
+  rfdetr: /home/trung/trung_workdir/vision_serve/models/rfdetr-textalign-dec1-siglip/detector.onnx
+  gdino:  /home/trung/trung_workdir/vision_serve/models/grounding-dino/model-fixedmask.onnx
+  crop:   /home/trung/trung_workdir/vision_serve/models/siglip-image-fp16/model.onnx
+  text:   /home/trung/trung_workdir/vision_serve/models/siglip-text-fp16/model.onnx
+
+input:
+  width: 512
+  height: 512
+  layout: NCHW
+  letterbox: false     # squash, as RF-DETR is trained (square_resize_div_64) — BUGS_TO_FIX.md #1
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr
+  box_format: cxcywh
+  # 0.35 is the CLOSED branch's threshold and nothing else's. An earlier version of this file
+  # set 0.001 so the head's own scores would survive postprocess; that leaked into RF-DETR's
+  # supervised head and moved the 17-name control from 82.62 to 84.79. The head now carries its
+  # own threshold in code (hybrid/fastpath.go::newRFDETRWithLabels), which is where a
+  # per-branch calibration belongs.
+  conf_threshold: 0.35
+  max_detections: 300
+
+labels: /home/trung/trung_workdir/vision_serve/models/rfdetr-textalign-dec1-siglip/labels.txt
+
+runtime:
+  prefer: [cuda, cpu]
+  idle_unload_seconds: 0

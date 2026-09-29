@@ -58,8 +58,8 @@ else
 fi
 # 3) Add TensorRT 10 libs (libnvinfer.so.10, libnvonnxparser.so.10). Same "find the wheel
 # dir" dance as cuDNN above: the `tensorrt-cu12-libs` wheel installs them into
-# site-packages/tensorrt_libs/. This is OPTIONAL — the manifest chain is tensorrt → cuda →
-# cpu, so a missing TensorRT is a warning, not an error. Override with
+# site-packages/tensorrt_libs/. This is OPTIONAL — shipped manifests prefer [cuda, cpu] and
+# only a manifest that lists tensorrt uses it, so a missing TensorRT is a warning, not an error. Override with
 # VISIONSERVE_TRT_LIBS=/path/to/tensorrt/lib if TRT is installed outside a wheel
 # (e.g. an NVIDIA .tar.gz install, or JetPack's /usr/lib/aarch64-linux-gnu).
 if [ -n "${VISIONSERVE_TRT_LIBS:-}" ]; then

@@ -1,0 +1,85 @@
+# PROBE ONLY — identical to ../rfdetr-textalign-dec1 except conf_threshold 0.001, so
+# the precision/recall curve is complete for mAP and for threshold tuning. Not deployable:
+# it emits all 300 queries.
+# Text-aligned ("head B") open-vocabulary detection on the PARTIALLY fine-tuned RF-DETR
+# detector `dec1`. Architecture "rfdetr-textalign" (internal/models/textalign).
+#
+#   name(query i)  = argmax_c ⟨W_c, f_i⟩,  W = a·T̂P          <- head B, folded
+#   score(query i) = sigmoid( max_c logit_c^detector )        <- the detector's own head
+#
+# WHY THE SCORE AND THE NAME COME FROM DIFFERENT HEADS (method "gated", the default here).
+# Folding W = a·T̂P is exact for naming and wrong for ranking. With ρ = ‖P f‖,
+# s_fold − b = ρ·(s_exact − b) identically: ρ>0 is shared by every class, so the per-query
+# argmax is provably unchanged (measured: identical on 100.0000% of 358 held-out ETRI rows),
+# but ρ differs BETWEEN queries, so the cross-query order is not (Spearman 0.713, and only
+# 19 of the top 100 queries survive). rf-detr's postprocess uses one tensor for both jobs, so
+# "gated" hands it the detector's objectness as the score and head B's class as the name.
+# See internal/models/textalign/gated.go for the algebra and gated_test.go for the tests.
+#
+# WHY THIS DETECTOR. `dec1` is rf-detr-small fine-tuned on the 22 ETRI classes with the
+# backbone AND box head frozen, only the last decoder layer left trainable. Against the full
+# fine-tune it keeps generic objectness almost intact — 97.6 vs 68.1 class-agnostic recall at
+# IoU 0.5 on 21861 COCO val2017 novel boxes, where the untouched COCO-91 weights score 98.3 —
+# while a closed 22-class head on its features reads 84.6% against 2.2% frozen. Head B
+# trained on it beats the same head on the COCO-91 backbone by 12.1 points on ETRI and by
+# 24.5 on the 10 ETRI nouns COCO-91 has no counterpart for, for 5.8 points of COCO-novel
+# macro. Numbers and controls: paper/FINDINGS-2026-08.md §5–§6.
+#
+# Run:
+#   visionserve run rfdetr-textalign-dec1 img.png --prompt "cup. cola can. banana."
+#   --method gated (default) | exact | folded      <- see conf_threshold below before changing
+#
+# LICENSE: RF-DETR export Apache-2.0, CLIP ViT-B/32 text tower MIT — both permissive.
+# The manifest declares the more restrictive of the two, Apache-2.0.
+#
+# WEIGHTS ARE NOT COMMITTED (*.onnx is ignored). detector.onnx is the `dec1` checkpoint
+# re-exported with query_feats appended LAST; see README.md to regenerate.
+name: rfdetr-textalign-dec1-probe
+task: open_vocab
+license: Apache-2.0
+architecture: rfdetr-textalign
+
+# The detector MUST expose query_feats [1,300,256]. Unlike the sibling
+# rfdetr-textalign-etri, this export needs NO cross_attn_weights stripping: rfdetr's own
+# model.export() emits exactly (dets, labels, query_feats), so there is no 59 MB unread
+# tensor to pay for and no local stripped copy to keep in sync.
+#
+# `labels` [1,300,23] is NOT dead weight here — method "gated" reads it for the objectness
+# that drives selection. Removing it would silently force the exact/folded paths only.
+files:
+  rfdetr: detector.onnx
+  text:   ../clip-text/model.onnx
+
+input:
+  width: 512
+  height: 512
+  layout: NCHW
+  letterbox: false     # squash, as RF-DETR is trained (square_resize_div_64) — BUGS_TO_FIX.md #1
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr
+  box_format: cxcywh
+
+  # 0.5 IS CORRECT HERE, AND IT IS NOT THE SAME NUMBER AS THE SIBLING MODEL'S 0.28.
+  # Under the default method "gated" the thresholded quantity is sigmoid of the DETECTOR's
+  # own class logit, which is calibrated like any RF-DETR detector — so the ordinary 0.5
+  # applies. The sibling rfdetr-textalign-etri needs 0.28 because it thresholds head B's
+  # sigmoid(a·cos + b), whose max never exceeds 0.4997 on real data.
+  #
+  # CONSEQUENCE: switching this model to --method exact or --method folded WITHOUT lowering
+  # conf_threshold will return few or no detections. That is the calibration changing, not a
+  # regression. Re-tune on held-out images before shipping either of those paths.
+  conf_threshold: 0.001
+  max_detections: 300
+
+# Fallback vocabulary when a request carries no prompt ("N/A" is skipped). MUST be the
+# detector's own labels file, in the detector's own order: method "gated" indexes the class
+# tensor by these positions to find the background column.
+labels: labels.txt
+
+runtime:
+  prefer: [cuda, cpu]
+  idle_unload_seconds: 300

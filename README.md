@@ -637,7 +637,7 @@ When `device` is `gpu:0` (CUDA EP without TRT), a `hint` field is included recom
   "task": "segmentation",
   "model": "mobile-sam",
   "device": "gpu:0",
-  "hint": "TensorRT not found (libnvinfer.so.10) — install for 10-50× faster inference...",
+  "hint": "TensorRT not found (libnvinfer.so.10) — only needed by manifests that list tensorrt in runtime.prefer...",
   ...
 }
 ```
@@ -776,7 +776,8 @@ run. If an EP's libraries aren't present, the engine silently falls back to the 
 | `openvino` | **Intel** CPU / iGPU / VPU | |
 | `cpu` | any CPU | always-present final fallback |
 
-> Example fallback chains: `[tensorrt, cuda, cpu]` (NVIDIA/Jetson), `[coreml, cpu]` (Mac),
+> Example fallback chains: `[cuda, cpu]` (NVIDIA — the shipped default; add `tensorrt` in front
+> only after checking accuracy, it measured 6.8 mAP lower on GroundingDINO), `[coreml, cpu]` (Mac),
 > `[directml, cpu]` (Windows), `[openvino, cpu]` (Intel). The EP allowlist is enforced by
 > the registry — see [docs/manifest-spec.md](docs/manifest-spec.md). Wiring a new EP is
 > bounded by what the `yalue/onnxruntime_go` binding exposes (no ROCm yet, so AMD discrete

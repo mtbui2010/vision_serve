@@ -66,6 +66,7 @@ import (
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/models/clip"
+	"visionserve/internal/models/promptens"
 )
 
 func init() {
@@ -85,7 +86,7 @@ const (
 	// templates the head was trained against, so it ships next to proj.bin.
 	templatesFile = "templates.txt"
 	// templatePlaceholder is what applyTemplates substitutes the class name for.
-	templatePlaceholder = "{}"
+	templatePlaceholder = promptens.Placeholder
 
 	// maxVocabCache bounds the number of compiled vocabularies kept in memory
 	// (C×256 floats each — kilobytes; the bound exists to stop unbounded growth under
@@ -225,28 +226,7 @@ func baseVocab(labels []string) []string {
 // loadTemplates reads templates.txt (one template per line, "#" comments allowed); a
 // missing file yields defaultTemplates. Every template must contain "{}".
 func loadTemplates(path string) ([]string, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return defaultTemplates, nil
-		}
-		return nil, fmt.Errorf("textalign: cannot read %s: %w", path, err)
-	}
-	var out []string
-	for _, line := range strings.Split(string(raw), "\n") {
-		s := strings.TrimSpace(line)
-		if s == "" || strings.HasPrefix(s, "#") {
-			continue
-		}
-		if !strings.Contains(s, templatePlaceholder) {
-			return nil, fmt.Errorf("textalign: template %q in %s has no %s placeholder", s, path, templatePlaceholder)
-		}
-		out = append(out, s)
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("textalign: %s contains no templates", path)
-	}
-	return out, nil
+	return promptens.Load(path, defaultTemplates)
 }
 
 func (m *textAlign) Name() string      { return m.cfg.Name }

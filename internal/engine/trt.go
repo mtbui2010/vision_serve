@@ -39,7 +39,8 @@ func TRTHint() string {
 	if TRTAvailable() {
 		return ""
 	}
-	return "TensorRT not found (libnvinfer.so.10) — install for 10-50× faster inference on transformer models (GroundingDINO, MobileSAM). " +
+	return "TensorRT not found (libnvinfer.so.10) — only needed by manifests that list tensorrt in runtime.prefer " +
+		"(shipped models use [cuda, cpu]: TensorRT measured 6.8 mAP lower on GroundingDINO). " +
 		"Check LD_LIBRARY_PATH or install TensorRT: https://developer.nvidia.com/tensorrt"
 }
 

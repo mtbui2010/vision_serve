@@ -1,0 +1,95 @@
+# Hybrid RF-DETR + GroundingDINO router WITH SigLIP-crop rescoring (Apache-2.0 throughout).
+#
+# Identical routing to models/rfdetr-gdino — known words to RF-DETR, out-of-vocabulary words to
+# GroundingDINO — plus one step: every GroundingDINO detection is cropped, embedded by the SigLIP
+# vision tower, scored against the words GroundingDINO was actually asked about, renamed to the
+# argmax, and its confidence multiplied by softmax(cos / crop_temp).
+#
+# WHY IT IS A SEPARATE ENTRY and not a change to rfdetr-gdino: the two SigLIP towers are
+# ~800 MB of resident VRAM. That is the real cost of the feature — the compute is ~5 ms on a
+# 208-338 ms request — and it should be opted into, not inherited. `rfdetr-gdino` is unchanged
+# and stays the recommended default.
+#
+# WHAT IT BUYS, on the held-out-names protocol (ovd-edge/docs/PROTOCOL.md; 247 tabletop images,
+# 5 names held out of every trained component, evaluated against all 22):
+#
+#     hybrid router                 82.62 trained-17 mAP   49.54 held-out-5 mAP
+#     + SigLIP rescoring            82.62                  62.16                 (+12.6)
+#
+# The trained-17 column is a CONTROL and does not move: RF-DETR's detections are never touched.
+#
+# RE-MEASURED 29 Sep 2026 after the RF-DETR squash fix (letterbox: false) and the crop_temp default
+# moving 0.02 -> 0.05 (internal/models/hybrid/rescore.go): 89.75 / 49.54 without rescoring,
+# 89.75 / 62.47 with it. Protocol numbers, taken with its 17-name 512 detector.
+#
+# And the decomposition, which is the point (ovd-edge/docs/FINDINGS.md §1-§2). GroundingDINO
+# already covers 90.2 % of the held-out ground truth and already names 83.6 % of its landing
+# boxes correctly; perfect naming would be worth only +7.6 mAP. 538 of its 849 boxes land on
+# nothing, and perfect rejection would be worth +27.6. Measured separately, SigLIP renaming
+# alone is worth +1.4 and rescoring alone +8.8. It earns its place as a REJECTOR.
+#
+# LICENSES — every component is inside the CLAUDE.md allowlist:
+#   RF-DETR            Apache-2.0
+#   GroundingDINO      Apache-2.0   (model-fixedmask.onnx, the corrected joint-text-pass export)
+#   SigLIP image/text  Apache-2.0   (google/siglip-base-patch16-224, both towers, one download)
+#
+# Weights are NOT committed. Download per models/{rf-detr,grounding-dino,siglip-image,
+# siglip-text}/README.md; this manifest references them by relative path.
+name: rfdetr-gdino-siglip
+task: open_vocab
+license: Apache-2.0
+architecture: rfdetr-gdino
+
+# Four ONNX graphs by role. `crop` and `text` are the optional pair that switches rescoring on —
+# BOTH are required together (a crop tower has nothing to score against on its own, and the
+# model rejects the half-configuration at load rather than serving a silent no-op).
+files:
+  rfdetr: ../rf-detr/rf-detr-base-real.onnx
+  gdino:  ../grounding-dino/model-fixedmask.onnx
+  crop:   ../siglip-image/model.onnx
+  text:   ../siglip-text/model.onnx
+
+# RF-DETR's preprocessing/postprocess values; GroundingDINO and the SigLIP towers ignore this
+# block and use their own (800x800 and 224x224 respectively). Keep in sync with
+# models/rf-detr/manifest.yaml.
+input:
+  width: 560
+  height: 560
+  layout: NCHW
+  letterbox: false     # squash, as RF-DETR is trained (square_resize_div_64) — BUGS_TO_FIX.md #1
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std:  [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr
+  box_format: cxcywh
+  conf_threshold: 0.5
+  max_detections: 300
+
+# RF-DETR's 91-line COCO labels — also the routing vocabulary (index 0 = N/A, skipped).
+labels: ../rf-detr/coco91.txt
+
+# EXECUTION PROVIDER: cuda, NOT tensorrt, and this is a correctness choice rather than a
+# preference. Two things were measured on 4 Sep 2026 and either alone would decide it.
+#
+#  1. GroundingDINO's output DIFFERS between the two providers, and not slightly. One COCO
+#     living-room image, prompt "curtain. lamp. cushion.", identical weights and manifest:
+#         tensorrt   1 detection   (curtain 0.396)
+#         cuda       5 detections  (lamp 0.624 / lamp 0.486 / curtain 0.331 / cushion 0.330 /
+#                                   lamp 0.312)
+#     The lamps are really there. The same 1-vs-5 split appears with and without the rescorer,
+#     so it is GroundingDINO and not the SigLIP stage. See ovd-edge/docs/FINDINGS.md §7.
+#
+#  2. Every number this manifest advertises was measured on the CUDA provider
+#     (ovd-edge/registries/reg_ship, prefer [cuda, cpu]). Shipping tensorrt would ship something
+#     that was never verified.
+#
+# There is also a latency reason, which on its own would NOT have been enough: the SigLIP text
+# tower is fed [n_unknown_words x 10 templates, 64], so a new unknown-word COUNT is a new shape,
+# and TensorRT rebuilds. Measured on this manifest: 13.9 s at 10 rows and 36.4 s at 40 rows,
+# between 150 ms requests. On CUDA there is one cold load and then 191-856 ms at every count.
+# The user's prompt decides that count, so the stall is not something a warm-up can retire.
+runtime:
+  prefer: [cuda, cpu]
+  idle_unload_seconds: 300

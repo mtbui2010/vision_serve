@@ -56,7 +56,8 @@
       "Bash(tegrastats *)",
       "Bash(tegrastats)",
       "Bash(dpkg -l)",
-      "Bash(dpkg -l *)"
+      "Bash(dpkg -l *)",
+      "Bash(source ~/miniconda3/etc/profile.d/conda.sh)"
     ]
   }
 }

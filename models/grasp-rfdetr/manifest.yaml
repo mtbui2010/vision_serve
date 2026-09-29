@@ -52,5 +52,5 @@ grasp:
   gripper_max: 150         # a request may override via gripper_min / gripper_max
 
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300

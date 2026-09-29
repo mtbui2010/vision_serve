@@ -60,13 +60,12 @@ func runServe(args []string) error {
 	// Background: check TRT availability and log a recommendation if absent.
 	// Runs in a goroutine so it never delays server startup or the first request.
 	go func() {
+		// Shipped manifests prefer [cuda, cpu]: TensorRT measured faster but 6.8 mAP worse on
+		// GroundingDINO's unseen names (BUGS_TO_FIX.md #3), so it is opt-in per manifest.
 		if engine.TRTAvailable() {
-			log.Printf("GPU: TensorRT found (%s) — TRT EP enabled for maximum performance", engine.TRTLibPath())
+			log.Printf("GPU: TensorRT found (%s) — used only by manifests whose runtime.prefer lists tensorrt", engine.TRTLibPath())
 		} else {
-			log.Println("GPU: TensorRT (libnvinfer.so.10) not found — using CUDA EP only")
-			log.Println("     For 10-50× faster inference on transformer models, install TensorRT:")
-			log.Println("     • Check LD_LIBRARY_PATH includes the TRT lib directory")
-			log.Println("     • Or install: https://developer.nvidia.com/tensorrt")
+			log.Println("GPU: TensorRT (libnvinfer.so.10) not found — CUDA EP (the default for every shipped model)")
 		}
 	}()
 

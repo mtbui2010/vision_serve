@@ -1,13 +1,12 @@
 package textalign
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"strings"
 
 	"visionserve/internal/models"
+	"visionserve/internal/models/promptens"
 )
 
 // head is one vocabulary, compiled for deployment: the class names, the folded class
@@ -93,60 +92,20 @@ func normalizeVocab(in []string) []string {
 // vocabKey hashes (templates, classes) into the vocabulary-cache key. Templates are part
 // of the key because they change T̂ — the same words under a different prompt template are
 // a different head.
-func vocabKey(templates, classes []string) string {
-	h := sha256.New()
-	for _, t := range templates {
-		_, _ = h.Write([]byte(t))
-		_, _ = h.Write([]byte{0})
-	}
-	_, _ = h.Write([]byte{1})
-	for _, c := range classes {
-		_, _ = h.Write([]byte(strings.ToLower(c)))
-		_, _ = h.Write([]byte{0})
-	}
-	return hex.EncodeToString(h.Sum(nil))
-}
+func vocabKey(templates, classes []string) string { return promptens.Key(templates, classes) }
 
 // applyTemplates expands the vocabulary into the prompt strings to embed:
 // classes × templates, in class-major order (class 0's templates first). Row order is
 // what averageTemplates below relies on.
 func applyTemplates(templates, classes []string) []string {
-	out := make([]string, 0, len(classes)*len(templates))
-	for _, c := range classes {
-		for _, t := range templates {
-			out = append(out, strings.ReplaceAll(t, templatePlaceholder, c))
-		}
-	}
-	return out
+	return promptens.Apply(templates, classes)
 }
 
 // averageTemplates collapses the [C*K] embeddings produced by applyTemplates into one
 // L2-normalised row per class (prompt ensembling: mean of the per-template embeddings,
 // then re-normalise).
 func averageTemplates(embs [][]float32, nClasses, nTemplates int) ([][]float32, error) {
-	if nTemplates <= 0 || nClasses <= 0 {
-		return nil, fmt.Errorf("textalign: bad ensemble shape (%d classes × %d templates)", nClasses, nTemplates)
-	}
-	if len(embs) != nClasses*nTemplates {
-		return nil, fmt.Errorf("textalign: text tower returned %d embeddings, expected %d (%d classes × %d templates)",
-			len(embs), nClasses*nTemplates, nClasses, nTemplates)
-	}
-	dim := len(embs[0])
-	out := make([][]float32, nClasses)
-	for c := 0; c < nClasses; c++ {
-		acc := make([]float32, dim)
-		for k := 0; k < nTemplates; k++ {
-			e := embs[c*nTemplates+k]
-			if len(e) != dim {
-				return nil, fmt.Errorf("textalign: text embedding %d has dim %d, expected %d", c*nTemplates+k, len(e), dim)
-			}
-			for j, v := range e {
-				acc[j] += v
-			}
-		}
-		out[c] = l2Normalize(acc)
-	}
-	return out, nil
+	return promptens.Average(embs, nClasses, nTemplates)
 }
 
 // l2Normalize normalises v in place and returns it (a zero vector is left alone).

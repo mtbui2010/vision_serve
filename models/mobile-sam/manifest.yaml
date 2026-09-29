@@ -28,5 +28,5 @@ postprocess:
   type: sam        # mask threshold = logit > 0; mask encoded as column-major RLE
 
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300

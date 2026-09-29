@@ -51,6 +51,59 @@ func TestPostprocessDecodeAndMapToOriginal(t *testing.T) {
 	}
 }
 
+// Squash path end to end (letterbox: false, which is how every RF-DETR checkpoint here was
+// trained — BUGS_TO_FIX.md #1). On a strongly non-square image ScaleX != ScaleY, which the
+// letterbox path never exercised: the box must come back with each axis divided by ITS OWN
+// scale, and a box covering the whole input must cover the whole original image.
+func TestPostprocessSquashNonSquareRoundTrip(t *testing.T) {
+	m := &rfDETR{cfg: models.Config{
+		Width: 64, Height: 64, Letterbox: false,
+		BoxFormat: "cxcywh", ConfThresh: 0.5, Labels: []string{"a"},
+	}}
+	// 400x100 original: ScaleX = 64/400 = 0.16, ScaleY = 64/100 = 0.64.
+	_, meta, err := m.preprocess(fillRGBA(400, 100, 1, 2, 3))
+	if err != nil {
+		t.Fatalf("preprocess: %v", err)
+	}
+	if meta.ScaleX == meta.ScaleY {
+		t.Fatalf("test needs ScaleX != ScaleY, got %v", meta.ScaleX)
+	}
+
+	logits := engine.Tensor{Data: []float32{5, 5}, Shape: []int64{1, 2, 1}}
+	boxes := engine.Tensor{Data: []float32{
+		0.5, 0.5, 1, 1, // the whole input
+		0.25, 0.75, 0.5, 0.5, // bottom-left quadrant of the input
+	}, Shape: []int64{1, 2, 4}}
+	res, err := m.postprocess([]engine.Tensor{logits, boxes}, meta)
+	if err != nil {
+		t.Fatalf("postprocess: %v", err)
+	}
+	if len(res.Detections) != 2 {
+		t.Fatalf("want 2 detections, got %d", len(res.Detections))
+	}
+	want := map[[4]float64]bool{
+		{0, 0, 400, 100}: false,
+		{0, 50, 200, 50}: false,
+	}
+	for _, d := range res.Detections {
+		found := false
+		for w := range want {
+			ok := true
+			for i := range w {
+				if math.Abs(d.BBox[i]-w[i]) > 1e-6 {
+					ok = false
+				}
+			}
+			if ok {
+				want[w], found = true, true
+			}
+		}
+		if !found {
+			t.Fatalf("unexpected bbox %v (original coords), want one of %v", d.BBox, want)
+		}
+	}
+}
+
 // No output tensor has a last dim == 4 -> must return an error, NOT guess.
 func TestPostprocessRejectsUnknownShape(t *testing.T) {
 	m := &rfDETR{cfg: models.Config{Width: 100, Height: 100}}

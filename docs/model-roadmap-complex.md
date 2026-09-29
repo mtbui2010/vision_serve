@@ -504,7 +504,7 @@ func (m *nanoSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner) 
 In fact, because the I/O contract is identical to MobileSAM, NanoSAM can share the same
 **architecture registration** by pointing the manifest's `architecture: mobile-sam`. No
 new Go package is needed at all. The manifest just declares different `files:` paths and
-`runtime.prefer: [tensorrt, cuda, cpu]`.
+`runtime.prefer: [cuda, cpu]`.
 
 ### B. License Verification
 

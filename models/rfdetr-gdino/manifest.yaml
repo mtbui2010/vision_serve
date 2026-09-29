@@ -23,7 +23,7 @@ input:
   width: 560
   height: 560
   layout: NCHW
-  letterbox: true
+  letterbox: false     # squash, as RF-DETR is trained (square_resize_div_64) — BUGS_TO_FIX.md #1
   normalize:
     mean: [0.485, 0.456, 0.406]
     std:  [0.229, 0.224, 0.225]
@@ -37,6 +37,18 @@ postprocess:
 # RF-DETR's 91-line COCO labels — also the routing vocabulary (index 0 = N/A, skipped).
 labels: ../rf-detr/coco91.txt
 
+# EXECUTION PROVIDER: cuda, NOT tensorrt (owner's decision, 29 Sep 2026: every model moved to
+# [cuda, cpu]). The figures quoted above are CUDA figures, and TensorRT does not reproduce them on
+# the open branch. Re-measured 29 Sep 2026, served, held-out-names protocol (247 images, 17 trained
+# / 5 held-out names), letterbox: false, same weights, entries identical except runtime.prefer:
+#
+#     prefer                  17-trained   5-held-out   median latency
+#     [cuda, cpu]                  89.75        49.54         177.7 ms   <- this manifest
+#     [tensorrt, cuda, cpu]        89.90        42.59         117.6 ms
+#
+# TensorRT is 1.5x faster and 6.95 mAP worse on the open (GroundingDINO) branch; both providers
+# return the same boxes, scored and labelled differently (ovd-edge/docs/FINDINGS.md §7b). Those
+# rows were taken with the protocol's own 17-name detector; the open-branch gap is GroundingDINO's.
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300

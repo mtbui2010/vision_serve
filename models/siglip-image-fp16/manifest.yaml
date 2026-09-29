@@ -1,0 +1,56 @@
+# SigLIP image tower, fp16 — the same weights as ../siglip-image, halved in precision.
+#
+# WHY. Measured on an A6000 through ONNX Runtime's CUDA EP, batch 22 (the crop budget the fast
+# open branch uses, ovd-edge/docs/FINDINGS.md §11):
+#
+#     fp32   48.67 ms          fp16   25.99 ms          1.87x
+#
+# and at the batch sizes either path actually sees: B=1 1.13x, B=9 1.80x, B=22 1.90x, B=44 1.79x.
+# The crop tower is the entire cost of the open branch once the distilled head is in place, and
+# it is also what the SHIPPED rescorer runs 3.4 times per image, so this is not a fast-path-only
+# change.
+#
+# ACCURACY. Verified the way ../siglip-image/README.md verifies the original — against the fp32
+# graph on identical inputs, with a cosine floor:
+#
+#     embedding cosine vs fp32:   mean 0.999999   min 0.999998     (the repo's floor is 0.9999)
+#     held-out-names protocol:    42.85 / 46.32 at K=9 / K=22, against fp32's 42.84 / 46.27
+#
+# The mAP moves by 0.05, which is a re-ranking of near-ties rather than a degradation.
+#
+# WHAT THIS IS NOT. fp16 in PyTorch on the same weights runs the same batch in 13.38 ms — 3.6x,
+# not 1.9x. ONNX Runtime does not close that gap, and it is not a precision problem: ORT already
+# has TF32 enabled (disabling it costs 1.5x), so the remaining ~1.9x against torch at matched
+# precision is an ORT kernel/layout issue and is still on the table. See FINDINGS §13.
+#
+# LICENSE: google/siglip-base-patch16-224, apache-2.0, unchanged — this is a precision cast of
+# the same weights, not a different checkpoint.
+#
+# WEIGHTS ARE NOT COMMITTED. Regenerate with onnxconverter_common:
+#   float16.convert_float_to_float16_model_path("../siglip-image/model.onnx", keep_io_types=True)
+# keep_io_types matters: the graph takes and returns fp32, so no caller changes.
+name: siglip-image-fp16
+task: embed
+license: apache-2.0
+architecture: siglip-image
+
+files:
+  model: model.onnx   # + siglip-image-fp16.data sidecar, same directory
+
+# Identical to ../siglip-image: squash to 224x224 bicubic, mean = std = 0.5 -> [-1, 1].
+# The graph's INPUT is still fp32 (keep_io_types), so preprocessing is unchanged.
+input:
+  width: 224
+  height: 224
+  layout: NCHW
+  letterbox: false
+  normalize:
+    mean: [0.5, 0.5, 0.5]
+    std: [0.5, 0.5, 0.5]
+
+runtime:
+  # cuda, not tensorrt: FINDINGS §7b measures the TensorRT provider costing 6.91 mAP on the open
+  # branch of this system, and §13 measures it returning NaN for GroundingDINO in fp16. The
+  # speedup here is from the precision, and needs no help from that provider.
+  prefer: [cuda, cpu]
+  idle_unload_seconds: 300

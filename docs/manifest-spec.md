@@ -39,7 +39,7 @@ postprocess:
 labels: coco.txt              # optional — one class per line
 
 runtime:
-  prefer: [tensorrt, cuda, cpu]   # EP fallback chain (CPU is always appended last)
+  prefer: [cuda, cpu]   # EP fallback chain (CPU is always appended last); tensorrt is opt-in
                                   # valid EPs: tensorrt, cuda, coreml, directml, openvino, cpu
   idle_unload_seconds: 300        # 0 = never auto-unload
 ```
@@ -77,7 +77,7 @@ postprocess:
   type: sam        # mask threshold = logit > 0; mask encoded as column-major RLE
 
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300
 ```
 

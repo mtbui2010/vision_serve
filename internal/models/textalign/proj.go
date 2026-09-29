@@ -10,7 +10,9 @@ import (
 // ---------------------------------------------------------------------------
 // The head-B side-car: the projection matrix P.
 //
-// P maps a 256-d object-query feature f into CLIP text space (512-d). It is the
+// P maps a 256-d object-query feature f into the TEACHER's text space. d_text is a field of
+// the file, not a constant: 512 for CLIP ViT-B/32, 768 for SigLIP base, 1152 for so400m — see
+// dim_test.go, which exercises all three through Fold and the gated decode. It is the
 // ONLY trained tensor of head B and it lives NEXT TO the manifest as a small
 // binary blob (512×256 f32 = 512 KB), NOT inside the ONNX graph — so retraining
 // the head or changing the vocabulary never requires an ONNX re-export.
@@ -19,7 +21,8 @@ import (
 //
 //	offset size  field
 //	     0    8  magic, ASCII "VSTXALN1"
-//	     8    4  uint32  d_text  (rows of P, = CLIP text dim, 512 for ViT-B/32)
+//	     8    4  uint32  d_text  (rows of P, = the teacher's text dim; 512 CLIP ViT-B/32,
+//	                              768 SigLIP base, 1152 SigLIP so400m)
 //	    12    4  uint32  d_feat  (cols of P, = detector hidden dim, 256 for RFDETRSmall)
 //	    16    4  float32 scale a (logit scale;   init 1/0.07 ≈ 14.2857)
 //	    20    4  float32 bias  b (logit bias;    init −4.6 = focal prior π=0.01)

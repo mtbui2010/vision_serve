@@ -20,6 +20,8 @@ visionserve
 
 # Model weights & exported artifacts (mounted at runtime via the /models volume)
 *.onnx
+*.onnx.data
+*.data
 *.pt
 *.pth
 *.engine
@@ -30,6 +32,11 @@ demo/
 clients/
 scripts/
 docs/
+paper/
+results/
+blog/
+benchmarks/
+eval/
 *.png
 *.jpg
 *.jpeg

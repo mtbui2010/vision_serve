@@ -16,5 +16,5 @@ postprocess:
   type: depth
 
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300

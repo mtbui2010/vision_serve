@@ -16,19 +16,32 @@ import (
 
 func TestParseMethod(t *testing.T) {
 	for _, c := range []struct {
-		in        string
-		normalize bool
-	}{{"", true}, {"exact", true}, {" Cosine ", true}, {"folded", false}, {"LINEAR", false}} {
+		in   string
+		want scoreMode
+	}{
+		{"", modeExact}, {"exact", modeExact}, {" Cosine ", modeExact},
+		{"folded", modeFolded}, {"LINEAR", modeFolded},
+		{"gated", modeGated}, {" Split ", modeGated},
+	} {
 		got, err := parseMethod(c.in)
 		if err != nil {
 			t.Fatalf("parseMethod(%q): %v", c.in, err)
 		}
-		if got != c.normalize {
-			t.Errorf("parseMethod(%q) = %v, want %v", c.in, got, c.normalize)
+		if got != c.want {
+			t.Errorf("parseMethod(%q) = %v, want %v", c.in, got, c.want)
 		}
 	}
 	if _, err := parseMethod("nonsense"); err == nil {
 		t.Errorf("expected an error for an unknown method")
+	}
+	// Only the exact mode divides by ‖P f‖; gated deliberately uses the folded head.
+	for _, c := range []struct {
+		m    scoreMode
+		want bool
+	}{{modeExact, true}, {modeFolded, false}, {modeGated, false}} {
+		if got := c.m.normalize(); got != c.want {
+			t.Errorf("%v.normalize() = %v, want %v", c.m, got, c.want)
+		}
 	}
 }
 

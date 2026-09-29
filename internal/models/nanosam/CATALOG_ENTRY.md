@@ -31,7 +31,7 @@ pull mechanism is wired up. Also add the blank import to `cmd/visionserve/main.g
     InputHeight:       1024,
     InputLayout:       "NCHW",
     PostprocessType:   "sam",
-    RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+    RuntimePrefer:     []string{"cuda", "cpu"},
     IdleUnloadSeconds: 300,
     Verified:          false,
     Note: "Weights available at github.com/NVIDIA-AI-IOT/nanosam — not on HuggingFace. " +

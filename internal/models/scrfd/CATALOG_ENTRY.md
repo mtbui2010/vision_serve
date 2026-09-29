@@ -25,7 +25,7 @@ the blank import to `main.go`.
     PostprocessType: "scrfd",
     ConfThreshold:   0.5,
     MaxDetections:   1000,
-    RuntimePrefer:   []string{"tensorrt", "cuda", "cpu"},
+    RuntimePrefer:   []string{"cuda", "cpu"},
     IdleUnloadSeconds: 300,
     Verified: false,
     Note: "buffalo_l pack path unverified. Check deepinsight/insightface HF repo for exact file path.",

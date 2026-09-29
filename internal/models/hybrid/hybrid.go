@@ -16,6 +16,7 @@ package hybrid
 import (
 	"fmt"
 	"image"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -27,6 +28,7 @@ import (
 
 func init() {
 	models.Register("rfdetr-gdino", New)
+	models.Register("gdino-siglip", NewGDINOSigLIP)
 }
 
 const (
@@ -47,10 +49,13 @@ const (
 type hybrid struct {
 	cfg     models.Config
 	rf      models.Model             // RF-DETR sub-model (plain Model), driven via the Runner
+	noRF    bool                     // gdino-siglip: no closed-set detector, every word → GroundingDINO
 	tok     *groundingdino.Tokenizer // GroundingDINO tokenizer (vocab next to files.gdino)
 	vocab   map[string]bool          // RF-DETR class names, lowercased (the routing set)
 	withSAM bool                     // encoder+decoder present → also emit one mask per box
 	joint   bool                     // gdino weights take the whole prompt in ONE pass
+	rs      *rescorer                // optional SigLIP crop+text towers; nil = today's behaviour
+	fp      *fastPath                // optional distilled head; nil = unknown words go to GroundingDINO
 }
 
 // New builds the router. The RF-DETR sub-model is created from the SAME cfg, so the
@@ -70,7 +75,45 @@ func New(cfg models.Config) (models.Base, error) {
 	if !ok {
 		return nil, fmt.Errorf("hybrid: rf-detr did not yield a plain Model")
 	}
+	b, err := build(cfg, rf)
+	if err != nil {
+		return nil, err // not `return build(...)`: a typed nil *hybrid would be a non-nil Base
+	}
+	return b, nil
+}
 
+// NewGDINOSigLIP builds the router with NO closed-set detector (architecture "gdino-siglip"):
+// every requested word goes to GroundingDINO, and every GroundingDINO detection is rescored by
+// SigLIP — Grounded-SAM-style open vocabulary with a rejector, for domains no RF-DETR was trained
+// on. The SigLIP pair is REQUIRED: without it this would be plain grounding-dino / grounded-sam
+// under another name, and a manifest that forgot one role would silently serve the unrescored
+// model. The input/postprocess/labels block is not read (GroundingDINO preprocesses itself).
+func NewGDINOSigLIP(cfg models.Config) (models.Base, error) {
+	if cfg.Files[roleGDINO] == "" {
+		return nil, fmt.Errorf("gdino-siglip: manifest must declare files.%s", roleGDINO)
+	}
+	if cfg.Files[roleRFDETR] != "" {
+		return nil, fmt.Errorf("gdino-siglip: files.%s is declared — use architecture rfdetr-gdino for the router", roleRFDETR)
+	}
+	if cfg.Files[roleCrop] == "" || cfg.Files[roleText] == "" {
+		return nil, fmt.Errorf("gdino-siglip: manifest must declare files.%s and files.%s (without SigLIP, "+
+			"use grounding-dino or grounded-sam)", roleCrop, roleText)
+	}
+	if hasHead(cfg) {
+		return nil, fmt.Errorf("gdino-siglip: the distilled head reads RF-DETR's query features; it needs architecture rfdetr-gdino")
+	}
+	cfg.Labels = nil // no closed vocabulary: nothing is routed away from GroundingDINO
+	b, err := build(cfg, nil)
+	if err != nil {
+		return nil, err
+	}
+	b.noRF = true
+	return b, nil
+}
+
+// build is the part both architectures share once the closed-set detector (or its absence) is
+// decided.
+func build(cfg models.Config, rf models.Model) (*hybrid, error) {
 	tok, err := groundingdino.LoadTokenizer(resolveVocab(cfg))
 	if err != nil {
 		return nil, fmt.Errorf("hybrid: load tokenizer: %w", err)
@@ -84,9 +127,25 @@ func New(cfg models.Config) (models.Base, error) {
 		}
 	}
 
+	rs, err := newRescorer(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	fp, err := newFastPath(cfg)
+	if err != nil {
+		return nil, err
+	}
+	if fp != nil && rs == nil {
+		return nil, fmt.Errorf("hybrid: the distilled head (files.head or %s) needs the SigLIP rescorer (files.%s and files.%s) — "+
+			"the head scores 21.53 mAP alone and 46.41 with rescoring on top, so serving it "+
+			"without one gives less than half of what it is worth (ovd-edge FINDINGS §10)",
+			headFile, roleCrop, roleText)
+	}
+
 	withSAM := cfg.Files[roleEncoder] != "" && cfg.Files[roleDecoder] != ""
 	return &hybrid{
-		cfg: cfg, rf: rf, tok: tok, vocab: vocab, withSAM: withSAM,
+		cfg: cfg, rf: rf, tok: tok, vocab: vocab, withSAM: withSAM, rs: rs, fp: fp,
 		joint: groundingdino.JointTextPassOrSafe(cfg.Files[roleGDINO]),
 	}, nil
 }
@@ -106,8 +165,19 @@ func (m *hybrid) Task() models.Task { return models.TaskOpenVocab }
 // Roles: both detectors, plus the two MobileSAM sessions when masks are enabled.
 func (m *hybrid) Roles() []string {
 	roles := []string{roleRFDETR, roleGDINO}
+	if m.noRF {
+		roles = []string{roleGDINO}
+	}
 	if m.withSAM {
 		roles = append(roles, roleEncoder, roleDecoder)
+	}
+	if m.rs != nil {
+		roles = append(roles, roleCrop, roleText)
+	}
+	if m.fp != nil && m.fp.onnx {
+		// The distilled head as its own session: lifecycle creates it with the manifest's
+		// provider chain, the same one the detector gets (BUGS_TO_FIX #4).
+		roles = append(roles, roleHead)
 	}
 	return roles
 }
@@ -127,6 +197,10 @@ func (m *hybrid) Infer(img image.Image, prompt models.Prompt, r models.Runner) (
 	defer groundingdino.PipelineMu.Unlock()
 
 	classes := parseClasses(prompt.Text)
+	if m.noRF && len(classes) == 0 {
+		return models.Result{}, fmt.Errorf("%s: a text prompt is required (e.g. \"cup. towel.\") — "+
+			"there is no closed-set detector to answer an empty one", m.cfg.Name)
+	}
 	known, unknown := m.partition(classes)
 
 	// Each detector is asked ONLY about the words it is the right tool for, and the two answers
@@ -134,16 +208,44 @@ func (m *hybrid) Infer(img image.Image, prompt models.Prompt, r models.Runner) (
 	// word is out of vocabulary — threw away the in-domain specialist for the words it was trained
 	// on: "cup. zebra." lost RF-DETR's cup entirely.
 	var dets []models.Detection
-	if len(classes) == 0 || len(known) > 0 {
-		d, err := m.detectRFDETR(img, r)
+	// The detector runs at most ONCE and serves both branches: the closed head names the known
+	// words and, when a distilled head is wired, the SAME query features answer the unknown ones.
+	// That sharing is the whole latency argument — the open branch costs a matmul rather than a
+	// second detector (ovd-edge FINDINGS §10-§11).
+	var qf engine.Tensor
+	var qBoxes engine.Tensor
+	var qMeta models.PreprocessMeta
+	if !m.noRF && (len(classes) == 0 || len(known) > 0 || m.hasFastPath()) {
+		d, boxes, feats, meta, err := m.detectRFDETRWithFeats(img, r)
 		if err != nil {
 			return models.Result{}, err
 		}
-		if len(known) > 0 {
+		qf, qBoxes, qMeta = feats, boxes, meta
+		if len(classes) > 0 && len(known) == 0 {
+			d = nil // the caller asked only about unknown words; the closed head has no answer
+		} else if len(known) > 0 {
 			d = filterByClass(d, known)
 		}
 		dets = append(dets, d...)
 	}
+
+	if len(unknown) > 0 && m.hasFastPath() {
+		if qf.Data == nil {
+			return models.Result{}, fmt.Errorf("hybrid: the detector export emitted no query "+
+				"features, so the distilled head has no input — %s needs the -qf export",
+				headFile)
+		}
+		d, err := m.fastDetect(qBoxes, qf, unknown, qMeta, r)
+		if err != nil {
+			return models.Result{}, err
+		}
+		if d, err = m.rescore(img, d, unknown, prompt.CropTemp, r); err != nil {
+			return models.Result{}, err
+		}
+		dets = append(dets, d...)
+		unknown = nil // answered; GroundingDINO is not consulted
+	}
+
 	if len(unknown) > 0 {
 		// GroundingDINO now sees only the words RF-DETR could not serve. That is the point, but
 		// it is not a pure subset of the old behaviour: the fusion and decoder layers attend over
@@ -155,6 +257,14 @@ func (m *hybrid) Infer(img image.Image, prompt models.Prompt, r models.Runner) (
 		d, err := m.detectGDINO(img, sub, r)
 		if err != nil {
 			return models.Result{}, err
+		}
+		// Rescore ONLY GroundingDINO's detections, and only against the words it was asked
+		// about. RF-DETR's are not touched: its supervised head already answered for those
+		// words on one calibrated scale, and the 17-name control column must not move.
+		if m.rs != nil {
+			if d, err = m.rescore(img, d, unknown, prompt.CropTemp, r); err != nil {
+				return models.Result{}, err
+			}
 		}
 		dets = append(dets, d...)
 	}
@@ -238,27 +348,57 @@ func filterByClass(dets []models.Detection, classes []string) []models.Detection
 	return out
 }
 
-// detectRFDETR drives the plain RF-DETR Model via the Runner (role "rfdetr"): the model's
-// own Preprocess builds the input tensor + meta, the Runner executes the session, and the
-// model's Postprocess decodes detections (BBox already in ORIGINAL image coords).
-func (m *hybrid) detectRFDETR(img image.Image, r models.Runner) ([]models.Detection, error) {
+// detectRFDETRWithFeats drives the plain RF-DETR Model via the Runner (role "rfdetr") and hands
+// back the raw tensors as well as the decoded detections: the model's own Preprocess builds the
+// input tensor + meta, the Runner executes the session, and the model's Postprocess decodes
+// detections (BBox already in ORIGINAL image coords).
+//
+// It returns `boxes`, `feats` and `meta` on top of the detections so the distilled head can score
+// the SAME forward pass instead of paying for another one. `feats` is the `query_feats` output of
+// the `-qf` exports and is a ZERO tensor when the export does not carry one — callers check
+// `feats.Data == nil` rather than assuming, because the plain rf-detr export is a perfectly valid
+// thing to wire here and simply cannot drive a head.
+func (m *hybrid) detectRFDETRWithFeats(img image.Image, r models.Runner) (
+	[]models.Detection, engine.Tensor, engine.Tensor, models.PreprocessMeta, error) {
+	var boxes, feats engine.Tensor
 	in, meta, err := m.rf.Preprocess(img)
 	if err != nil {
-		return nil, err
+		return nil, boxes, feats, meta, err
 	}
 	inName := firstName(r.InputNames(roleRFDETR), m.rf.InputName())
 	if inName == "" {
-		return nil, fmt.Errorf("hybrid: rf-detr session %q has no input name", roleRFDETR)
+		return nil, boxes, feats, meta, fmt.Errorf("hybrid: rf-detr session %q has no input name", roleRFDETR)
 	}
 	outs, err := r.Run(roleRFDETR, map[string]engine.Tensor{inName: in})
 	if err != nil {
-		return nil, err
+		return nil, boxes, feats, meta, err
+	}
+	// Identify the tensors by SHAPE, exactly as rfdetr/postprocess.go does: boxes are the one
+	// whose last dimension is 4, and query features are the [1, Q, D] output that is neither the
+	// boxes nor the class logits. Indexing by position would break the moment an export adds an
+	// output, which is how a 17-class cache once served a 22-class model.
+	for _, o := range outs {
+		if len(o.Shape) == 3 && o.Dim(-1) == 4 {
+			boxes = o
+		}
+	}
+	nCls := len(m.cfg.Labels)
+	for _, o := range outs {
+		if len(o.Shape) == 3 && o.Dim(-1) != 4 && int(o.Dim(-1)) != nCls {
+			feats = o
+		}
 	}
 	res, err := m.rf.Postprocess(outs, meta)
 	if err != nil {
-		return nil, err
+		return nil, boxes, feats, meta, err
 	}
-	return res.Detections, nil
+	return res.Detections, boxes, feats, meta, nil
+}
+
+// detectRFDETR is the detections-only form, kept for callers that do not need the tensors.
+func (m *hybrid) detectRFDETR(img image.Image, r models.Runner) ([]models.Detection, error) {
+	d, _, _, _, err := m.detectRFDETRWithFeats(img, r)
+	return d, err
 }
 
 // detectGDINO runs GroundingDINO (text-prompted) for boxes + labels. It uses GroundingDINO's
@@ -280,6 +420,9 @@ func (m *hybrid) detectGDINO(img image.Image, prompt models.Prompt, r models.Run
 // Delegates to the rfdetr sub-model so the lifecycle can preprocess images for
 // the rfdetr role's explain session without knowing the hybrid internals.
 func (m *hybrid) ExplainPreprocess(img image.Image) (engine.Tensor, models.PreprocessMeta, error) {
+	if m.noRF {
+		return engine.Tensor{}, models.PreprocessMeta{}, fmt.Errorf("%s: no RF-DETR session to explain", m.cfg.Name)
+	}
 	return m.rf.Preprocess(img)
 }
 
@@ -288,4 +431,13 @@ func firstName(names []string, fallback string) string {
 		return names[0]
 	}
 	return fallback
+}
+
+// hasHead reports whether a distilled head is configured, as an ONNX role or as head.bin.
+func hasHead(cfg models.Config) bool {
+	if strings.TrimSpace(cfg.Files[roleHead]) != "" {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(cfg.Dir, headFile))
+	return err == nil
 }

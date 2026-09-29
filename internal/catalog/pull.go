@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -26,6 +27,12 @@ const minSaneSize = 1024 // 1 KiB
 // idempotent: files already present are skipped unless Force is set. Existing
 // files are never overwritten unless Force is set.
 func Pull(name string, opts PullOptions) error {
+	return pull(name, opts, map[string]bool{})
+}
+
+// pull is Pull with the set of entries already on the current dependency path, so a cycle in
+// the catalog is reported instead of recursing forever.
+func pull(name string, opts PullOptions, visiting map[string]bool) error {
 	out := opts.Out
 	if out == nil {
 		out = os.Stderr
@@ -34,6 +41,30 @@ func Pull(name string, opts PullOptions) error {
 	entry, ok := Lookup(name)
 	if !ok {
 		return UnknownModelError(name)
+	}
+	if entry.Name != name {
+		fmt.Fprintf(out, "%q is an alias of %q\n", name, entry.Name)
+	}
+	if visiting[entry.Name] {
+		return fmt.Errorf("catalog: dependency cycle through %q", entry.Name)
+	}
+	visiting[entry.Name] = true
+	defer delete(visiting, entry.Name)
+
+	// Composed models: pull every missing dependency first, so one `visionserve pull
+	// rfdetr-gdino-siglip-etri` is enough (Ollama-style) instead of a chain of "pull X first"
+	// errors. A dependency already installed is left alone — --force applies to the named model
+	// only, never to shared weights other entries also point at.
+	for _, dep := range entry.Dependencies {
+		if _, err := os.Stat(filepath.Join(opts.ModelsDir, dep, "manifest.yaml")); err == nil {
+			continue
+		}
+		fmt.Fprintf(out, "%s needs %s — pulling it first\n", entry.Name, dep)
+		depOpts := opts
+		depOpts.Force = false
+		if err := pull(dep, depOpts, visiting); err != nil {
+			return fmt.Errorf("pull %s: dependency %s: %w", entry.Name, dep, err)
+		}
 	}
 
 	if !entry.Verified {
@@ -45,12 +76,12 @@ func Pull(name string, opts PullOptions) error {
 		return fmt.Errorf("create model dir: %w", err)
 	}
 
-	// Virtual models: check that all dependencies are already downloaded.
-	for _, dep := range entry.Dependencies {
-		depManifest := filepath.Join(opts.ModelsDir, dep, "manifest.yaml")
-		if _, err := os.Stat(depManifest); err != nil {
-			return fmt.Errorf("%s requires %q to be pulled first:\n  visionserve pull %s", entry.Name, dep, dep)
-		}
+	// Composed models reference files INSIDE their dependencies. The dependency being installed
+	// is not enough: an install made by an older catalog can hold a different filename (the
+	// grounding-dino entry once wrote model.onnx, now model-fixedmask.onnx), and the model would
+	// then be "pulled" and fail at load with a path error that points nowhere near the cause.
+	if err := checkVirtualFiles(entry, dstDir); err != nil {
+		return err
 	}
 
 	source := "huggingface.co/" + entry.HFRepo
@@ -67,7 +98,7 @@ func Pull(name string, opts PullOptions) error {
 		destPath := filepath.Join(dstDir, file.LocalFilename)
 
 		if !opts.Force {
-			if info, err := os.Stat(destPath); err == nil && info.Size() >= minSaneSize {
+			if info, err := os.Stat(destPath); err == nil && info.Size() >= sizeFloor(file) {
 				// A file already on disk is still checked against the catalog digest when
 				// there is one. Skipping the check here would make "already present" the
 				// one way to get unverified bytes into the registry.
@@ -95,7 +126,7 @@ func Pull(name string, opts PullOptions) error {
 		if dlErr != nil {
 			return fmt.Errorf("pull %s: %w", entry.Name, dlErr)
 		}
-		if err := verifyFile(destPath, n); err != nil {
+		if err := verifyFile(destPath, n, sizeFloor(file)); err != nil {
 			_ = os.Remove(destPath)
 			return fmt.Errorf("pull %s: %w", entry.Name, err)
 		}
@@ -118,14 +149,29 @@ func Pull(name string, opts PullOptions) error {
 
 	// Write manifest.yaml, but DO NOT clobber an existing one (a user may have
 	// customized it). Regenerate only when missing or --force.
+	//
+	// A manifest `pull` itself generated is not a customization, though, and keeping a stale one
+	// is how a re-pull used to leave the old configuration in force: `pull grounding-dino`
+	// downloaded model-fixedmask.onnx next to a manifest still pointing at the defective
+	// model.onnx, and an RF-DETR re-pull kept letterbox: true. Those are regenerated in place.
 	manifestPath := filepath.Join(dstDir, "manifest.yaml")
-	if _, err := os.Stat(manifestPath); err != nil || opts.Force {
-		if err := os.WriteFile(manifestPath, []byte(entry.RenderManifest()), 0o644); err != nil {
+	want := entry.RenderManifest()
+	existing, statErr := os.ReadFile(manifestPath)
+	switch {
+	case statErr != nil || opts.Force:
+		if err := os.WriteFile(manifestPath, []byte(want), 0o644); err != nil {
 			return fmt.Errorf("write manifest: %w", err)
 		}
 		fmt.Fprintf(out, "  wrote manifest.yaml\n")
-	} else {
-		fmt.Fprintf(out, "  manifest.yaml already present, keeping it\n")
+	case string(existing) == want:
+		fmt.Fprintf(out, "  manifest.yaml up to date\n")
+	case strings.HasPrefix(string(existing), generatedHeader):
+		if err := os.WriteFile(manifestPath, []byte(want), 0o644); err != nil {
+			return fmt.Errorf("write manifest: %w", err)
+		}
+		fmt.Fprintf(out, "  updated manifest.yaml (generated by an older catalog)\n")
+	default:
+		fmt.Fprintf(out, "  manifest.yaml was edited by hand, keeping it (use --force to regenerate)\n")
 	}
 
 	// Use the absolute path so the message is unambiguous regardless of cwd.
@@ -165,7 +211,7 @@ func verifyDigest(path, want string) error {
 	return nil
 }
 
-func verifyFile(path string, reported int64) error {
+func verifyFile(path string, reported, floor int64) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return fmt.Errorf("verify %s: %w", path, err)
@@ -173,7 +219,7 @@ func verifyFile(path string, reported int64) error {
 	if info.Size() == 0 {
 		return fmt.Errorf("verify %s: file is empty", path)
 	}
-	if info.Size() < minSaneSize {
+	if info.Size() < floor {
 		return fmt.Errorf("verify %s: file is suspiciously small (%d bytes)", path, info.Size())
 	}
 	if reported > 0 && info.Size() != reported {
@@ -189,6 +235,39 @@ func verifyFile(path string, reported int64) error {
 	n, _ := io.ReadFull(f, head)
 	if looksLikeHTMLError(head[:n]) {
 		return fmt.Errorf("verify %s: looks like an HTML error page, not a model file", path)
+	}
+	return nil
+}
+
+// sizeFloor is the smallest plausible size for a downloaded file. The 1 KiB floor is a cheap
+// "this is an error page, not weights" check and only makes sense for weights: a labels file is
+// legitimately a few hundred bytes. A side file with a SHA-256 pin is checked by its digest.
+func sizeFloor(f File) int64 {
+	name := f.LocalFilename
+	if strings.HasSuffix(name, ".onnx") || strings.HasSuffix(name, ".data") || f.SHA256 == "" {
+		return minSaneSize
+	}
+	return 1
+}
+
+// checkVirtualFiles verifies every sibling path a composed entry's manifest will reference
+// (files: roles and a relative labels file) exists, and names the dependency to re-pull if not.
+func checkVirtualFiles(e Entry, dstDir string) error {
+	paths := make([]string, 0, len(e.VirtualFiles)+1)
+	for _, rel := range e.VirtualFiles {
+		paths = append(paths, rel)
+	}
+	if strings.HasPrefix(e.LabelsFile, "../") {
+		paths = append(paths, e.LabelsFile)
+	}
+	sort.Strings(paths)
+	for _, rel := range paths {
+		if _, err := os.Stat(filepath.Join(dstDir, rel)); err == nil {
+			continue
+		}
+		dep := strings.SplitN(strings.TrimPrefix(rel, "../"), "/", 2)[0]
+		return fmt.Errorf("%s needs %s, which is missing — the installed %q predates this catalog; "+
+			"re-pull it:\n  visionserve pull %s --force", e.Name, rel, dep, dep)
 	}
 	return nil
 }

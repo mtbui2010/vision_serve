@@ -35,5 +35,5 @@ postprocess:
   text_threshold: 0.25
 
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300

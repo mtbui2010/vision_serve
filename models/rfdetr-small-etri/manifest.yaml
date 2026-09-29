@@ -1,6 +1,25 @@
-# RF-DETR — closed-set NMS-free detector, Apache-2.0. Exported by VisionForge.
-# Deploy on VisionServe: drop this folder (model.onnx + manifest.yaml + labels.txt)
-# into the model registry. No vocab needed (RF-DETR has no text encoder).
+# RF-DETR — closed-set NMS-free detector, Apache-2.0. No vocab needed (no text encoder).
+#
+# WEIGHTS REPLACED 2026-08-19. This is `pf-full` from the partial-unfreeze sweep
+# (ovd-adapt experiments/02_partial_unfreeze): the same RF-DETR Small COCO-91 checkpoint
+# fine-tuned to these same 22 classes in this same labels.txt order, with 100% of parameters
+# trainable (31.867 M, `[freeze] frozen 0 tensors`).
+#
+# WHY. Measured through this server on the 62 held-out images, same harness, control reproduced
+# digit-for-digit:
+#
+#     model                       val mAP   COCO novel objectness@0.5   latency
+#     previous (VisionForge)        69.97                        68.1    57.5 ms
+#     pf-full  (this file)          85.33                       96.51    38.2 ms
+#
+# It wins on all three axes. The old number is also likely optimistic: that model reported
+# val ~ all (69.97 vs 68.05) where every sweep variant shows all >> val, which is what training
+# on the evaluation images looks like. Its provenance was undocumented.
+#
+# ONE CAVEAT, and it is a real one. pf-full trained on 185 images and held out 62 — the same 62
+# these numbers are measured on. The model it replaces appears to have trained on all 247. So
+# this is an honest estimate of a model that saw LESS data. Retraining the same recipe on all
+# 247 should do better still, at the cost of having no clean held-out set left to prove it.
 name: rfdetr-small-etri
 task: detection
 license: Apache-2.0
@@ -11,7 +30,7 @@ input:
   width: 512
   height: 512
   layout: NCHW
-  letterbox: true
+  letterbox: false     # squash, as RF-DETR is trained (square_resize_div_64) — BUGS_TO_FIX.md #1
   normalize:
     mean: [0.485, 0.456, 0.406]
     std: [0.229, 0.224, 0.225]
@@ -25,11 +44,13 @@ postprocess:
 labels: labels.txt
 
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300
 
-explain:
-  type: attention
-  outputs:
-    attention: cross_attn_weights
-  spatial_stride: 16
+# NO explain block. This export does not carry `cross_attn_weights`, and that absence is why it
+# is ~19 ms faster than the one it replaced: that tensor is a 59 MB device->host copy on EVERY
+# request, paid by the detect path which never reads it.
+#
+# The previous weights are kept beside this file as model-explain.onnx (and on the NAS at
+# ovd-adapt-weights/models/rfdetr-small-etri/model.onnx, byte-identical). Point a manifest at
+# that file if you need /api/explain.

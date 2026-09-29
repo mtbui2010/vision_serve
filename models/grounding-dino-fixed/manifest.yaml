@@ -54,5 +54,5 @@ postprocess:
   text_threshold: 0.25
 
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]   # TensorRT: -6.83 held-out mAP, see ../grounding-dino/manifest.yaml
   idle_unload_seconds: 300

@@ -1,0 +1,114 @@
+# ../rfdetr-gdino-siglip-etri + MobileSAM masks: the tabletop router with SigLIP-crop rescoring,
+# then one mask per returned box (column-major RLE, index-aligned with detections). Everything
+# below about routing, rescoring and the execution provider is that entry's, unchanged; the two
+# extra roles only segment the final boxes, so the detection numbers are the same.
+#
+#   MobileSAM  Apache-2.0  (encoder + single-mask decoder)
+#
+# The ETRI/tabletop hybrid router WITH SigLIP-crop rescoring — the configuration the +12.6 mAP
+# was measured in. Same routing as ../rfdetr-gdino-etri; the only difference is that
+# GroundingDINO's detections are rescored before they are returned.
+#
+# THE MEASUREMENT, on the held-out-names protocol (ovd-edge/docs/PROTOCOL.md: 247 tabletop
+# images, the 5 names towel/beer can/hat/bread/snack bag held out of every trained component,
+# evaluated against all 22 with pycocotools):
+#     system                                17-trained mAP   5-held-out mAP   latency
+#     dual head (rfdetr-textalign, shipped)         84.99            17.98     84 ms
+#     hybrid router (../rfdetr-gdino-etri)          82.62            49.54   208-338 ms
+#     THIS                                          82.62            62.16       +5 ms
+#     oracle: these boxes, perfect name + reject        —            77.19        —
+#
+# (The dual-head row was published as 84.60 / 15.77; it was re-measured after a SigLIP
+# tokenizer padding fix — ovd-edge/docs/FINDINGS.md §2b. The conclusion is unchanged.)
+#
+# The 17-trained column is a CONTROL. RF-DETR's detections are never touched, so it must not
+# move; if it does, the rescorer is reaching detections it has no business reaching.
+#
+# WHY IT WORKS, which is not the obvious reason (ovd-edge/docs/FINDINGS.md §1-§2). It is not
+# that SigLIP names better — it does (96.8 % against GroundingDINO's 83.6 %) and that is worth
+# almost nothing. GroundingDINO already covers 90.2 % of the held-out ground truth, so perfect
+# naming would buy +7.6 mAP; what it cannot do is REJECT, and 538 of its 849 boxes land on
+# nothing. Perfect rejection would buy +27.6. Decomposed on identical boxes:
+#
+#     SigLIP renames, confidence untouched      49.54 -> 50.93   (+1.4)
+#     GroundingDINO's name, conf x P(name|crop) 49.54 -> 58.32   (+8.8)
+#     both (what this manifest serves)          49.54 -> 62.16  (+12.6)
+#
+# The mechanism is SigLIP's UNCERTAINTY. On a background crop it is confident about no word,
+# the softmax over the requested words flattens, and the detection sinks below the true
+# positives it used to outrank. It recovers 12.6 of the 27.6 points rejection is worth.
+#
+# TEMPERATURE. crop_temp defaults to 0.05 in code (internal/models/hybrid/rescore.go) and is NOT
+# overridden here. The earlier default, 0.02, was chosen from sweeps whose text embeddings came
+# from a SigLIP tokenizer with a padding bug; re-swept served after that fix and the squash fix,
+# 0.02 / 0.03 / 0.05 / 0.07 / 0.1 give 60.94 / 62.01 / 62.47 / 61.92 / 60.90. Still one set of
+# 247 images, no independent split; it stays a per-request field (`crop_temp`).
+#
+# RE-MEASURED 29 Sep 2026 after both fixes (letterbox: false, crop_temp 0.05), served, CUDA:
+#     hybrid router, no rescoring       89.75 / 49.54
+#     THIS                              89.75 / 62.47      (the 82.62 / 62.16 above predate them)
+#
+# COST. ~5 ms of compute (3.4 crops per image, ~1.4 ms per crop, batched) on a 208-338 ms
+# request — the crops are free next to the GroundingDINO pass they annotate. The real price is
+# ~800 MB of resident VRAM for the two SigLIP towers, which is why this is a separate entry and
+# ../rfdetr-gdino-etri is unchanged.
+#
+# LICENSES — all inside the CLAUDE.md allowlist:
+#   RF-DETR (rfdetr-small-etri)  Apache-2.0
+#   GroundingDINO                Apache-2.0   (model-fixedmask.onnx, corrected text-attention mask)
+#   SigLIP image + text          Apache-2.0   (google/siglip-base-patch16-224, one checkpoint)
+name: rfdetr-gdino-siglip-sam-etri
+task: open_vocab
+license: Apache-2.0
+architecture: rfdetr-gdino
+
+# crop + text are the optional pair that switches rescoring on. BOTH are required together; the
+# model refuses to load with only one rather than serving a silent no-op.
+files:
+  rfdetr: ../rfdetr-small-etri/model.onnx
+  gdino:  ../grounding-dino/model-fixedmask.onnx
+  crop:   ../siglip-image/model.onnx
+  text:   ../siglip-text/model.onnx
+  encoder: ../mobile-sam/mobile_sam_encoder.onnx
+  decoder: ../mobile-sam/mobile_sam_decoder_single.onnx
+
+input:
+  width: 512
+  height: 512
+  layout: NCHW
+  letterbox: false     # squash, as RF-DETR is trained (square_resize_div_64) — BUGS_TO_FIX.md #1
+  normalize:
+    mean: [0.485, 0.456, 0.406]
+    std: [0.229, 0.224, 0.225]
+
+postprocess:
+  type: detr
+  box_format: cxcywh
+  conf_threshold: 0.5
+  max_detections: 300
+
+labels: ../rfdetr-small-etri/labels.txt
+
+# EXECUTION PROVIDER: cuda, NOT tensorrt, and this is a correctness choice rather than a
+# preference. Two things were measured on 4 Sep 2026 and either alone would decide it.
+#
+#  1. GroundingDINO's output DIFFERS between the two providers, and not slightly. One COCO
+#     living-room image, prompt "curtain. lamp. cushion.", identical weights and manifest:
+#         tensorrt   1 detection   (curtain 0.396)
+#         cuda       5 detections  (lamp 0.624 / lamp 0.486 / curtain 0.331 / cushion 0.330 /
+#                                   lamp 0.312)
+#     The lamps are really there. The same 1-vs-5 split appears with and without the rescorer,
+#     so it is GroundingDINO and not the SigLIP stage. See ovd-edge/docs/FINDINGS.md §7.
+#
+#  2. Every number this manifest advertises was measured on the CUDA provider
+#     (ovd-edge/registries/reg_ship, prefer [cuda, cpu]). Shipping tensorrt would ship something
+#     that was never verified.
+#
+# There is also a latency reason, which on its own would NOT have been enough: the SigLIP text
+# tower is fed [n_unknown_words x 10 templates, 64], so a new unknown-word COUNT is a new shape,
+# and TensorRT rebuilds. Measured on this manifest: 13.9 s at 10 rows and 36.4 s at 40 rows,
+# between 150 ms requests. On CUDA there is one cold load and then 191-856 ms at every count.
+# The user's prompt decides that count, so the stall is not something a warm-up can retire.
+runtime:
+  prefer: [cuda, cpu]
+  idle_unload_seconds: 300

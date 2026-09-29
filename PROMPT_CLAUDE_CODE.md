@@ -414,7 +414,7 @@ postprocess:
   max_detections: 300
 labels: coco.txt                      # labels file, one class per line
 runtime:
-  prefer: [tensorrt, cuda, cpu]       # fallback chain — important for edge↔server
+  prefer: [cuda, cpu]       # fallback chain — important for edge↔server
   idle_unload_seconds: 300            # auto-release after 5 min idle
 ```
 
@@ -429,7 +429,7 @@ files:
   encoder: mobile_sam_encoder.onnx
   decoder: mobile_sam_decoder_single.onnx
 runtime:
-  prefer: [tensorrt, cuda, cpu]
+  prefer: [cuda, cpu]
   idle_unload_seconds: 300
 ```
 

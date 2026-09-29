@@ -1,0 +1,17 @@
+# Prompt ensemble for the SigLIP-crop rescorer: each requested word is embedded through all ten
+# templates, the rows are L2-normalised, averaged, and re-normalised.
+#
+# These ten ARE the contract, not a default — every number in the manifest's header was measured
+# with them (ovd-edge/docs/FINDINGS.md §2; originally headb/targets.py::TEMPLATES). A different
+# ensemble moves every cosine and therefore every confidence. The Go code falls back to exactly
+# this list when the file is absent, so deleting it changes nothing; editing it changes the head.
+a photo of a {}.
+a photo of the {}.
+a close-up photo of a {}.
+a cropped photo of a {}.
+a photo of a {} on a table.
+a bad photo of a {}.
+a blurry photo of a {}.
+itap of a {}.
+a photo of one {}.
+there is a {} in the scene.

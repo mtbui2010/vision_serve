@@ -1,0 +1,1 @@
+../rfdetr-textalign-etri/templates.txt

@@ -19,7 +19,11 @@ func (m *rfDETR) preprocess(img image.Image) (engine.Tensor, models.PreprocessMe
 	var processed image.Image
 
 	if m.cfg.Letterbox {
-		// TODO(verify): pad color matching how RF-DETR was trained/exported. Defaults to black.
+		// NOT how RF-DETR is trained. rfdetr's recipe squashes (square_resize_div_64=True, and
+		// its own predict() is F.resize(img, [res, res]) with no padding), so RF-DETR manifests
+		// declare letterbox: false. Serving a squash-trained checkpoint letterboxed measured
+		// -7.35 mAP on the fine-tuned 512 detectors and -1.91 on COCO base (BUGS_TO_FIX.md #1).
+		// Kept for exports that really were trained aspect-preserving; pad is black.
 		lb = imageproc.Letterbox(img, m.cfg.Width, m.cfg.Height, color.NRGBA{0, 0, 0, 255})
 		processed = lb.Img
 	} else {

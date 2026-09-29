@@ -219,7 +219,7 @@ load a file whose hash drifted (see [threat-model.md](threat-model.md)).
     InputWidth: 800, InputHeight: 800, InputLayout: "NCHW",
     Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
     PostprocessType:   "my-arch",
-    RuntimePrefer:     []string{"tensorrt", "cuda", "cpu"},
+    RuntimePrefer:     []string{"cuda", "cpu"},
     IdleUnloadSeconds: 300,
     Verified:          true,             // false ⇒ `pull` prints Note as a warning first
     Note:              "I/O contract, quirks, provenance — read by the next maintainer.",
