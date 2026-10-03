@@ -309,6 +309,17 @@ func (a Arch) supports(m Mode) bool {
 	return false
 }
 
+// FixedByExport is for architectures whose preprocessing the export fixes (the SAM family,
+// PaddleOCR's detector): it refuses a declared `preprocess:` block, which such a model would
+// otherwise silently ignore while `visionserve list` showed the block's size. The legacy input.*
+// fields stay accepted — they are reference only for these architectures, as they always were.
+func FixedByExport(arch string, s Spec) error {
+	if s.Legacy {
+		return nil
+	}
+	return fmt.Errorf("preprocess: %s's preprocessing is fixed by its export and does not read a preprocess: block — remove the block (see docs/manifest-spec.md)", arch)
+}
+
 // Meta holds what maps model-input coordinates back to the ORIGINAL image:
 // input = orig * Scale + Pad on each axis (Pad is minus the crop offset for CenterCrop).
 type Meta struct {

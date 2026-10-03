@@ -211,7 +211,7 @@ With `rescale: false`: `v = p`, or `v = (p - mean[c]) / std[c]` with mean/std in
 | `midas`, `depth-anything-v2` | `squash`, `keep_aspect` | `keep_aspect` needs dynamic H/W in the graph (checked at load) |
 | `clip` | `squash`, `center_crop` | CLIP mean/std (and 224) when not declared |
 | `scrfd` | `top_left_pad` | its legacy `letterbox: true` always meant this; its legacy `normalize` is in 0..255 units (a block says `rescale: false`) |
-| `mobile-sam`, `nano-sam`, `sam2`, `efficient-sam`, `paddle-ocr` (det) | fixed by the export | `long_side` raw HWC / `long_side_pad` / `squash` / `none` / `long_side_pad` to multiples of 32 with `no_upscale` (`input.width` = PaddleOCR's max side); the `input` block is reference only — also when grasp, background or grounded-sam build MobileSAM from their own manifest |
+| `mobile-sam`, `nano-sam`, `sam2`, `efficient-sam`, `paddle-ocr` (det) | fixed by the export | `long_side` raw HWC / `long_side_pad` / `squash` / `none` / `long_side_pad` to multiples of 32 with `no_upscale` (`input.width` = PaddleOCR's max side); the `input` block is reference only — also when grasp, background or grounded-sam build MobileSAM from their own manifest. A `preprocess:` block in their own manifest is a load error (it would be ignored) |
 | `grounding-dino`, `owlvit`, `siglip-*`, PaddleOCR rec crops | model-specific | special geometry (text-conditioned, padding + blur, per-detection crops); the normalise step is the shared one |
 
 A mode an architecture does not list is a **load error** when declared in `preprocess:`; when it

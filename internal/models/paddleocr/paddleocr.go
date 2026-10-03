@@ -31,10 +31,19 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/preprocess"
 )
 
 func init() {
-	models.Register("paddle-ocr", New)
+	// The registered factory refuses a declared preprocess: block (fixed by the export); New
+	// itself does not, since composites build this model from manifests whose block belongs to
+	// another stage.
+	models.Register("paddle-ocr", func(cfg models.Config) (models.Base, error) {
+		if err := preprocess.FixedByExport("paddle-ocr", cfg.PreprocessSpec()); err != nil {
+			return nil, err
+		}
+		return New(cfg)
+	})
 }
 
 const (
