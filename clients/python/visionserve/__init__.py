@@ -21,7 +21,7 @@ Quickstart::
 __version__ = "0.1.5"
 
 from .client import Client, PreprocessResult, VisionServeError
-from .types import Classification, Detection, Grasp, Mask, Result, ModelInfo
+from .types import Classification, Detection, FloatArray, Grasp, Mask, Result, ModelInfo
 from .postprocess import (
     CameraIntrinsics,
     backproject,
@@ -39,6 +39,7 @@ __all__ = [
     "PreprocessResult",
     "Classification",
     "Detection",
+    "FloatArray",
     "Grasp",
     "Mask",
     "Result",

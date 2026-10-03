@@ -44,11 +44,27 @@ class Client:
     Args:
         host:    base URL of the server, e.g. ``http://localhost:11435``.
         timeout: per-request timeout in seconds.
+        base64_arrays: ask the server for depth maps and embeddings as base64 float32
+            (``encoding=base64``) instead of JSON number arrays: exact float32 values, about
+            half the bytes, and several times cheaper to encode and parse for a large depth map.
+            The :class:`Result` is decoded transparently either way (``depth_map`` /
+            ``embeddings`` are then list-like :class:`~visionserve.FloatArray` objects backed by
+            numpy). ``None`` (default) = on when numpy is installed; ``False`` = opt out, always
+            plain JSON numbers. A server that predates the option ignores it and sends numbers.
     """
 
-    def __init__(self, host: str = "http://localhost:11435", timeout: float = 120):
+    def __init__(
+        self,
+        host: str = "http://localhost:11435",
+        timeout: float = 120,
+        *,
+        base64_arrays: Optional[bool] = None,
+    ):
         self.host = host.rstrip("/")
         self.timeout = timeout
+        if base64_arrays is None:
+            base64_arrays = _have_numpy()
+        self.base64_arrays = bool(base64_arrays)
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -192,6 +208,8 @@ class Client:
         for key, val in (("method", method), ("template_name", template_name)):
             if val is not None:
                 fields[key] = str(val)
+        if self.base64_arrays:
+            fields["encoding"] = "base64"  # Result.from_json decodes it
 
         extra_files = None
         if depth is not None:
@@ -364,6 +382,14 @@ def _maybe_ndarray(image: Any):
     return None
 
 
+def _have_numpy() -> bool:
+    try:
+        import numpy  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
 def _pil_to_png(img) -> bytes:
     buf = io.BytesIO()
     if img.mode not in ("RGB", "RGBA", "L"):
@@ -372,7 +398,14 @@ def _pil_to_png(img) -> bytes:
     return buf.getvalue()
 
 
-def _ndarray_to_png(arr) -> bytes:
+def _ndarray_to_pil(arr):
+    """A numpy image as a PIL image — the ONE ndarray rule, shared by :meth:`Client.predict`
+    uploads and :func:`visionserve.visualize.draw`.
+
+    HWC ``uint8`` is used as is; float is taken as ``[0, 1]`` and scaled to ``uint8``; any other
+    dtype is clipped to ``[0, 255]``. Grayscale ``(H, W)`` / ``(H, W, 1)`` becomes RGB;
+    ``(H, W, 3)`` / ``(H, W, 4)`` keep their channels.
+    """
     import numpy as np
 
     try:
@@ -391,20 +424,20 @@ def _ndarray_to_png(arr) -> bytes:
     elif a.dtype != np.uint8:
         a = np.clip(a, 0, 255).astype(np.uint8)
 
-    if a.ndim == 2:
-        # grayscale -> RGB
+    if a.ndim == 3 and a.shape[2] == 1:
+        a = a[:, :, 0]
+    if a.ndim == 2:  # grayscale -> RGB
         a = np.stack([a, a, a], axis=-1)
-    elif a.ndim == 3 and a.shape[2] == 1:
-        a = np.repeat(a, 3, axis=2)
-    elif a.ndim == 3 and a.shape[2] in (3, 4):
-        pass
-    else:
+    if a.ndim != 3 or a.shape[2] not in (3, 4):
         raise ValueError(
             "unsupported ndarray shape %r; expected (H,W), (H,W,1), (H,W,3) or (H,W,4)"
-            % (a.shape,)
+            % (arr.shape,)
         )
+    return Image.fromarray(np.ascontiguousarray(a))
 
-    img = Image.fromarray(np.ascontiguousarray(a))
+
+def _ndarray_to_png(arr) -> bytes:
+    img = _ndarray_to_pil(arr)
     buf = io.BytesIO()
     # PNG (lossless): the server must see exactly these pixels, or preprocess() comparisons and
     # predict() on a frame differ from the array the caller holds. compress_level=1 keeps the

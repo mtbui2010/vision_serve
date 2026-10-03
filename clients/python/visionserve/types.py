@@ -7,9 +7,117 @@ depth, embedding — so there is a single :class:`Result` type rather than one p
 
 from __future__ import annotations
 
+import array
+import base64
 import dataclasses
+import sys
+from collections.abc import Sequence as _SequenceABC
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
+
+
+class FloatArray(_SequenceABC):
+    """A read-only, list-like float32 array: how :class:`Result` holds ``depth_map`` and
+    ``embeddings`` when the server sent them base64-encoded (the default with numpy installed).
+
+    It behaves like the ``List[float]`` / ``List[List[float]]`` that JSON numbers decode to, so
+    code written for lists keeps working — ``len``, indexing, iteration, truthiness, ``==`` with
+    a list — while numpy gets the decoded buffer WITHOUT a copy: ``numpy.asarray(x)``,
+    ``x.array``, :meth:`Result.depth_array` and :meth:`Result.embeddings_array`.
+    """
+
+    __slots__ = ("array",)
+
+    def __init__(self, arr: Any):
+        self.array = arr  # numpy float32, 1-D (depth_map) or 2-D (embeddings)
+
+    def __len__(self) -> int:
+        return int(self.array.shape[0])
+
+    def __getitem__(self, i: Any) -> Any:
+        v = self.array[i]
+        return FloatArray(v) if getattr(v, "ndim", 0) else float(v)
+
+    def __iter__(self):
+        if self.array.ndim == 1:
+            return iter(self.array.tolist())
+        return (FloatArray(row) for row in self.array)
+
+    def __array__(self, dtype: Any = None, copy: Any = None) -> Any:
+        a = self.array
+        if dtype is not None and a.dtype != dtype:
+            return a.astype(dtype)
+        return a.copy() if copy else a
+
+    @property
+    def shape(self) -> tuple:
+        return tuple(self.array.shape)
+
+    def tolist(self) -> list:
+        return self.array.tolist()
+
+    def __eq__(self, other: Any) -> Any:
+        if isinstance(other, FloatArray):
+            other = other.tolist()
+        if isinstance(other, (list, tuple)):
+            return self.tolist() == [list(v) if isinstance(v, tuple) else v for v in other]
+        return NotImplemented
+
+    __hash__ = None  # type: ignore[assignment]  # mutable-sequence semantics, like list
+
+    def __repr__(self) -> str:
+        return "FloatArray(shape=%r)" % (self.shape,)
+
+
+def _decode_f32(b64: str, shape: Optional[Sequence[int]] = None) -> Any:
+    """Decode the server's base64 little-endian float32 array (``encoding=base64``).
+
+    ``shape=None`` means flat, of whatever length the bytes give. With numpy: a
+    :class:`FloatArray` over a writable float32 array (no Python floats are created). Without
+    numpy: plain lists, exactly like the JSON-number encoding.
+    """
+    raw = base64.b64decode(b64)
+    if shape is None:
+        shape = (len(raw) // 4,)
+    n = 1
+    for d in shape:
+        n *= int(d)
+    if len(raw) != 4 * n or not shape:
+        raise ValueError("base64 array has %d bytes, shape %s needs %d" % (len(raw), list(shape), 4 * n))
+    try:
+        import numpy as np
+    except ImportError:
+        a = array.array("f")
+        a.frombytes(raw)
+        if sys.byteorder == "big":
+            a.byteswap()
+        flat = a.tolist()
+        if len(shape) == 2:
+            d = int(shape[1])
+            return [flat[i * d:(i + 1) * d] for i in range(int(shape[0]))]
+        return flat
+    arr = np.frombuffer(bytearray(raw), dtype="<f4").astype(np.float32, copy=False)
+    return FloatArray(arr.reshape(tuple(int(d) for d in shape)))
+
+
+def _encode_f32(values: Any) -> str:
+    """Inverse of :func:`_decode_f32`: base64 of the row-major little-endian float32 bytes."""
+    try:
+        import numpy as np
+    except ImportError:
+        flat = [float(v) for row in values for v in (row if isinstance(row, (list, tuple)) else [row])]
+        a = array.array("f", flat)
+        if sys.byteorder == "big":
+            a.byteswap()
+        return base64.b64encode(a.tobytes()).decode("ascii")
+    return base64.b64encode(np.ascontiguousarray(np.asarray(values, dtype="<f4")).tobytes()).decode("ascii")
+
+
+def _plain_floats(values: Any) -> list:
+    """A list (of lists) of Python floats from a list or a :class:`FloatArray`."""
+    if isinstance(values, FloatArray):
+        return values.tolist()
+    return [_plain_floats(v) if isinstance(v, (list, tuple, FloatArray)) else float(v) for v in values]
 
 
 @dataclass
@@ -33,6 +141,10 @@ class Detection:
             cls=str(d.get("class", "")),
             conf=float(d.get("conf", 0.0)),
         )
+
+    def to_json(self) -> Dict[str, Any]:
+        """The wire dict (``class``, not ``cls``); inverse of :meth:`from_json`."""
+        return {"bbox": list(self.bbox), "class": self.cls, "conf": self.conf}
 
 
 @dataclass
@@ -59,6 +171,13 @@ class Mask:
             bbox=[float(v) for v in bbox],
             conf=float(d.get("conf", 0.0)),
         )
+
+    def to_json(self) -> Dict[str, Any]:
+        """The wire dict (``rle`` omitted when empty, as the server does); inverse of
+        :meth:`from_json`."""
+        out: Dict[str, Any] = {"rle": self.rle} if self.rle else {}
+        out.update(bbox=list(self.bbox), conf=self.conf)
+        return out
 
     def to_ndarray(self, width: int, height: int):
         """Decode the column-major RLE into a boolean ``(height, width)`` numpy array.
@@ -124,6 +243,10 @@ class Classification:
             conf=float(d.get("conf", 0.0)),
         )
 
+    def to_json(self) -> Dict[str, Any]:
+        """The wire dict; inverse of :meth:`from_json`."""
+        return {"class": self.cls, "conf": self.conf}
+
 
 @dataclass
 class Grasp:
@@ -158,6 +281,17 @@ class Grasp:
             cls=str(d.get("class", "")),
             conf=float(d.get("conf", 0.0)),
         )
+
+    def to_json(self) -> Dict[str, Any]:
+        """The wire dict (``class`` / ``conf`` omitted for a class-agnostic grasp, as the server
+        does); inverse of :meth:`from_json`."""
+        out: Dict[str, Any] = {"x": self.x, "y": self.y, "theta": self.theta, "width": self.width,
+                               "quality": self.quality}
+        if self.cls:
+            out["class"] = self.cls
+        if self.conf:
+            out["conf"] = self.conf
+        return out
 
     @property
     def pose(self) -> List[float]:
@@ -197,10 +331,14 @@ class Result:
         grasps:         list of :class:`Grasp` (may be empty; from a ``grasp`` model).
         classifications: list of :class:`Classification` (may be empty).
         depth_map:      flat list of float depth values, row-major, size
-                        ``depth_width * depth_height`` (may be empty).
+                        ``depth_width * depth_height`` (may be empty). A :class:`FloatArray`
+                        (list-like, numpy-backed) when the server sent it base64-encoded; use
+                        :meth:`depth_array` for a ``(H, W)`` numpy array either way.
         depth_width:    width of the depth map in pixels.
         depth_height:   height of the depth map in pixels.
-        embeddings:     list of embedding vectors (each a ``List[float]``).
+        embeddings:     list of embedding vectors (each a ``List[float]``), or a 2-D
+                        :class:`FloatArray` when sent base64-encoded; use
+                        :meth:`embeddings_array` for an ``(N, D)`` numpy array either way.
         duration_ms:    server-side inference duration in milliseconds.
         device:         execution device the server ran on, e.g. ``"cpu"``,
                         ``"gpu:0"``, or ``"gpu:0+trt"`` (empty if unreported).
@@ -228,6 +366,18 @@ class Result:
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "Result":
+        """Parse the server's JSON (a dict). Both array encodings are accepted: JSON numbers, and
+        ``encoding=base64`` (``depth_map_base64`` / ``embeddings_base64`` + ``embeddings_shape``),
+        which is decoded here — callers never see the base64."""
+        depth_w, depth_h = int(d.get("depth_width", 0) or 0), int(d.get("depth_height", 0) or 0)
+        if d.get("depth_map_base64"):
+            depth_map: Any = _decode_f32(d["depth_map_base64"], (depth_w * depth_h,) if depth_w and depth_h else None)
+        else:
+            depth_map = [float(v) for v in (d.get("depth_map") or [])]
+        if d.get("embeddings_base64"):
+            embeddings: Any = _decode_f32(d["embeddings_base64"], d.get("embeddings_shape") or ())
+        else:
+            embeddings = [[float(v) for v in row] for row in (d.get("embeddings") or [])]
         return cls(
             task=str(d.get("task", "")),
             model=str(d.get("model", "")),
@@ -237,26 +387,78 @@ class Result:
             classifications=[
                 Classification.from_json(x) for x in (d.get("classifications") or [])
             ],
-            depth_map=[float(v) for v in (d.get("depth_map") or [])],
-            depth_width=int(d.get("depth_width", 0)),
-            depth_height=int(d.get("depth_height", 0)),
-            embeddings=[
-                [float(v) for v in row] for row in (d.get("embeddings") or [])
-            ],
+            depth_map=depth_map,
+            depth_width=depth_w,
+            depth_height=depth_h,
+            embeddings=embeddings,
             duration_ms=float(d.get("duration_ms", 0.0)),
             device=str(d.get("device", "")),
             hint=str(d.get("hint", "") or ""),
         )
 
+    def to_json(self, *, encoding: str = "json") -> Dict[str, Any]:
+        """The server's JSON wire shape for this result (a dict for ``json.dumps``); the inverse
+        of :meth:`from_json`: ``Result.from_json(r.to_json()) == r``.
+
+        Field names and order follow ``pkg/api/types.go`` (``class``, not ``cls``) and empty
+        fields are omitted like the Go ``omitempty`` tags, so the dict matches what the server
+        sends. ``encoding="base64"`` writes ``depth_map`` / ``embeddings`` the way the server
+        does for ``encoding=base64`` (exact float32 bytes, compact); the default writes number
+        arrays.
+        """
+        if encoding not in ("json", "base64"):
+            raise ValueError("encoding must be 'json' or 'base64', got %r" % (encoding,))
+        out: Dict[str, Any] = {"task": self.task, "model": self.model}
+        if self.device:
+            out["device"] = self.device
+        if self.hint:
+            out["hint"] = self.hint
+        if self.detections:
+            out["detections"] = [d.to_json() for d in self.detections]
+        if self.masks:
+            out["masks"] = [m.to_json() for m in self.masks]
+        if self.grasps:
+            out["grasps"] = [g.to_json() for g in self.grasps]
+        if self.classifications:
+            out["classifications"] = [c.to_json() for c in self.classifications]
+        b64 = encoding == "base64"
+        rows = len(self.embeddings)
+        dims = {len(r) for r in self.embeddings}
+        emb_b64 = b64 and len(dims) == 1  # ragged rows have no [N, D] shape: they stay numbers
+        if rows and not emb_b64:
+            out["embeddings"] = _plain_floats(self.embeddings)
+        if len(self.depth_map) and not b64:
+            out["depth_map"] = _plain_floats(self.depth_map)
+        if self.depth_width:
+            out["depth_width"] = self.depth_width
+        if self.depth_height:
+            out["depth_height"] = self.depth_height
+        out["duration_ms"] = self.duration_ms
+        if b64 and len(self.depth_map):
+            out["depth_map_base64"] = _encode_f32(self.depth_map)
+        if emb_b64:
+            out["embeddings_base64"] = _encode_f32(self.embeddings)
+            out["embeddings_shape"] = [rows, dims.pop()]
+        return out
+
     def depth_array(self):
         """The depth map as a float32 numpy array of shape ``(depth_height, depth_width)``
         (relative inverse depth in ``[0, 1]``, larger = closer — see the class docstring), or
-        ``None`` when this result has no depth map."""
+        ``None`` when this result has no depth map. No copy when the server sent base64."""
         import numpy as np
 
         if not self.depth_map or self.depth_width <= 0 or self.depth_height <= 0:
             return None
         return np.asarray(self.depth_map, dtype=np.float32).reshape(self.depth_height, self.depth_width)
+
+    def embeddings_array(self):
+        """The embeddings as a float32 numpy array of shape ``(N, D)``, or ``None`` when this
+        result has none. No copy when the server sent base64."""
+        import numpy as np
+
+        if not self.embeddings:
+            return None
+        return np.asarray(self.embeddings, dtype=np.float32)
 
     def filter_by_size(
         self,
@@ -376,32 +578,9 @@ class Result:
         """
         if max_per_object is None or max_per_object <= 0 or not self.grasps:
             return self
-
+        # Prefer detection bboxes (class-aware); else mask bboxes (class-agnostic automask).
         objects = [d.bbox for d in self.detections] or [m.bbox for m in self.masks]
-
-        def _obj_key(g: Any) -> Any:
-            best: Optional[int] = None
-            best_area: Optional[float] = None
-            for i, bbox in enumerate(objects):
-                x, y, w, h = bbox[0], bbox[1], bbox[2], bbox[3]
-                if x <= g.x <= x + w and y <= g.y <= y + h:
-                    area = w * h
-                    if best_area is None or area < best_area:
-                        best_area = area
-                        best = i
-            return best if best is not None else ("cls", g.cls)
-
-        groups: Dict[Any, List] = {}
-        for g in self.grasps:
-            key = _obj_key(g) if objects else ("cls", g.cls)
-            groups.setdefault(key, []).append(g)
-
-        kept: List = []
-        for gs in groups.values():
-            gs.sort(key=lambda g: g.quality, reverse=True)
-            kept.extend(gs[:max_per_object])
-
-        return dataclasses.replace(self, grasps=kept)
+        return dataclasses.replace(self, grasps=_top_grasps_per_object(self.grasps, objects, max_per_object))
 
     def group_by_class(self) -> "Dict[str, 'Result']":
         """Return a ``dict[class_label → Result]`` grouping detections and masks by class.
@@ -474,3 +653,35 @@ class ModelInfo:
 
 def _is_loaded(info: ModelInfo) -> bool:
     return info.state == "loaded"
+
+
+def _grasp_object_key(g: Any, objects: Sequence[Sequence[float]]) -> Optional[int]:
+    """Index of the SMALLEST ``[x, y, w, h]`` bbox whose interior contains the grasp centre, or
+    ``None`` when no bbox contains it."""
+    best: Optional[int] = None
+    best_area: Optional[float] = None
+    for i, (x, y, w, h) in enumerate(objects):
+        if x <= g.x <= x + w and y <= g.y <= y + h:
+            area = w * h
+            if best_area is None or area < best_area:
+                best_area, best = area, i
+    return best
+
+
+def _top_grasps_per_object(grasps: Sequence[Any], objects: Sequence[Sequence[float]], k: int) -> List[Any]:
+    """The ``k`` highest-quality grasps per object — the one grouping rule behind
+    :meth:`Result.filter_grasps` and the visualizer.
+
+    A grasp belongs to the smallest object bbox containing its centre; a grasp no bbox contains
+    (or every grasp, when there are no objects) is bucketed by its class label, so each kind is
+    still sampled.
+    """
+    groups: Dict[Any, List[Any]] = {}
+    for g in grasps:
+        key = _grasp_object_key(g, objects) if objects else None
+        groups.setdefault(("cls", g.cls) if key is None else key, []).append(g)
+    kept: List[Any] = []
+    for gs in groups.values():
+        gs.sort(key=lambda g: g.quality, reverse=True)
+        kept.extend(gs[:k])
+    return kept
