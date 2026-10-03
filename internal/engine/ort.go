@@ -33,6 +33,9 @@ var Trace = os.Getenv("VISIONSERVE_TRACE") != ""
 var (
 	initOnce sync.Once
 	initErr  error
+	// ortLibPath is the name the binding dlopen()ed ONNX Runtime by: ORT_DYLIB_PATH, or the
+	// binding's own default. setDeterministicCompute looks the loaded library up by it.
+	ortLibPath = "onnxruntime.so"
 )
 
 // ensureORT initializes the ORT environment exactly once per process.
@@ -40,6 +43,7 @@ func ensureORT() error {
 	initOnce.Do(func() {
 		if path := os.Getenv("ORT_DYLIB_PATH"); path != "" {
 			ort.SetSharedLibraryPath(path)
+			ortLibPath = path
 		}
 		// If ORT_DYLIB_PATH is not set, the binding locates the library via the OS
 		// default mechanism (LD_LIBRARY_PATH). Report a clear error if init fails.
@@ -276,6 +280,7 @@ func createSession(modelPath string, inputNames, outputNames []string, providers
 			}
 			continue
 		}
+		applyDeterministic(opts, ep) // GPU EPs only; best effort (deterministic.go)
 		create := func() error {
 			var e error
 			s, e = ort.NewDynamicAdvancedSession(modelPath, inputNames, outputNames, opts)
