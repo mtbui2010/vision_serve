@@ -1,4 +1,4 @@
-package rfdetr
+package detr
 
 import (
 	"image"
@@ -24,7 +24,7 @@ func fillRGBA(w, h int, r, g, b uint8) *image.NRGBA {
 // RF-DETR preprocess with letterbox: the output tensor has the correct NCHW [1,3,H,W] shape,
 // meta keeps the original dimensions, and a NON-square image must produce padding on exactly one axis.
 func TestPreprocessLetterboxNonSquare(t *testing.T) {
-	m := &rfDETR{cfg: models.Config{
+	m := &detr{v: rfVariant, cfg: models.Config{
 		Name:      "rf-detr",
 		Width:     64,
 		Height:    64,
@@ -71,7 +71,7 @@ func TestPreprocessLetterboxNonSquare(t *testing.T) {
 
 // Image TALLER than wide -> padding must be on the X axis.
 func TestPreprocessLetterboxTallImage(t *testing.T) {
-	m := &rfDETR{cfg: models.Config{Width: 64, Height: 64, Letterbox: true}}
+	m := &detr{v: rfVariant, cfg: models.Config{Width: 64, Height: 64, Letterbox: true}}
 
 	// 40x80 image (taller than wide) -> scale = min(64/40,64/80)=min(1.6,0.8)=0.8
 	// newW = 40*0.8 = 32, newH = 80*0.8 = 64
@@ -94,7 +94,7 @@ func TestPreprocessLetterboxTallImage(t *testing.T) {
 func TestPreprocessNormalizeNCHW(t *testing.T) {
 	mean := []float32{0.485, 0.456, 0.406}
 	std := []float32{0.229, 0.224, 0.225}
-	m := &rfDETR{cfg: models.Config{
+	m := &detr{v: rfVariant, cfg: models.Config{
 		Width:     64,
 		Height:    64,
 		Letterbox: true,
@@ -148,7 +148,7 @@ func TestPreprocessNormalizeNCHW(t *testing.T) {
 
 // When Letterbox=false: hard resize to WxH, ScaleX/ScaleY may differ, pad=0.
 func TestPreprocessNoLetterboxScalePerAxis(t *testing.T) {
-	m := &rfDETR{cfg: models.Config{Width: 64, Height: 32, Letterbox: false}}
+	m := &detr{v: rfVariant, cfg: models.Config{Width: 64, Height: 32, Letterbox: false}}
 
 	// 80x40 -> ScaleX = 64/80 = 0.8, ScaleY = 32/40 = 0.8 (equal in this case),
 	// use a different ratio to demonstrate per-axis: 100x40 -> ScaleX=64/100=0.64, ScaleY=32/40=0.8

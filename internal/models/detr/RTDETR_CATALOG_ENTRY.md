@@ -29,8 +29,9 @@ Add the following entry to the builtin slice in `internal/catalog/catalog.go`:
 },
 ```
 
-Also add the blank import to `cmd/visionserve/main.go` alongside the rf-detr import:
+The "rt-detr" architecture is registered by `internal/models/detr` (shared with
+rf-detr), which `cmd/visionserve/main.go` already blank-imports:
 
 ```go
-_ "visionserve/internal/models/rtdetr"
+_ "visionserve/internal/models/detr"
 ```

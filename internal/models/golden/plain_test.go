@@ -11,8 +11,7 @@ import (
 	_ "visionserve/internal/models/classification"
 	_ "visionserve/internal/models/clip"
 	_ "visionserve/internal/models/depth"
-	_ "visionserve/internal/models/rfdetr"
-	_ "visionserve/internal/models/rtdetr"
+	_ "visionserve/internal/models/detr" // rf-detr + rt-detr
 	_ "visionserve/internal/models/scrfd"
 )
 
