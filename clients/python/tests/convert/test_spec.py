@@ -113,7 +113,6 @@ LEGACY_CASES = [
     dict(width=32, height=32, mean=CLIP_MEAN, std=CLIP_STD, crop="center"),
     dict(width=42, height=28, crop="center"),
     dict(width=70, height=70, mean=IMN_MEAN, std=IMN_STD, keep_aspect=True, multiple_of=14),
-    dict(width=40, height=30, mean=IMN_MEAN),                      # one of mean/std: no normalisation
     dict(width=40, height=30, keep_aspect=True, letterbox=True),   # keep_aspect wins, as in Go
 ]
 
@@ -126,6 +125,27 @@ def test_manifest_preprocess_is_unchanged_for_legacy_fields():
             assert got.dtype == want.dtype and got.shape == want.shape, (name, kw)
             assert np.array_equal(got.view(np.uint32), want.view(np.uint32)), (name, kw)
             assert gmeta == wmeta, (name, kw)
+
+
+def test_odd_legacy_normalize_matches_go():
+    """Legacy normalize lists the Go normalizer accepts: a missing mean entry is 0, a missing or
+    zero std entry is 1, extras are ignored. The pre-Spec Python reference skipped normalisation
+    when only one of mean/std was given (or broadcast / crashed on other lengths), so tier B1
+    compared the server against a tensor it never fed."""
+    from PIL import Image
+    pil = Image.new("RGB", (4, 3), (51, 102, 204))
+    p = np.array([51, 102, 204], np.float32) / np.float32(255)
+    cases = [
+        (dict(mean=IMN_MEAN), (p - np.array(IMN_MEAN, np.float32)) / np.float32(1)),
+        (dict(std=IMN_STD), p / np.array(IMN_STD, np.float32)),
+        (dict(mean=[0.5], std=[0.25]), (p - np.array([0.5, 0, 0], np.float32)) / np.array([0.25, 1, 1], np.float32)),
+        (dict(mean=[0.5, 0.5, 0.5, 9], std=[0.25, 0, 0.5, 9]),
+         (p - np.float32(0.5)) / np.array([0.25, 1, 0.5], np.float32)),
+    ]
+    for kw, want in cases:
+        x, _ = manifest_preprocess(pil, width=4, height=3, **kw)
+        got = x[0, :, 0, 0]
+        assert np.array_equal(got.view(np.uint32), want.astype(np.float32).view(np.uint32)), (kw, got, want)
 
 
 def test_manifest_reference_b1_is_unchanged():
@@ -254,3 +274,25 @@ def test_bundle_renders_legacy_fields_by_default_and_a_consistent_block_on_reque
                                                                              std=resolved.std)
     np.testing.assert_allclose(resolved.mean, b.spec().mean, rtol=1e-5)
     assert bundle_spec(b) == b.spec()
+
+
+def test_spec_from_manifest_reads_yaml_like_go():
+    """Booleans as yaml.v3 decodes them (YAML 1.1 spellings, quoted or not; "false" quoted, numbers
+    and others are errors), null keys absent, non-finite numbers refused."""
+    def resolve(inp, pre):
+        return spec.spec_from_manifest({"input": dict(width=8, height=8, **inp), "preprocess": pre})
+
+    assert resolve({"letterbox": "n"}, {}).resize == ""          # y/n arrive as str from PyYAML
+    assert resolve({"letterbox": "y"}, {}).resize == "letterbox"
+    assert resolve({}, {"resize": "long_side", "rescale": "no"}).rescale is False
+    assert resolve({"letterbox": None}, {"resize": "letterbox"}).resize == "letterbox"
+    assert resolve({"keep_aspect": None}, {"resize": "keep_aspect"}).resize == "keep_aspect"
+    assert resolve({"multiple_of": None}, {"resize": "keep_aspect", "multiple_of": 14}).multiple_of == 14
+    for inp, pre in [({"letterbox": "false"}, {}), ({"letterbox": 1}, {}), ({}, {"rescale": 0}),
+                     ({}, {"resize": False}),                                  # `resize: no`
+                     ({}, {"resize": "letterbox", "pad": float("nan")}),
+                     ({}, {"mean": [float("nan"), 0.5, 0.5], "std": [0.2, 0.2, 0.2]}),
+                     ({}, {"mean": [0.5, 0.5, 0.5], "std": [float("inf"), 0.2, 0.2]}),
+                     ({}, {"resize": "long_side_pad", "pad": float("inf")})]:
+        with pytest.raises(spec.SpecError):
+            resolve(inp, pre)

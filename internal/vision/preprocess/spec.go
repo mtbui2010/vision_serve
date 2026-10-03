@@ -208,6 +208,16 @@ func (s Spec) Validate() error {
 	default:
 		return fmt.Errorf("preprocess: resample %q is invalid (bilinear or bicubic)", s.Resample)
 	}
+	// A NaN or Inf anywhere in the normalisation only ever yields NaN (or zeroed) tensor values,
+	// legacy spec or not.
+	for _, vals := range [][]float32{s.Mean, s.Std, {s.PadValue}} {
+		for _, v := range vals {
+			if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
+				return fmt.Errorf("preprocess: mean, std and pad must be finite numbers (got mean %v, std %v, pad %v)",
+					s.Mean, s.Std, s.PadValue)
+			}
+		}
+	}
 	if s.Legacy {
 		return nil
 	}
@@ -223,7 +233,7 @@ func (s Spec) Validate() error {
 	if s.PadValue != 0 && !s.Resize.Pads() {
 		return fmt.Errorf("preprocess: pad applies to letterbox, top_left_pad and long_side_pad, not %s", s.Resize)
 	}
-	if (s.Resize == Letterbox || s.Resize == TopLeftPad) && (s.PadValue < 0 || s.PadValue > 255) {
+	if (s.Resize == Letterbox || s.Resize == TopLeftPad) && !(s.PadValue >= 0 && s.PadValue <= 255) {
 		return fmt.Errorf("preprocess: pad %g is a pixel value for %s and must be in [0,255]", s.PadValue, s.Resize)
 	}
 	if (len(s.Mean) == 0) != (len(s.Std) == 0) {

@@ -110,6 +110,26 @@ def _fmt_floats(xs) -> str:
     return "[" + " ".join(f"{float(np.float32(v)):g}" for v in xs) + "]"
 
 
+# What yaml.v3 (the Go registry's parser) decodes into a bool field from a string: the YAML 1.1
+# spellings, quoted or not. "true"/"false" QUOTED, numbers and anything else are an error there.
+_YAML_TRUE = frozenset("y Y yes Yes YES on On ON".split())
+_YAML_FALSE = frozenset("n N no No NO off Off OFF".split())
+
+
+def _yaml_bool(v, field: str) -> Optional[bool]:
+    """A manifest boolean read the way the Go registry reads it (None = absent / null). PyYAML
+    already turns unquoted true/false/yes/no/on/off into bool; y/n and quoted spellings arrive as
+    str. Python truthiness would read "n" or "no" as True."""
+    if v is None or isinstance(v, bool):
+        return v
+    if isinstance(v, str):
+        if v in _YAML_TRUE:
+            return True
+        if v in _YAML_FALSE:
+            return False
+    raise SpecError(f"{field}: {v!r} is not a boolean")
+
+
 def spec_from_manifest(doc: dict) -> Spec:
     """A parsed manifest (dict) -> Spec, exactly as the Go registry resolves it. Raises SpecError
     for an invalid block or a block that contradicts its legacy alias (naming both fields)."""
@@ -117,8 +137,13 @@ def spec_from_manifest(doc: dict) -> Spec:
     norm = inp.get("normalize") or {}
     l_mean, l_std = norm.get("mean") or None, norm.get("std") or None
     pre = doc.get("preprocess")
-    letterbox, crop = bool(inp.get("letterbox", False)), inp.get("crop") or ""
-    keep = bool(inp.get("keep_aspect", False))
+    # A key set to null is absent, as in Go (a nil pointer after yaml.Unmarshal).
+    has_letterbox = _yaml_bool(inp.get("letterbox"), "input.letterbox") is not None
+    has_keep = _yaml_bool(inp.get("keep_aspect"), "input.keep_aspect") is not None
+    has_mult = inp.get("multiple_of") is not None
+    letterbox = bool(_yaml_bool(inp.get("letterbox"), "input.letterbox"))
+    crop = inp.get("crop") or ""
+    keep = bool(_yaml_bool(inp.get("keep_aspect"), "input.keep_aspect"))
     l_w, l_h = int(inp.get("width") or 0), int(inp.get("height") or 0)
     l_mult, l_layout = int(inp.get("multiple_of") or 0), str(inp.get("layout") or "")
     if pre is None:
@@ -138,16 +163,20 @@ def spec_from_manifest(doc: dict) -> Spec:
         s.resize = "center_crop"
     elif letterbox:
         s.resize = "letterbox"
-    r = str(pre.get("resize") or "").strip().lower()
+    raw_r = pre.get("resize")
+    if raw_r is not None and not isinstance(raw_r, str):
+        # PyYAML reads an unquoted `no` / `off` / `yes` / `on` as a bool; Go sees the string.
+        raise SpecError(f'preprocess.resize "{raw_r}" is invalid ({", ".join(MODES)})')
+    r = (raw_r or "").strip().lower()
     if r:
         if r not in MODES:
             raise SpecError(f'preprocess.resize "{pre.get("resize")}" is invalid ({", ".join(MODES)})')
         block = "preprocess.resize: " + r
-        if "letterbox" in inp and letterbox != (r in PAD_MODES):
+        if has_letterbox and letterbox != (r in PAD_MODES):
             raise conflict(f"input.letterbox: {tf(letterbox)}", block)
         if crop and (crop == "center") != (r == "center_crop"):
             raise conflict(f"input.crop: {crop}", block)
-        if "keep_aspect" in inp and keep != (r == "keep_aspect"):
+        if has_keep and keep != (r == "keep_aspect"):
             raise conflict(f"input.keep_aspect: {tf(keep)}", block)
         s.resize = r
 
@@ -166,7 +195,7 @@ def spec_from_manifest(doc: dict) -> Spec:
 
     mult = int(pre.get("multiple_of") or 0)
     if mult:
-        if "multiple_of" in inp and l_mult != mult:
+        if has_mult and l_mult != mult:
             raise conflict(f"input.multiple_of: {l_mult}", f"preprocess.multiple_of: {mult}")
         s.multiple_of = mult
     elif s.resize in ("keep_aspect", "long_side_pad"):
@@ -189,10 +218,11 @@ def spec_from_manifest(doc: dict) -> Spec:
     else:
         s.layout = legacy_layout
 
-    s.no_upscale = bool(pre.get("no_upscale", False))
+    s.no_upscale = bool(_yaml_bool(pre.get("no_upscale"), "preprocess.no_upscale"))
     s.resample = str(pre.get("resample") or "").strip().lower()
-    if pre.get("rescale") is not None:
-        s.rescale = bool(pre["rescale"])
+    rescale = _yaml_bool(pre.get("rescale"), "preprocess.rescale")
+    if rescale is not None:
+        s.rescale = rescale
     if pre.get("pad") is not None:
         s.pad = float(np.float32(pre["pad"]))
     validate(s)
@@ -211,6 +241,9 @@ def validate(s: Spec) -> None:
         raise SpecError(f'preprocess: layout "{s.layout}" is invalid (NCHW, NHWC or HWC)')
     if s.resample not in ("", "bilinear", "bicubic"):
         raise SpecError(f'preprocess: resample "{s.resample}" is invalid (bilinear or bicubic)')
+    if not all(math.isfinite(v) for v in list(s.mean or []) + list(s.std or []) + [s.pad]):
+        raise SpecError(f"preprocess: mean, std and pad must be finite numbers (got mean {s.mean}, "
+                        f"std {s.std}, pad {s.pad})")
     if s.legacy:
         return
     if s.multiple_of > 0 and s.resize not in ("keep_aspect", "long_side_pad"):
@@ -304,18 +337,29 @@ def _resample(spec: Spec):
     return Image.BICUBIC if r == "bicubic" else Image.BILINEAR
 
 
+def _channels(mean, std, scale: float = 1.0):
+    """vision/preprocess.normalizer: 3 per-channel values; a missing mean entry is 0, a missing or
+    zero std entry is 1 (after dividing by `scale`), extra entries are ignored — what the Go side
+    (and the hand-written loops it replaced) does for odd legacy normalize lists."""
+    m = np.zeros(3, np.float32)
+    sd = np.ones(3, np.float32)
+    for c, v in enumerate(list(mean or [])[:3]):
+        m[c] = np.float32(v) / np.float32(scale)
+    for c, v in enumerate(list(std or [])[:3]):
+        v = np.float32(v) / np.float32(scale)
+        if v != 0:
+            sd[c] = v
+    return m, sd
+
+
 def _normalise(x: np.ndarray, spec: Spec) -> np.ndarray:
-    """x: float32 [H,W,3] pixel values (0..255) -> the tensor values (vision/preprocess normalizer)."""
-    if not spec.rescale:
-        if spec.mean is None and spec.std is None:
-            return x
-        mean = np.asarray(spec.mean if spec.mean is not None else [0, 0, 0], np.float32) / np.float32(255)
-        std = np.asarray(spec.std if spec.std is not None else [255, 255, 255], np.float32) / np.float32(255)
-        return (x / np.float32(255) - mean) / std
-    x = x / 255.0
-    if spec.mean is not None and spec.std is not None:
-        x = (x - np.asarray(spec.mean, np.float32)) / np.asarray(spec.std, np.float32)
-    return x
+    """x: float32 [H,W,3] pixel values (0..255) -> the tensor values (vision/preprocess normalizer:
+    v = (p/255 - mean[c]) / std[c]; with rescale off, mean/std are in 0..255 units, and no mean/std
+    at all keeps v = p)."""
+    if not spec.rescale and not spec.mean and not spec.std:
+        return x
+    mean, std = _channels(spec.mean, spec.std, 1.0 if spec.rescale else 255.0)
+    return (x / np.float32(255) - mean) / std
 
 
 def _layout(x: np.ndarray, spec: Spec) -> np.ndarray:
