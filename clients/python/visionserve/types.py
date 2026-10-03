@@ -344,8 +344,9 @@ class Result:
         duration_ms:    server-side inference duration in milliseconds.
         device:         execution device the server ran on, e.g. ``"cpu"``,
                         ``"gpu:0"``, or ``"gpu:0+trt"`` (empty if unreported).
-        hint:           the server's setup recommendation, if any (e.g. "install the
-                        TensorRT EP for faster inference"); empty otherwise.
+        hint:           the server's setup recommendation, if any (e.g. TensorRT was
+                        requested with ``--tensorrt`` but ``libnvinfer.so.10`` is missing,
+                        so the request ran on CUDA); empty otherwise.
 
     The depth map of a ``midas`` / ``depth-anything-v2`` result is RELATIVE inverse depth
     (disparity) min-max normalised to ``[0, 1]`` per image — larger = closer, no units — at

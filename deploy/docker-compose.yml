@@ -50,6 +50,15 @@ services:
     volumes:
       - ./models:/models
     command: ["serve", "--addr", ":11435", "--models", "/models"]
+    # The GPU image runs CUDA → CPU. TensorRT is opt-in (TensorRT → CUDA → CPU): uncomment the
+    # variable AND make the TensorRT 10 libraries visible in the container, which the image does
+    # not ship (without them it falls back to CUDA). TensorRT measured 6.8 mAP lower on
+    # GroundingDINO and rebuilds its engine per prompt length — see deploy/README.md.
+    # environment:
+    #   VISIONSERVE_TENSORRT: "1"
+    # (and under volumes:)
+    #   - /usr/lib/x86_64-linux-gnu/libnvinfer.so.10:/usr/lib/x86_64-linux-gnu/libnvinfer.so.10:ro
+    #   - /usr/lib/x86_64-linux-gnu/libnvonnxparser.so.10:/usr/lib/x86_64-linux-gnu/libnvonnxparser.so.10:ro
     deploy:
       resources:
         reservations:

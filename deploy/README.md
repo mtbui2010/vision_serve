@@ -41,6 +41,7 @@ docker run -d \
   -v ~/.visionserve_models:/root/.models \
   --name visionserve \
   mtbui2010/visionserve:latest
+# (runs CUDA → CPU; TensorRT is opt-in with -e VISIONSERVE_TENSORRT=1, see "GPU image details")
 
 # CPU only
 docker run -d \
@@ -369,30 +370,41 @@ docker run --rm --gpus all \
 ## GPU image details (x86-64)
 
 The GPU image (`latest` / `latest-gpu`) bundles **CUDA 12.4 + cuDNN 9** and includes
-`libonnxruntime_providers_tensorrt.so`, but **every shipped model prefers `[cuda, cpu]`**:
-TensorRT is only used if you put `tensorrt` in a manifest's `runtime.prefer` yourself.
+`libonnxruntime_providers_tensorrt.so`, but it runs **CUDA → CPU** by default (every shipped
+model prefers `[cuda, cpu]`). TensorRT is opt-in, with `VISIONSERVE_TENSORRT=1` (below).
 
 **Why not TensorRT by default:** measured on GroundingDINO (same weights, 247 tabletop images),
 TensorRT is ~1.5x faster but drops boxes and scores unseen object names **6.8 mAP lower**
 (37.78 vs 44.61), and it rebuilds its engine for every new prompt length (10-40 s stalls). The
 CUDA EP runs GroundingDINO in ~150 ms and the SigLIP-rescored routers in ~200 ms per request.
 
-**Check TRT status:**
+**Check the EP chain:**
 ```bash
 docker exec visionserve visionserve version
-# TensorRT: available (/usr/lib/x86_64-linux-gnu/libnvinfer.so.10)
-# — or —
-# TensorRT: not found — not needed: shipped models prefer [cuda, cpu]
+# EP chain: CUDA → CPU (default). TensorRT: off; enable with --tensorrt or VISIONSERVE_TENSORRT=1 (libnvinfer.so.10 not found)
+# — with -e VISIONSERVE_TENSORRT=1 and the lib mounted —
+# EP chain: TensorRT → CUDA → CPU (TensorRT ON via --tensorrt / VISIONSERVE_TENSORRT; libnvinfer: /usr/lib/x86_64-linux-gnu/libnvinfer.so.10)
 ```
+The server prints the same lines at startup.
 
-**To enable TRT:** install TensorRT 10.x on the host and mount the lib:
+**To enable TensorRT** you need both: the TensorRT 10.x libraries inside the container (the image
+does not ship them), and the opt-in. Without the libraries the opt-in falls back to CUDA (no
+crash), and each GPU response carries a `hint` saying TensorRT could not load.
 ```bash
-# Option A — install TRT on the host (Ubuntu/Debian)
-sudo apt-get install tensorrt   # or download from https://developer.nvidia.com/tensorrt
-
-# Option B — mount an existing TRT lib into the container
-docker run ... -v /usr/lib/x86_64-linux-gnu/libnvinfer.so.10:/usr/lib/x86_64-linux-gnu/libnvinfer.so.10:ro ...
+docker run -d --gpus all -p 11435:11435 \
+  -e VISIONSERVE_TENSORRT=1 \
+  -v /usr/lib/x86_64-linux-gnu/libnvinfer.so.10:/usr/lib/x86_64-linux-gnu/libnvinfer.so.10:ro \
+  -v /usr/lib/x86_64-linux-gnu/libnvonnxparser.so.10:/usr/lib/x86_64-linux-gnu/libnvonnxparser.so.10:ro \
+  -v ~/.visionserve_models:/root/.models \
+  --name visionserve \
+  mtbui2010/visionserve:latest
+# host side: sudo apt-get install tensorrt, or https://developer.nvidia.com/tensorrt
 ```
+Every chain that contains `cuda` becomes `tensorrt → cuda → cpu`. Passing `--tensorrt` after
+`serve` in the container command does the same. `VISIONSERVE_EP` is different: it **replaces**
+every model's chain (`VISIONSERVE_EP=tensorrt` gives `tensorrt → cpu`, without CUDA), and it
+wins over the opt-in. With Compose, see the commented `VISIONSERVE_TENSORRT` line in
+`deploy/docker-compose.yml`.
 
 **Prerequisites on the host (CUDA EP, no TRT):**
 - NVIDIA driver ≥ 550

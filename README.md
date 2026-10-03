@@ -80,7 +80,7 @@ sequenceDiagram
     C->>S: POST /api/predict (model, image, optional prompt)
     S->>L: PredictPrompt(model, img, prompt)
     alt model not in memory
-        L->>L: Load() — read manifest, check weights,<br/>create ORT session(s) (EP fallback TensorRT→CUDA→CPU)
+        L->>L: Load() — read manifest, check weights,<br/>create ORT session(s) (EP fallback CUDA→CPU; TensorRT opt-in)
     end
     L->>M: Preprocess(img) → tensor + PreprocessMeta
     L->>E: Run(tensor) — thread-safe (mutex/pool)
@@ -118,9 +118,11 @@ The [`yalue/onnxruntime_go`](https://github.com/yalue/onnxruntime_go) binding lo
 - **GPU (default):** `make run/serve/demo` source [`scripts/gpu-env.sh`](scripts/gpu-env.sh),
   which finds a CUDA-enabled ORT lib + the matching cuDNN/CUDA libraries, and falls back
   to CPU if none is found. Force CPU with `GPU=0`. Set `VISIONSERVE_TRACE=1` to see which
-  execution provider actually loaded (TensorRT → CUDA → CPU).
+  execution provider actually loaded (CUDA → CPU by default; TensorRT → CUDA → CPU with
+  `--tensorrt`, see [Hardware support](#hardware-support)).
 
-On edge devices (Jetson) use an ORT build with the **TensorRT/CUDA EP**.
+On edge devices (Jetson) use an ORT build with the **CUDA EP** (and the TensorRT EP if you
+opt into it).
 
 > **Weights:** `.onnx` files are NOT committed (see `.gitignore`). Get them with:
 > ```bash
@@ -211,6 +213,12 @@ make serve IDLE=0                # keep models resident (never idle-unload)
 > overrides this for every model: `0` keeps models resident (never unload — no slow
 > first inference after an idle pause), `-1` uses each manifest's default, and `N` sets
 > a custom timeout. Via make: `make serve IDLE=0`.
+
+> **TensorRT is opt-in.** On NVIDIA the server runs CUDA → CPU. `visionserve serve --tensorrt`
+> (or `VISIONSERVE_TENSORRT=1 make serve`) makes it TensorRT → CUDA → CPU. It falls back to CUDA
+> when `libnvinfer.so.10` is missing. TensorRT measured ~1.5x faster but 6.8 mAP lower on
+> GroundingDINO, and it rebuilds its engine for every new prompt length
+> ([BUGS_TO_FIX.md #3](BUGS_TO_FIX.md)). See [Hardware support](#hardware-support).
 
 Manage models in a running server:
 
@@ -426,6 +434,9 @@ Pre-built images on Docker Hub: [`mtbui2010/visionserve`](https://hub.docker.com
 > **`latest` = GPU image.** Use `latest-cpu` explicitly on machines without an NVIDIA GPU.
 > Immutable versioned tags (`vX.Y.Z`, `vX.Y.Z-cpu`, `vX.Y.Z-arm`) are also published if you
 > want to pin a specific release — browse them on the [Docker Hub tags page](https://hub.docker.com/r/mtbui2010/visionserve/tags).
+>
+> GPU images run CUDA → CPU. TensorRT is opt-in: pass `-e VISIONSERVE_TENSORRT=1` and make
+> `libnvinfer.so.10` available in the container ([deploy/README.md](deploy/README.md#gpu-image-details-x86-64)).
 
 #### Step 1 — Start the server
 
@@ -613,7 +624,7 @@ image** coordinates as `[x, y, w, h]` (top-left corner + width/height):
 {
   "task": "detection",
   "model": "rf-detr",
-  "device": "gpu:0+trt",
+  "device": "gpu:0",
   "detections": [
     { "bbox": [34.5, 58.0, 120.2, 240.7], "class": "person", "conf": 0.91 },
     { "bbox": [210.0, 130.4, 88.6, 64.1], "class": "dog", "conf": 0.77 }
@@ -627,18 +638,19 @@ The `device` field reports which execution provider ran inference:
 | Value | Meaning |
 |-------|---------|
 | `cpu` | CPU only |
-| `gpu:0` | CUDA EP (NVIDIA GPU, no TensorRT) |
-| `gpu:0+trt` | TensorRT EP — fastest; requires `libnvinfer.so.10` |
+| `gpu:0` | CUDA EP (NVIDIA GPU; the default) — also CoreML / DirectML |
+| `gpu:0+trt` | TensorRT EP — opt-in with `--tensorrt`; requires `libnvinfer.so.10` |
 | `openvino:0` | Intel OpenVINO EP |
 
-When `device` is `gpu:0` (CUDA EP without TRT), a `hint` field is included recommending TRT installation for transformer-based models where CUDA EP provides no speedup over CPU:
+A `hint` field appears only when TensorRT was requested (`--tensorrt` /
+`VISIONSERVE_TENSORRT=1`) but `libnvinfer.so.10` was not found, so the request ran on CUDA:
 
 ```json
 {
   "task": "segmentation",
   "model": "mobile-sam",
   "device": "gpu:0",
-  "hint": "TensorRT not found (libnvinfer.so.10) — only needed by manifests that list tensorrt in runtime.prefer...",
+  "hint": "TensorRT was requested (--tensorrt / VISIONSERVE_TENSORRT) but libnvinfer.so.10 was not found, so this ran on the CUDA EP. ...",
   ...
 }
 ```
@@ -649,7 +661,7 @@ Segmentation results come back under `masks` (each with a column-major RLE-encod
 {
   "task": "segmentation",
   "model": "mobile-sam",
-  "device": "gpu:0+trt",
+  "device": "gpu:0",
   "masks": [
     { "rle": "...", "bbox": [34.0, 58.0, 120.0, 240.0], "conf": 0.98 }
   ],
@@ -770,19 +782,33 @@ run. If an EP's libraries aren't present, the engine silently falls back to the 
 
 | EP (`runtime.prefer`) | Hardware | Notes |
 |-----------------------|----------|-------|
-| `tensorrt` | NVIDIA GPU (incl. **Jetson**) | highest perf; edge-first |
-| `cuda` | NVIDIA GPU | general CUDA |
+| `cuda` | NVIDIA GPU | **the default** on NVIDIA (every shipped model: `[cuda, cpu]`) |
+| `tensorrt` | NVIDIA GPU (incl. **Jetson**) | opt-in (`--tensorrt`, below); ~1.5x faster on GroundingDINO, but less accurate |
 | `coreml` | **Apple Silicon** / macOS | Neural Engine / GPU |
 | `directml` | **Windows** GPU (AMD / Intel / NVIDIA) | DirectX 12 |
 | `openvino` | **Intel** CPU / iGPU / VPU | |
 | `cpu` | any CPU | always-present final fallback |
 
-> Example fallback chains: `[cuda, cpu]` (NVIDIA — the shipped default; add `tensorrt` in front
-> only after checking accuracy, it measured 6.8 mAP lower on GroundingDINO), `[coreml, cpu]` (Mac),
+> Example fallback chains: `[cuda, cpu]` (NVIDIA — the shipped default), `[coreml, cpu]` (Mac),
 > `[directml, cpu]` (Windows), `[openvino, cpu]` (Intel). The EP allowlist is enforced by
 > the registry — see [docs/manifest-spec.md](docs/manifest-spec.md). Wiring a new EP is
 > bounded by what the `yalue/onnxruntime_go` binding exposes (no ROCm yet, so AMD discrete
 > GPUs are reached via DirectML on Windows).
+
+**Turning TensorRT on.** The chain an NVIDIA model actually gets:
+
+| Switch | Effect on a `[cuda, cpu]` model |
+|--------|---------------------------------|
+| none (default) | `cuda → cpu` |
+| `visionserve serve --tensorrt` / `run --tensorrt`, or `VISIONSERVE_TENSORRT=1` | `tensorrt → cuda → cpu`. `tensorrt` goes right before `cuda` in every chain that has `cuda`; chains without `cuda` (cpu-only, CoreML, ...) and manifests that already list `tensorrt` are left alone |
+| `VISIONSERVE_EP=<ep>[,<ep>...]` | **replaces** every model's chain (CPU still appended), and wins over the two above. `VISIONSERVE_EP=tensorrt` gives `tensorrt → cpu`, without CUDA. Meant for EP benchmarking |
+
+Without `libnvinfer.so.10` on the library path, the TensorRT opt-in drops back to CUDA (the TRT
+provider is never loaded, so nothing crashes), and responses carry a `hint` saying so. Before
+turning it on for accuracy-sensitive models, note what it measured on GroundingDINO (same
+weights, held-out names): ~1.5x faster, but 6.8 mAP lower, and it rebuilds its engine for every
+new prompt length (10-40 s stalls) — [BUGS_TO_FIX.md #3](BUGS_TO_FIX.md). `visionserve version`
+and the server's startup log print the chain in effect.
 
 ---
 
@@ -821,16 +847,17 @@ YOLOv8n  GPU (PyTorch):       ~18 ms   CNN, 6 MB, AGPL-3.0 ✗
 RF-DETR-nano  GPU (VisionServe): 57 ms    transformer, 103 MB, Apache-2.0 ✓  (srv-only: 37 ms)
 RF-DETR-base  GPU (VisionServe): 78 ms    transformer, 103 MB, Apache-2.0 ✓  (srv-only: 55 ms)
 YOLOv8m  GPU (PyTorch):       ~45 ms   CNN, 52 MB, AGPL-3.0 ✗
-GroundingDINO GPU+TRT (VisionServe): ~70 ms   open-vocab (text query), 686 MB, Apache-2.0 ✓
-GroundingDINO GPU/CPU (VisionServe): ~6 s    (CUDA EP w/o TRT = CPU speed; TRT required)
+GroundingDINO GPU CUDA (VisionServe): ~153 ms  open-vocab (text query), 686 MB, Apache-2.0 ✓  (default)
+GroundingDINO GPU+TRT  (VisionServe): ~104 ms  --tensorrt opt-in: 6.8 mAP lower on held-out names
 ```
 
 RF-DETR-nano at 57 ms (srv-only 37 ms) is **competitive with YOLOv8n** at the server level. The gap for RF-DETR-base comes from:
 1. **DETR transformer architecture** — global cross-attention on 300 queries is more expensive
    than YOLO's local grid predictions, but NMS-free and more accurate on dense/occluded scenes.
-2. **CUDA EP vs TensorRT** — CUDA EP alone provides ~1.5× speedup for RF-DETR (CNN ops).
-   TensorRT compiles the full graph and gives 10–50× speedup; requires `libnvinfer.so.10`.
-   VisionServe auto-detects TRT at startup (check `visionserve version` or server logs).
+2. **CUDA EP, not TensorRT** — VisionServe runs CUDA → CPU by default. TensorRT compiles the
+   whole graph and is opt-in (`--tensorrt` / `VISIONSERVE_TENSORRT=1`, needs `libnvinfer.so.10`);
+   on GroundingDINO it measured ~1.5x faster but 6.8 mAP lower (BUGS_TO_FIX.md #3).
+   `visionserve version` and the server log print the chain in effect.
 3. **Go preprocess + HTTP** — adds ~20 ms overhead on top of inference.
 
 **YOLO (Ultralytics) is forbidden** in VisionServe by design — it is AGPL-3.0 copyleft,
@@ -848,12 +875,12 @@ make pull MODEL=rf-detr-nano        # ~103 MB, 384×384 input, 57 ms GPU (srv-on
 - **Face detection:** SCRFD at 45 ms, only 16 MB ONNX, 420 MB VRAM — very efficient.
 - **Detection:** RF-DETR-nano at 57 ms (srv 37 ms), RF-DETR at 78 ms (srv 55 ms). Add `--min-size`/`--max-size` to filter noise.
 - **Depth:** MiDaS at 65 ms (srv 13 ms) — Go preprocess dominates (52 ms overhead). Depth Anything V2 not yet measured.
-- **Segmentation:** MobileSAM box/point prompt: ~160 ms (TRT) / ~1.7 s (CUDA EP or CPU). AMG (no prompt, 256 calls): ~7 s (TRT+pool) / ~27 s (CUDA EP). SAM2 p95 is 544 ms — multi-scale encoder is VRAM-heavy (2.5 GB).
+- **Segmentation:** MobileSAM box/point prompt: ~160 ms (table above). AMG (no prompt, 256 calls): ~7 s (TRT+pool) / ~27 s (CUDA EP). SAM2 p95 is 544 ms — multi-scale encoder is VRAM-heavy (2.5 GB).
 - **OCR:** PaddleOCR at 54 ms total, 34 ms inference.
-- **Open-vocab:** GroundingDINO ~70 ms (TRT) / ~6 s (CUDA EP or CPU) — transformer model (686 MB) with deformable attention ops that ORT CUDA EP falls back to CPU.
+- **Open-vocab:** GroundingDINO ~153 ms on the CUDA EP (the default) / ~104 ms with the TensorRT opt-in, which scores held-out names 6.8 mAP lower (served, 29 Sep 2026; the table above is an older run).
 - **Go HTTP overhead:** typically 10–55 ms on top of pure inference. Bottleneck is always ORT, not the server.
 - **Cold-start** ranges from 2.9 s (MobileNetV3) to 12.3 s (GroundingDINO). Use `make serve` for production.
-- **TensorRT EP** (needs `libnvinfer.so.10`) gives **10–50× speedup** on transformer models (GroundingDINO, MobileSAM) — CUDA EP alone provides no speedup for these models because their custom attention ops fall back to CPU internally. RF-DETR and CNN-based models benefit more from CUDA EP (~1.5×). All models list `tensorrt` first in `runtime.prefer`; VisionServe auto-detects and uses TRT when `libnvinfer.so.10` is available.
+- **TensorRT EP** is off by default: every shipped model lists `[cuda, cpu]` in `runtime.prefer`. Turn it on with `--tensorrt` or `VISIONSERVE_TENSORRT=1` (needs `libnvinfer.so.10`, falls back to CUDA without it). On GroundingDINO it measured ~1.5x faster than CUDA but 6.8 mAP lower, and it rebuilds its engine for every new prompt length. See [Hardware support](#hardware-support).
 
 ### Accuracy reference (from papers / official repos)
 
