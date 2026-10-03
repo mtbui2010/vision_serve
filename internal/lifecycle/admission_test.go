@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"sync/atomic"
@@ -26,14 +27,14 @@ func TestAdmitBoundsRequestsPerModel(t *testing.T) {
 
 	var releases []func()
 	for i := 0; i < 3; i++ {
-		r, err := m.Admit("a")
+		r, err := m.Admit(context.Background(), "a")
 		if err != nil {
 			t.Fatalf("request %d refused below the bound: %v", i, err)
 		}
 		releases = append(releases, r)
 	}
 	start := time.Now()
-	r, err := m.Admit("a")
+	r, err := m.Admit(context.Background(), "a")
 	if !errors.Is(err, ErrOverloaded) {
 		t.Fatalf("4th request on a model bounded at 3: err = %v, want ErrOverloaded", err)
 	}
@@ -42,14 +43,14 @@ func TestAdmitBoundsRequestsPerModel(t *testing.T) {
 	}
 	r() // the release handed back with an error must be safe to call
 
-	other, err := m.Admit("b")
+	other, err := m.Admit(context.Background(), "b")
 	if err != nil {
 		t.Fatalf("the bound is per model, but another model was refused: %v", err)
 	}
 	other()
 
 	releases[0]()
-	again, err := m.Admit("a")
+	again, err := m.Admit(context.Background(), "a")
 	if err != nil {
 		t.Fatalf("a slot freed by release was not reusable: %v", err)
 	}
@@ -65,17 +66,17 @@ func TestAdmitReleaseIsIdempotent(t *testing.T) {
 	m := &Manager{live: map[string]*Session{}, stop: make(chan struct{})}
 	m.SetMaxQueue(1)
 
-	r1, err := m.Admit("a")
+	r1, err := m.Admit(context.Background(), "a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	r1()
 	r1()
-	r2, err := m.Admit("a")
+	r2, err := m.Admit(context.Background(), "a")
 	if err != nil {
 		t.Fatalf("slot not freed: %v", err)
 	}
-	if _, err := m.Admit("a"); !errors.Is(err, ErrOverloaded) {
+	if _, err := m.Admit(context.Background(), "a"); !errors.Is(err, ErrOverloaded) {
 		t.Fatalf("a double release freed a second slot: err = %v, want ErrOverloaded", err)
 	}
 	r2()
@@ -123,7 +124,7 @@ func admitCapacity(t *testing.T, m *Manager, name string) int {
 		}
 	}()
 	for i := 0; i < 10_000; i++ {
-		r, err := m.Admit(name)
+		r, err := m.Admit(context.Background(), name)
 		if err != nil {
 			if !errors.Is(err, ErrOverloaded) {
 				t.Fatalf("Admit: %v", err)
@@ -168,7 +169,7 @@ func TestAdmitBoundHoldsUnderContention(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < 50; j++ {
-				r, err := m.Admit("m")
+				r, err := m.Admit(context.Background(), "m")
 				if err != nil {
 					refused.Add(1)
 					continue
@@ -195,4 +196,27 @@ func TestAdmitBoundHoldsUnderContention(t *testing.T) {
 	if ok.Load() == 0 || refused.Load() == 0 {
 		t.Fatalf("expected both admissions and refusals under contention: ok=%d refused=%d", ok.Load(), refused.Load())
 	}
+}
+
+// A request whose client has left is not admitted: the error carries the context's, it is not an
+// overload, and no slot is taken — the bound is still fully available to live requests.
+func TestAdmitRefusesADoneContext(t *testing.T) {
+	m := &Manager{live: map[string]*Session{}, stop: make(chan struct{})}
+	m.SetMaxQueue(1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	r, err := m.Admit(ctx, "a")
+	if !errors.Is(err, context.Canceled) || errors.Is(err, ErrOverloaded) {
+		t.Fatalf("canceled request: err = %v, want context.Canceled (not ErrOverloaded)", err)
+	}
+	r() // the release handed back with an error must be safe to call
+	if n := m.admitted["a"]; n != 0 {
+		t.Fatalf("a canceled request holds %d slot(s)", n)
+	}
+	live, err := m.Admit(context.Background(), "a")
+	if err != nil {
+		t.Fatalf("the only slot was taken by a request that was refused: %v", err)
+	}
+	live()
 }

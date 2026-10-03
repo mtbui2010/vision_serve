@@ -2,8 +2,11 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
+	"fmt"
 	"image"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -47,8 +50,13 @@ func (f *fakeRuntime) Events() []string {
 	return append([]string(nil), f.events...)
 }
 
-func (f *fakeRuntime) Admit(name string) (func(), error) {
+// Admit follows lifecycle.Manager.Admit's contract: a context already done on entry is refused
+// with its error. admitWait stands in for time spent getting the slot.
+func (f *fakeRuntime) Admit(ctx context.Context, name string) (func(), error) {
 	f.event("admit:" + name)
+	if err := ctx.Err(); err != nil {
+		return func() {}, fmt.Errorf("fake: not admitted: %w", err)
+	}
 	if f.admitted != nil {
 		close(f.admitted)
 	}
@@ -148,6 +156,37 @@ func multipartRequest(t *testing.T, url string, fields map[string]string, files 
 	req := httptest.NewRequest(http.MethodPost, url, &b)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	return req
+}
+
+// formPart is one part of an orderedMultipart body: a text field when filename is "".
+type formPart struct {
+	name, filename string
+	data           []byte
+}
+
+// orderedMultipart renders parts in the order given (multipartRequest writes fields first) and
+// returns the body and its Content-Type.
+func orderedMultipart(t *testing.T, parts ...formPart) ([]byte, string) {
+	t.Helper()
+	var b bytes.Buffer
+	mw := multipart.NewWriter(&b)
+	for _, p := range parts {
+		var w io.Writer
+		var err error
+		if p.filename == "" {
+			w, err = mw.CreateFormField(p.name)
+		} else {
+			w, err = mw.CreateFormFile(p.name, p.filename)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Write(p.data) //nolint:errcheck
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes(), mw.FormDataContentType()
 }
 
 // jsonRequest builds a JSON POST.

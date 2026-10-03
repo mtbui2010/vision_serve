@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"image"
 	"io"
-	"mime/multipart"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -20,8 +19,18 @@ import (
 
 // maxJSONBody caps a JSON request envelope (image_base64 and depth_base64 included). It is read
 // whole BEFORE admission control (the model name is inside it), so it must stay bounded; large
-// uploads belong in multipart, where the image is a file part.
+// uploads belong in multipart, where the image is a file part read only after admission.
+//
+// A JSON body is not streamed the way a multipart one is: encoding/json fills the struct from the
+// whole value, a streaming tokenizer would still hold the image_base64 string whole (it is ONE
+// token), and nothing orders "model" before it. The cap already bounds what a queued JSON request
+// holds, and the base64 text is dropped as soon as it is decoded (decodeImage).
 const maxJSONBody = maxImageBytes
+
+// requestFiles are the file parts /api/predict and /api/preprocess read, each with the most bytes
+// of it that matter: decodeImage reads at most maxImageBytes+1 (one more is how it knows the image
+// is over the limit), depthBytes at most maxTensorBytes.
+var requestFiles = map[string]int64{"image": maxImageBytes + 1, "depth": maxTensorBytes}
 
 // Request is one /api/predict or /api/preprocess call, decoded from either content type.
 //
@@ -32,35 +41,45 @@ const maxJSONBody = maxImageBytes
 //
 // decodeRequest reads only the envelope: the image and the depth map stay encoded (a form file
 // part, or a base64 string) until the handler holds an admission slot, because decoding is where
-// a request's memory grows (40 MP of pixels is 160 MB).
+// a request's memory grows (40 MP of pixels is 160 MB). A multipart request may already hold its
+// slot when decodeRequest returns (see readMultipart); the handler calls admit either way.
 type Request struct {
 	api.PredictJSONRequest
 
-	form *multipart.Form // multipart only: holds the "image" and "depth" file parts
+	data *formData // nil for a Request built in code (`visionserve run`)
 }
 
 // decodeRequest reads a predict/preprocess request envelope from a JSON body or a multipart form.
-// The encoding may also come from the query string (?encoding=base64).
-func decodeRequest(w http.ResponseWriter, r *http.Request) (*Request, error) {
+// The encoding may also come from the query string (?encoding=base64). admit takes an admission
+// slot (Server.admit for this request). On success the caller must defer q.Close.
+func decodeRequest(w http.ResponseWriter, r *http.Request, admit func(model string) (func(), error)) (*Request, error) {
 	q := &Request{}
-	form, err := decodeFields(w, r, &q.PredictJSONRequest)
+	data, err := decodeFields(w, r, &q.PredictJSONRequest, requestFiles, admit)
 	if err != nil {
 		return nil, err
 	}
-	q.form = form
+	q.data = data
 	if q.Encoding == "" {
-		q.Encoding = r.URL.Query().Get("encoding") // multipart already saw it via FormValue
+		q.Encoding = r.URL.Query().Get("encoding") // multipart already saw it (query first)
 	}
 	enc, err := api.ParseEncoding(q.Encoding)
 	if err != nil {
+		q.Close()
 		return nil, badRequest(err)
 	}
 	q.Encoding = enc
 	return q, nil
 }
 
+// admit takes the request's admission slot on its model; a no-op when the multipart body was
+// already admitted while it was read. Call it after validate.
+func (q *Request) admit() error { return q.data.admit(q.Model) }
+
+// Close releases the admission slot and the uploaded parts' temp files.
+func (q *Request) Close() { q.data.Close() }
+
 // isMultipart reports whether the request came as a multipart form (vs a JSON body).
-func (q *Request) isMultipart() bool { return q.form != nil }
+func (q *Request) isMultipart() bool { return q.data != nil && q.data.multipart }
 
 // validate checks the fields every predict request needs, with the messages each content type
 // always used.
@@ -79,7 +98,7 @@ func (q *Request) validate(needImage bool) error {
 // hasImage reports whether the request carries an image (a multipart "image" file part, or
 // image_base64 in either content type).
 func (q *Request) hasImage() bool {
-	return filePart(q.form, "image") != nil || q.ImageBase64 != ""
+	return q.data.file("image") != nil || q.ImageBase64 != ""
 }
 
 // decodeImage decodes the request's image (call it only after admission). The base64 copy is
@@ -87,26 +106,17 @@ func (q *Request) hasImage() bool {
 func (q *Request) decodeImage() (image.Image, error) {
 	b64 := q.ImageBase64
 	q.ImageBase64 = ""
-	return decodeUpload(q.form, b64)
-}
-
-// filePart returns the first file part called name, or nil (also for a JSON request: form nil).
-func filePart(form *multipart.Form, name string) *multipart.FileHeader {
-	if form == nil || len(form.File[name]) == 0 {
-		return nil
-	}
-	return form.File[name][0]
+	return decodeUpload(q.data, b64)
 }
 
 // decodeUpload decodes a request's image: the multipart "image" file part when there is one,
 // else the base64 text (image_base64). Shared by every endpoint that takes an image.
-func decodeUpload(form *multipart.Form, b64 string) (image.Image, error) {
-	if fh := filePart(form, "image"); fh != nil {
-		f, err := fh.Open()
+func decodeUpload(data *formData, b64 string) (image.Image, error) {
+	if u := data.file("image"); u != nil {
+		f, err := u.open()
 		if err != nil {
 			return nil, badRequest(fmt.Errorf("missing 'image' file: %w", err))
 		}
-		defer f.Close()
 		return decodeImage(f)
 	}
 	raw, err := base64.StdEncoding.DecodeString(b64)
@@ -119,12 +129,11 @@ func decodeUpload(form *multipart.Form, b64 string) (image.Image, error) {
 // depthBytes returns the raw depth map: the multipart "depth" file part, or depth_base64. nil
 // when the request has none.
 func (q *Request) depthBytes() ([]byte, error) {
-	if fh := filePart(q.form, "depth"); fh != nil {
-		f, err := fh.Open()
+	if u := q.data.file("depth"); u != nil {
+		f, err := u.open()
 		if err != nil {
 			return nil, badRequest(fmt.Errorf("reading depth: %w", err))
 		}
-		defer f.Close()
 		raw, err := io.ReadAll(io.LimitReader(f, maxTensorBytes))
 		if err != nil {
 			return nil, badRequest(fmt.Errorf("reading depth: %w", err))
@@ -192,23 +201,37 @@ func isJSONRequest(r *http.Request) bool {
 }
 
 // decodeFields fills dst — a pointer to a struct with json tags — from a JSON body or a
-// multipart form, whichever the request is, and returns the multipart form (nil for JSON) for
-// its file parts. Both paths read the whole body under a size cap; an oversized body is a 413.
-func decodeFields(w http.ResponseWriter, r *http.Request, dst any) (*multipart.Form, error) {
+// multipart form, whichever the request is, and returns the request's formData: the kept file
+// parts (keep, see readMultipart) and its admission slot, taken through admit. Both paths read
+// the body under a size cap; an oversized body is a 413.
+//
+// A JSON request is read whole and is not admitted here. A multipart request is admitted while it
+// is read, before its first kept file part, when the model is known by then; otherwise (no kept
+// file part, or one before the model field) it is not admitted yet. Either way the caller
+// validates the fields, then calls admit on the formData (a no-op if it already holds the slot),
+// and must defer Close on success. On error nothing is held.
+func decodeFields(w http.ResponseWriter, r *http.Request, dst any, keep map[string]int64,
+	admit func(model string) (func(), error)) (*formData, error) {
+	d := &formData{files: map[string]*upload{}, admitFn: admit}
 	if isJSONRequest(r) {
 		body := http.MaxBytesReader(w, r.Body, maxJSONBody)
 		if err := json.NewDecoder(body).Decode(dst); err != nil {
 			return nil, badRequest(fmt.Errorf("invalid JSON body: %w", err))
 		}
 		drainBody(body)
-		return nil, nil
+		return d, nil
 	}
-	if err := r.ParseMultipartForm(maxImageBytes); err != nil {
-		return nil, badRequest(fmt.Errorf("failed to parse multipart form: %w", err))
+	d.multipart = true
+	value, err := readMultipart(r, d, keep)
+	if err != nil {
+		if d.refused {
+			closeUnreadBody(w, r) // refused before a file part: the rest of the body is unread
+		}
+		d.Close()
+		return nil, err
 	}
-	formInto(dst, r.FormValue)
-	drainBody(r.Body)
-	return r.MultipartForm, nil
+	formInto(dst, value)
+	return d, nil
 }
 
 // drainBody reads what is left of a body (a trailing newline after the JSON value, the epilogue

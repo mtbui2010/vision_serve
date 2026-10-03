@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -76,10 +77,16 @@ func maxQueueFromEnv() int {
 // it is a no-op func — never nil — when Admit fails. It returns an error wrapping ErrOverloaded,
 // immediately, when the model already holds its bound (see defaultMinQueue for the bound).
 //
+// ctx is the request's: a request whose context is already done (its client left) is not
+// admitted, and the error wraps ctx.Err(). Admit never waits, so ctx is checked once, on entry.
+//
 // Admit does not load the model and does not check the name: an unknown model is admitted and
 // then fails with ErrModelNotFound on Load. The bookkeeping entry is dropped with the last
 // release, so made-up names do not accumulate.
-func (m *Manager) Admit(name string) (release func(), err error) {
+func (m *Manager) Admit(ctx context.Context, name string) (release func(), err error) {
+	if err := ctx.Err(); err != nil {
+		return func() {}, fmt.Errorf("lifecycle: %q not admitted, the request is gone: %w", name, err)
+	}
 	m.mu.Lock()
 	limit := m.admitLimitLocked(name)
 	n := m.admitted[name]

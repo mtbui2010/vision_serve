@@ -246,6 +246,14 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   thử `use_deterministic_compute` của ORT.
 - **`detr.splitRF`** có thể gọi thẳng `SplitOutputs`, vì test đã chứng minh hai hàm chọn cùng
   tensor.
-- **`Admit`** chưa nhận ctx, và multipart vẫn được parse trước `Admit`.
+- ~~**`Admit`** chưa nhận ctx, và multipart vẫn được parse trước `Admit`.~~ Đã xong:
+  `Admit(ctx, name)` từ chối request mà client đã bỏ đi (499). Multipart nay được đọc từng
+  part: request được admit ngay trước khi đọc part file đầu tiên (`image`/`depth`), nên một
+  request bị từ chối (503) không đọc cũng không lưu upload của nó, và trả về ngay
+  (`Connection: close` khi phần body chưa đọc có thể lớn). Nếu ảnh đến trước field `model`, ảnh
+  được giữ với đúng giới hạn cũ (32 MiB trong RAM, phần còn lại ra file tạm) và request được admit
+  sau khi đọc hết form. JSON vẫn đọc trọn trước `Admit` (model nằm trong JSON, body đã bị chặn ở
+  32 MiB). Còn lại: khi quá tải, một request sai định dạng có thể nhận 503 thay vì 400; và
+  `PredictPrompt` vẫn chờ slot session mà không theo ctx.
 - **`top_left_pad`** (SCRFD) ánh xạ sai trục x với ảnh panorama cực đoan. Đây là hành vi giống
   InsightFace gốc, không phải hồi quy.

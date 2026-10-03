@@ -26,7 +26,7 @@ const DefaultAddr = "127.0.0.1:11435"
 // modelRuntime is what the HTTP layer needs from lifecycle.Manager. It is an interface so the
 // handler tests can drive a fake (admission order, cancellation, status mapping) without ONNX.
 type modelRuntime interface {
-	Admit(name string) (release func(), err error)
+	Admit(ctx context.Context, name string) (release func(), err error)
 	Load(name string) error
 	Unload(name string) error
 	IsLoaded(name string) bool
