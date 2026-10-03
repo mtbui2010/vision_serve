@@ -3,13 +3,11 @@ package server
 import (
 	"encoding/base64"
 	"encoding/binary"
-	"fmt"
 	"image"
 	"math"
 	"net/http"
 
 	"visionserve/internal/lifecycle"
-	"visionserve/internal/models"
 )
 
 // preprocessResponse is the body of POST /api/preprocess.
@@ -40,41 +38,57 @@ type preprocessMeta struct {
 	PadY       int     `json:"pad_y"`
 }
 
-// handlePreprocess — POST /api/preprocess (multipart: model, image?, prompt?, box?, point?)
+// handlePreprocess — POST /api/preprocess (the /api/predict request: multipart or JSON, with
+// model, image?, prompt?, box?, point? and the other predict options)
 //
 // Returns exactly what the model would feed its first ONNX session for this request, without
 // running inference: the resized/normalised pixels, and for text models the token ids. It is a
 // DEBUG endpoint for train/serve parity — compare it with the tensor your training code builds
 // for the same image. The image is optional for text-only models (siglip-text, clip-text).
+// With a roi the tensors are those of the crop the model would see, and meta maps to the crop.
 func (s *Server) handlePreprocess(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(maxImageBytes); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("failed to parse multipart form: %w", err))
-		return
-	}
-	name := r.FormValue("model")
-	if name == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("missing 'model' field"))
-		return
-	}
-	var img image.Image
-	if file, _, err := r.FormFile("image"); err == nil {
-		defer file.Close()
-		if img, err = decodeImage(file); err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-	}
-	prompt, err := models.ParsePrompt(r.FormValue("prompt"), r.FormValue("box"), r.FormValue("point"))
+	res, name, err := s.preprocess(w, r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	res, err := s.mgr.Preprocess(name, img, prompt)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, encodePreprocess(name, res))
+}
+
+func (s *Server) preprocess(w http.ResponseWriter, r *http.Request) (lifecycle.PreprocessResult, string, error) {
+	q, err := decodeRequest(w, r)
+	if err != nil {
+		return lifecycle.PreprocessResult{}, "", err
+	}
+	if err := q.validate(false); err != nil {
+		return lifecycle.PreprocessResult{}, "", err
+	}
+	release, err := s.admit(r, q.Model)
+	if err != nil {
+		return lifecycle.PreprocessResult{}, "", err
+	}
+	defer release()
+
+	var img image.Image
+	var imgW, imgH int
+	if q.hasImage() {
+		if img, err = q.decodeImage(); err != nil {
+			return lifecycle.PreprocessResult{}, "", err
+		}
+		imgW, imgH = img.Bounds().Dx(), img.Bounds().Dy()
+	}
+	prompt, err := q.ToPrompt(imgW, imgH)
+	if err != nil {
+		return lifecycle.PreprocessResult{}, "", err
+	}
+	if img != nil {
+		img, _, _ = cropROI(img, &prompt)
+	}
+	if r.Context().Err() != nil {
+		return lifecycle.PreprocessResult{}, "", errClientGone
+	}
+	res, err := s.mgr.Preprocess(q.Model, img, prompt)
+	return res, q.Model, err
 }
 
 func encodePreprocess(name string, res lifecycle.PreprocessResult) preprocessResponse {

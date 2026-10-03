@@ -21,21 +21,22 @@ const maxDepthSide = 16384
 
 // decodeImage reads at most maxImageBytes, checks the declared pixel count from the image header
 // BEFORE decoding, then decodes. It is the one place every handler decodes an upload, so the
-// limits cannot be forgotten at a new call site.
+// limits cannot be forgotten at a new call site. Errors are request errors (400), or 413 for an
+// upload over the byte limit.
 func decodeImage(r io.Reader) (image.Image, error) {
 	raw, err := io.ReadAll(io.LimitReader(r, maxImageBytes+1))
 	if err != nil {
-		return nil, fmt.Errorf("reading image: %w", err)
+		return nil, badRequest(fmt.Errorf("reading image: %w", err))
 	}
 	if len(raw) > maxImageBytes {
-		return nil, fmt.Errorf("image is larger than %d MiB", maxImageBytes>>20)
+		return nil, tooLargeError{fmt.Sprintf("image is larger than %d MiB", maxImageBytes>>20)}
 	}
 	cfg, _, err := image.DecodeConfig(bytes.NewReader(raw))
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode image: %w", err)
+		return nil, badRequest(fmt.Errorf("failed to decode image: %w", err))
 	}
 	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxImagePixels {
-		return nil, fmt.Errorf("image is %dx%d; the limit is %d megapixels", cfg.Width, cfg.Height, maxImagePixels/1_000_000)
+		return nil, badRequest(fmt.Errorf("image is %dx%d; the limit is %d megapixels", cfg.Width, cfg.Height, maxImagePixels/1_000_000))
 	}
 	// AutoOrientation applies the EXIF orientation tag, so a phone photo is processed the way
 	// every viewer shows it (and the way transformers' load_image feeds models), and the
@@ -43,7 +44,7 @@ func decodeImage(r io.Reader) (image.Image, error) {
 	// detected sideways. Formats without EXIF decode exactly as image.Decode would.
 	img, err := imaging.Decode(bytes.NewReader(raw), imaging.AutoOrientation(true))
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode image: %w", err)
+		return nil, badRequest(fmt.Errorf("failed to decode image: %w", err))
 	}
 	return img, nil
 }

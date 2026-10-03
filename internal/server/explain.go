@@ -16,9 +16,21 @@ import (
 	"visionserve/internal/lifecycle"
 )
 
+// explainRequest is the /api/explain request: multipart fields, or a JSON body with the same
+// names (image_base64 instead of the "image" file part).
+type explainRequest struct {
+	Model        string   `json:"model"`
+	ImageBase64  string   `json:"image_base64"`
+	DetectionIdx int      `json:"detection_idx"` // 0-based; negative = 0
+	TopChannels  int      `json:"top_channels"`  // Score-CAM channels; <= 0 = manifest default
+	Alpha        *float32 `json:"alpha"`         // overlay opacity in [0,1]; absent/out of range = 0.5
+	Format       string   `json:"format"`        // "png" (default) | "numpy"
+	Class        string   `json:"class"`
+}
+
 // POST /api/explain
 //
-// Multipart form fields:
+// Multipart form fields (or the same names as a JSON body, with image_base64):
 //
 //	model          string  required   model name (must be loaded and have an explain manifest block)
 //	image          file    required   JPEG/PNG image
@@ -33,79 +45,58 @@ import (
 //   - format=numpy: Content-Type: application/octet-stream — raw little-endian float32
 //     with headers X-Heatmap-Shape (H,W) and X-Heatmap-Dtype (float32).
 func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
-	// --- 1. Parse multipart form.
-	if err := r.ParseMultipartForm(maxImageBytes); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("failed to parse form: %w", err))
-		return
-	}
-
-	modelName := r.FormValue("model")
-	if modelName == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf(`"model" field is required`))
-		return
-	}
-
-	f, _, err := r.FormFile("image")
+	var q explainRequest
+	form, err := decodeFields(w, r, &q)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf(`"image" file is required: %w`, err))
+		writeError(w, err)
 		return
 	}
-	defer f.Close()
-
-	img, err := decodeImage(f)
+	switch {
+	case q.Model == "":
+		err = badRequest(fmt.Errorf(`"model" field is required`))
+	case form == nil && q.ImageBase64 == "":
+		err = badRequest(fmt.Errorf(`"image_base64" is required`))
+	case filePart(form, "image") == nil && q.ImageBase64 == "":
+		err = badRequest(fmt.Errorf(`"image" file is required: %w`, http.ErrMissingFile))
+	}
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeError(w, err)
 		return
 	}
 
-	// --- 2. Parse optional parameters.
-	detectionIdx := 0
-	if v := r.FormValue("detection_idx"); v != "" {
-		if n, err2 := strconv.Atoi(v); err2 == nil && n >= 0 {
-			detectionIdx = n
-		}
+	release, err := s.admit(r, q.Model)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	defer release()
+
+	img, err := decodeUpload(form, q.ImageBase64)
+	if err != nil {
+		writeError(w, err)
+		return
 	}
 
-	topChannels := 0 // 0 = use manifest default
-	if v := r.FormValue("top_channels"); v != "" {
-		if n, err2 := strconv.Atoi(v); err2 == nil && n > 0 {
-			topChannels = n
-		}
-	}
-
-	alpha := float32(0.5)
-	if v := r.FormValue("alpha"); v != "" {
-		if f2, err2 := strconv.ParseFloat(v, 32); err2 == nil {
-			a := float32(f2)
-			if a >= 0 && a <= 1 {
-				alpha = a
-			}
-		}
-	}
-
-	format := r.FormValue("format")
-	if format == "" {
-		format = "png"
-	}
-
-	class := r.FormValue("class")
-
-	// --- 3. Delegate to lifecycle.Manager.Explain.
 	req := lifecycle.ExplainRequest{
-		Class:        class,
-		DetectionIdx: detectionIdx,
-		TopChannels:  topChannels,
-		Alpha:        alpha,
+		Class:        q.Class,
+		DetectionIdx: max(q.DetectionIdx, 0),
+		TopChannels:  max(q.TopChannels, 0), // 0 = use manifest default
+		Alpha:        0.5,
 	}
-
-	result, err := s.mgr.Explain(modelName, img, req)
+	if q.Alpha != nil && *q.Alpha >= 0 && *q.Alpha <= 1 {
+		req.Alpha = *q.Alpha
+	}
+	if r.Context().Err() != nil {
+		writeError(w, errClientGone)
+		return
+	}
+	result, err := s.mgr.Explain(q.Model, img, req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
+		writeError(w, err)
 		return
 	}
 
-	// --- 4. Render output.
-	switch format {
+	switch q.Format {
 	case "numpy":
 		// Raw little-endian float32 bytes with shape in headers.
 		buf := make([]byte, len(result.Heatmap)*4)
@@ -118,10 +109,10 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", strconv.Itoa(len(buf)))
 		_, _ = w.Write(buf)
 
-	default: // "png"
+	default: // "" or "png"
 		var buf bytes.Buffer
-		if err := explain.RenderPNG(&buf, img, result.Heatmap, result.Width, result.Height, alpha); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Errorf("failed to render PNG: %w", err))
+		if err := explain.RenderPNG(&buf, img, result.Heatmap, result.Width, result.Height, req.Alpha); err != nil {
+			writeError(w, fmt.Errorf("failed to render PNG: %w", err))
 			return
 		}
 		w.Header().Set("Content-Type", "image/png")
