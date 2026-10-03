@@ -245,6 +245,56 @@
       "device": "gpu:0"
     },
     {
+      "file": "explain-rfdetr-177015.jpg",
+      "figure": "Explain: decoder cross-attention for one detection (/api/explain)",
+      "model": "rfdetr-small",
+      "request": {
+        "endpoint": "/api/explain",
+        "format": "numpy",
+        "detection_idx": [
+          0,
+          1
+        ]
+      },
+      "image": {
+        "dataset": "COCO val2017",
+        "coco_id": 177015,
+        "file": "000000177015.jpg",
+        "flickr_url": "http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg",
+        "license": "CC BY 2.0",
+        "credit": "Photo: COCO val2017 #177015, Flickr http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg, CC BY 2.0"
+      },
+      "detections": 4,
+      "explained": [
+        {
+          "detection_idx": 0,
+          "class": "cat",
+          "conf": 0.918,
+          "bbox": [
+            316.3,
+            182.3,
+            298.5,
+            182.3
+          ],
+          "query": 1
+        },
+        {
+          "detection_idx": 1,
+          "class": "laptop",
+          "conf": 0.9136,
+          "bbox": [
+            5.1,
+            172.6,
+            286.5,
+            245.9
+          ],
+          "query": 0
+        }
+      ],
+      "duration_ms": 23.0,
+      "device": "gpu:0"
+    },
+    {
       "file": "faces-scrfd-263969.jpg",
       "figure": "Face detection",
       "model": "scrfd",

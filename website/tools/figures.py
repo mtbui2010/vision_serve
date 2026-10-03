@@ -127,6 +127,19 @@ class Server:
     def preprocess(self, model, image_bytes, **fields):
         return self._post("/api/preprocess", model, image_bytes, fields)
 
+    def explain_numpy(self, model, image_bytes, **fields):
+        """POST /api/explain with format=numpy: (heatmap HxW float32, explained detection, query)."""
+        data = {"model": model, "format": "numpy", **{k: str(v) for k, v in fields.items()}}
+        files = {"image": ("image.jpg", image_bytes, "application/octet-stream")}
+        r = requests.post(self.url + "/api/explain", data=data, files=files, timeout=600)
+        if r.status_code != 200:
+            raise RuntimeError(f"/api/explain {model}: HTTP {r.status_code}: {r.text[:300]}")
+        h, w = (int(v) for v in r.headers["X-Heatmap-Shape"].split(","))
+        hm = np.frombuffer(r.content, "<f4").reshape(h, w)
+        det = json.loads(r.headers["X-Explain-Detection"])
+        query = int(r.headers.get("X-Explain-Query", -1))
+        return hm, det, query
+
 
 def tensor(inp):
     dt = {"float32": "<f4", "int64": "<i8"}[inp["dtype"]]
@@ -803,14 +816,52 @@ class Builder:
                          meta=meta, input_box=[round(v, 1) for v in (ix, iy, iw, ih)],
                          original_box=[round(v, 1) for v in (x, y, w, h)], **self.run_info(res))
 
+    # -- 15. explain (attention heatmap) ----------------------------------------------------------
+
+    def explain(self):
+        model = "rfdetr-small"  # RF-DETR small (COCO) with an `explain: type: attention` block
+        if not self.need(model):
+            return
+        pid = 177015
+        img, raw = self.photo(pid)
+        pred = self.srv.predict(model, raw)
+        cmap = matplotlib.colormaps["magma"]
+        panels, shown = [], []
+        for idx in (0, 1):
+            hm, det, query = self.srv.explain_numpy(model, raw, detection_idx=idx)
+            if hm.shape != (img.height, img.width):
+                hm = np.asarray(Image.fromarray(hm).resize(img.size, Image.NEAREST))
+            # Darken the photo and lay the heatmap over it, its opacity growing with the value
+            # (square root, so the weaker attended tokens stay visible next to the peak).
+            v = np.sqrt(np.clip(hm, 0, 1))
+            base = np.asarray(img).astype(np.float32) * 0.5
+            heat = cmap(0.25 + 0.75 * v)[..., :3] * 255.0
+            a = v[..., None] * 0.9
+            out = Image.fromarray((base * (1 - a) + heat * a).clip(0, 255).astype(np.uint8))
+            out = draw_boxes(out, [det], lambda _c: PALETTE[2], width=3, size=15)
+            out = caption_bar(out, f"detection_idx={idx}: {det['class']} {det['conf']:.2f} "
+                                   f"(object query {query})", 17)
+            panels.append(out)
+            shown.append({"detection_idx": idx, "class": det["class"], "conf": round(det["conf"], 4),
+                          "bbox": [round(v, 1) for v in det["bbox"]], "query": query})
+        out = hstack(panels, gap=8)
+        self.save(out, f"explain-rfdetr-{pid}.jpg",
+                  figure="Explain: decoder cross-attention for one detection (/api/explain)",
+                  model=model, request={"endpoint": "/api/explain", "format": "numpy",
+                                        "detection_idx": [0, 1]},
+                  image=self.source(pid), detections=len(pred.get("detections", [])),
+                  explained=shown, **self.run_info(pred))
+
     # -- write ----------------------------------------------------------------------------------
 
     def write_index(self, keep):
         path = self.out / "figures.json"
         old = []
         if keep and path.exists():
+            # Keep the other figures' entries, minus any whose file is gone (renamed/removed).
             old = [e for e in json.loads(path.read_text())["figures"]
-                   if e["file"] not in {n["file"] for n in self.entries}]
+                   if e["file"] not in {n["file"] for n in self.entries}
+                   and (self.out / e["file"]).exists()]
         doc = {"generated_by": "website/tools/figures.py",
                "server": "VisionServe (see each entry's device)",
                "host": self.args.host_note,
@@ -840,7 +891,8 @@ class Builder:
 
 
 STEPS = ["detection", "segmentation", "automask", "open_vocab", "grounded_sam", "depth", "faces",
-         "ocr", "classification", "zero_shot", "grasp", "background", "preprocessing", "box_mapping"]
+         "ocr", "classification", "zero_shot", "grasp", "background", "preprocessing", "box_mapping",
+         "explain"]
 
 
 def main():
