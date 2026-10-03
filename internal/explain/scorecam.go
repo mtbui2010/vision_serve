@@ -9,6 +9,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/mask"
 )
 
 // scoreCamExplainer reads backbone feature maps from the explain session and
@@ -90,7 +91,7 @@ func scoreCAMStructural(feat engine.Tensor, topChannels, origW, origH int) ([]fl
 		copy(ch, feat.Data[base:base+fH*fW])
 		ch = Normalize(ch)
 
-		up := upsampleNearest(ch, fW, fH, origW, origH)
+		up := mask.UpsampleNearest(ch, fH, fW, origH, origW)
 		for j := range heatmap {
 			heatmap[j] += up[j]
 		}
@@ -162,10 +163,10 @@ func ScoreCAMHeatmap(
 		ch = Normalize(ch)
 
 		// Upsample channel activation to original image size.
-		mask := upsampleNearest(ch, fW, fH, origW, origH)
+		act := mask.UpsampleNearest(ch, fH, fW, origH, origW)
 
 		// Apply mask to original image.
-		masked := applyMask(origImg, mask, origW, origH)
+		masked := applyMask(origImg, act, origW, origH)
 
 		// Run detect session, get score for the target detection.
 		score, rerr := detectRunner(masked)
@@ -178,7 +179,7 @@ func ScoreCAMHeatmap(
 
 		// Accumulate score-weighted activation.
 		for j := range result {
-			result[j] += score * mask[j]
+			result[j] += score * act[j]
 		}
 	}
 

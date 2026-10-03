@@ -5,6 +5,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/mask"
 )
 
 // postprocess decodes a depth estimation output tensor -> normalized Result.
@@ -42,7 +43,7 @@ func postprocess(outs []engine.Tensor, _ models.PreprocessMeta, cfg models.Confi
 	}
 
 	// Min-max normalize to [0, 1].
-	normalized := minMaxNormalize(out.Data)
+	normalized := mask.MinMaxNormalize(out.Data, 0)
 
 	return models.Result{
 		Task:        models.TaskDepth,
@@ -50,33 +51,4 @@ func postprocess(outs []engine.Tensor, _ models.PreprocessMeta, cfg models.Confi
 		DepthWidth:  w,
 		DepthHeight: h,
 	}, nil
-}
-
-// minMaxNormalize rescales values to [0, 1]. Returns the input slice unchanged
-// (all zeros) when the range is zero.
-func minMaxNormalize(data []float32) []float32 {
-	if len(data) == 0 {
-		return data
-	}
-
-	mn, mx := data[0], data[0]
-	for _, v := range data[1:] {
-		if v < mn {
-			mn = v
-		}
-		if v > mx {
-			mx = v
-		}
-	}
-
-	rng := mx - mn
-	out := make([]float32, len(data))
-	if rng == 0 {
-		// Flat depth map — return all zeros.
-		return out
-	}
-	for i, v := range data {
-		out[i] = (v - mn) / rng
-	}
-	return out
 }
