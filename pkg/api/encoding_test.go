@@ -103,6 +103,31 @@ func TestDecodeArraysBase64RejectsBadShapes(t *testing.T) {
 	}
 }
 
+// A 1920x1080 depth map answered as JSON numbers vs encoding=base64 (go test -bench Encode ./pkg/api).
+func BenchmarkEncodeDepth2MP(b *testing.B) {
+	depth := make([]float32, 1920*1080)
+	for i := range depth {
+		depth[i] = float32(i%1000) / 997
+	}
+	for _, enc := range []string{EncodingJSON, EncodingBase64} {
+		b.Run(enc, func(b *testing.B) {
+			var n int
+			for i := 0; i < b.N; i++ {
+				res := Result{Task: TaskDepth, DepthMap: depth, DepthWidth: 1920, DepthHeight: 1080}
+				if enc == EncodingBase64 {
+					res.EncodeArraysBase64()
+				}
+				body, err := json.Marshal(res)
+				if err != nil {
+					b.Fatal(err)
+				}
+				n = len(body)
+			}
+			b.ReportMetric(float64(n)/1e6, "MB/answer")
+		})
+	}
+}
+
 func TestParseEncoding(t *testing.T) {
 	for in, want := range map[string]string{"": EncodingJSON, "json": EncodingJSON, "BASE64": EncodingBase64, " base64 ": EncodingBase64} {
 		if got, err := ParseEncoding(in); err != nil || got != want {
