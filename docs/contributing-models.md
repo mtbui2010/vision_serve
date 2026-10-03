@@ -52,6 +52,7 @@ import (
     "image"
     "visionserve/internal/engine"
     "visionserve/internal/models"
+    "visionserve/internal/vision/preprocess"
 )
 
 func init() { models.Register("my-arch", New) }
@@ -65,8 +66,17 @@ func (m *myModel) Task() models.Task     { return models.TaskDetection }
 func (m *myModel) InputName() string     { return "" } // "" = let the engine probe the ONNX
 func (m *myModel) OutputNames() []string { return nil }
 
+// The modes this architecture can map back (internal/vision/preprocess); the first is its default.
+var arch = preprocess.Arch{Name: "my-arch", Modes: []preprocess.Mode{preprocess.Squash, preprocess.Letterbox}}
+
 func (m *myModel) Preprocess(img image.Image) (engine.Tensor, models.PreprocessMeta, error) {
-    // resize/letterbox/normalize → tensor; record scale/pad in meta
+    // The manifest's preprocess: block (or legacy input.* fields), resolved for this architecture,
+    // applied by the ONE implementation: resize/pad/normalize → tensor + scale/pad in meta.
+    s, err := arch.Resolve(m.cfg.PreprocessSpec())
+    if err != nil {
+        return engine.Tensor{}, models.PreprocessMeta{}, err
+    }
+    return s.Apply(img)
 }
 func (m *myModel) Postprocess(outs []engine.Tensor, meta models.PreprocessMeta) (models.Result, error) {
     // decode output → Result; BBox MUST be mapped back to ORIGINAL image coords via meta
@@ -321,6 +331,11 @@ sha256sum /tmp/pulltest/my-model/model.onnx      # must match the manifest pin
   postprocess. If unsure → write a stub + `TODO`, do not fabricate.
 - RF-DETR is **NMS-free** — do not apply YOLO-style NMS. Anchor-based models may use
   `nms.Detections` (`internal/vision/nms`).
+- Do not hand-write resize / pad / HWC→CHW / normalise loops: declare a
+  `preprocess.Spec` (`internal/vision/preprocess`) — from the manifest via
+  `cfg.PreprocessSpec()` + your `preprocess.Arch`, or as a fixed literal when the export dictates
+  it (the SAM encoders) — and call `Apply`. Genuinely special geometry (per-detection crops) still
+  ends in the shared `Spec.Tensor`. See [manifest-spec.md, Preprocessing](manifest-spec.md#preprocessing).
 - Do not re-implement shared geometry/mask code in a model package: use
   `internal/vision/geom` (sigmoid, normalized box → input pixels, `meta.Affine()` to map
   back to the original image, clamp, IoU) and `internal/vision/mask` (threshold → bitmap +
