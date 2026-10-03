@@ -16,8 +16,9 @@ import (
 //
 //	[1, num_classes]   — raw logits (before softmax), float32
 //
-// We apply softmax to obtain probabilities, then select the top-K entries.
-// K = cfg.MaxDet if > 0, otherwise defaults to 5.
+// We apply softmax to obtain probabilities, then select the top-K entries (equal probabilities
+// keep class-index order). K = cfg.MaxDet if > 0, otherwise defaults to 5. cfg.ConfThresh is
+// ignored: the top K are returned whatever their probability.
 // =========================================================
 func postprocess(outs []engine.Tensor, _ models.PreprocessMeta, cfg models.Config) (models.Result, error) {
 	if len(outs) == 0 {
@@ -46,12 +47,13 @@ func postprocess(outs []engine.Tensor, _ models.PreprocessMeta, cfg models.Confi
 
 	probs := softmax(out.Data)
 
-	// Build index slice and sort by probability descending.
+	// Build index slice and sort by probability descending; stable, so ties keep index order
+	// (deterministic output).
 	indices := make([]int, numClasses)
 	for i := range indices {
 		indices[i] = i
 	}
-	sort.Slice(indices, func(a, b int) bool {
+	sort.SliceStable(indices, func(a, b int) bool {
 		return probs[indices[a]] > probs[indices[b]]
 	})
 
