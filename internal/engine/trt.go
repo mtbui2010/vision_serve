@@ -33,15 +33,16 @@ func TRTLibPath() string {
 	return trtLibPath
 }
 
-// TRTHint returns a human-readable recommendation to install TensorRT,
-// or an empty string if TRT is already available.
+// TRTHint returns a setup hint for a result served on the CUDA EP: non-empty only when TensorRT
+// was opted into (--tensorrt / VISIONSERVE_TENSORRT, not overridden by VISIONSERVE_EP) but
+// libnvinfer.so.10 is missing, so the request ran on CUDA instead. CUDA is the default and needs
+// no hint.
 func TRTHint() string {
-	if TRTAvailable() {
+	if !TensorRTRequested() || EPOverride() != "" || TRTAvailable() {
 		return ""
 	}
-	return "TensorRT not found (libnvinfer.so.10) — only needed by manifests that list tensorrt in runtime.prefer " +
-		"(shipped models use [cuda, cpu]: TensorRT measured 6.8 mAP lower on GroundingDINO). " +
-		"Check LD_LIBRARY_PATH or install TensorRT: https://developer.nvidia.com/tensorrt"
+	return "TensorRT was requested (--tensorrt / VISIONSERVE_TENSORRT) but libnvinfer.so.10 was not found, " +
+		"so this ran on the CUDA EP. Check LD_LIBRARY_PATH or install TensorRT 10: https://developer.nvidia.com/tensorrt"
 }
 
 // TRTOptions returns the TensorRT EP provider options, keyed as ORT expects them.

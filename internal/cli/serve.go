@@ -12,7 +12,6 @@ import (
 	"syscall"
 	"time"
 
-	"visionserve/internal/engine"
 	"visionserve/internal/lifecycle"
 	"visionserve/internal/registry"
 	"visionserve/internal/server"
@@ -25,9 +24,11 @@ func runServe(args []string) error {
 	addr := fs.String("addr", server.DefaultAddr, "listen address host:port; the default is loopback only (this machine, like Ollama) — the API has no authentication. Use :11435 (or 0.0.0.0:11435) to accept other hosts, e.g. in a container")
 	preloadFlag := fs.String("preload", "", "comma-separated models to load at startup, e.g. mobile-sam,rf-detr")
 	idleFlag := fs.Int("idle-unload-seconds", -1, "override every model's idle auto-unload (seconds); 0 = never unload (stay resident, no slow reload after an idle pause); -1 = use each manifest's value")
+	trtFlag := addTensorRTFlag(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	applyTensorRTFlag(trtFlag) // before the registry validates chains and anything loads
 
 	// Verified mode (opt-in, trust-critical deployments): cross-check every model's declared
 	// license against the maintainer-audited provenance ledger and enforce the sha256/source pin.
@@ -59,15 +60,12 @@ func runServe(args []string) error {
 		}
 	}
 
-	// Background: check TRT availability and log a recommendation if absent.
-	// Runs in a goroutine so it never delays server startup or the first request.
+	// Background: log the EP chain (CUDA → CPU by default, TensorRT → CUDA → CPU with --tensorrt
+	// or VISIONSERVE_TENSORRT=1). The libnvinfer probe scans the filesystem, so it runs in a
+	// goroutine and never delays server startup or the first request.
 	go func() {
-		// Shipped manifests prefer [cuda, cpu]: TensorRT measured faster but 6.8 mAP worse on
-		// GroundingDINO's unseen names (BUGS_TO_FIX.md #3), so it is opt-in per manifest.
-		if engine.TRTAvailable() {
-			log.Printf("GPU: TensorRT found (%s) — used only by manifests whose runtime.prefer lists tensorrt", engine.TRTLibPath())
-		} else {
-			log.Println("GPU: TensorRT (libnvinfer.so.10) not found — CUDA EP (the default for every shipped model)")
+		for _, line := range epStatus() {
+			log.Printf("GPU: %s", line)
 		}
 	}()
 

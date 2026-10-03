@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"unsafe"
@@ -49,25 +48,7 @@ const deterministicEnv = "VISIONSERVE_DETERMINISTIC"
 // false unless VISIONSERVE_DETERMINISTIC parses as true. A value that does not parse keeps the
 // default (off) and is reported once.
 func deterministicRequested() bool {
-	v := strings.TrimSpace(os.Getenv(deterministicEnv))
-	if v == "" {
-		return false
-	}
-	switch strings.ToLower(v) {
-	case "on", "yes":
-		return true
-	case "off", "no":
-		return false
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		badDeterministicEnv.Do(func() {
-			fmt.Fprintf(os.Stderr, "engine: ignoring %s=%q (want 1/0, true/false, on/off); deterministic GPU kernels stay off\n",
-				deterministicEnv, v)
-		})
-		return false
-	}
-	return b
+	return boolEnv(deterministicEnv, "deterministic GPU kernels stay off", &badDeterministicEnv)
 }
 
 var badDeterministicEnv sync.Once

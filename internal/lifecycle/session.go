@@ -143,7 +143,7 @@ func (s *Session) Predict(img image.Image, prompt models.Prompt, now time.Time) 
 	res.Model = s.name
 	res.Task = s.task
 	res.Device = s.device
-	// Hint: when running on GPU via CUDA EP (not TRT), suggest TRT if it is absent.
+	// Hint: on the CUDA EP, set only when TensorRT was opted into but libnvinfer is missing.
 	if s.device == "gpu:0" {
 		res.Hint = engine.TRTHint()
 	}
