@@ -197,7 +197,8 @@ luồng song song (A–G); mỗi luồng chỉ được merge sau khi qua cổng
 | Mask/depth dạng JSON số | **Xong**: `encoding=base64` phía server; trong SDK Python là opt-in (`base64_arrays=True`) |
 | Allocation theo từng pixel | **Xong** trong `vision/preprocess` (đọc `Pix` theo stride) |
 | Admission control | **Xong**: `max(32, 2×slots)` request mỗi model, `VISIONSERVE_MAX_QUEUE`, 503 + `Retry-After` |
-| MobileSAM automask, grasp search, background `method=sam`, textalign `exact` | **Chưa làm** |
+| textalign `exact` | **Xong, opt-in**: role `files.head: head.onnx` (sinh bằng `models/rfdetr-textalign-dec1-siglip/export_head_onnx.py`), Go là fallback khi không khai báo. ORT CPU so với Go: lệch tối đa 1.43e-6 logit. Đo cả request: GPU 62 → 25 ms; **CPU chậm hơn** (140 → 440 ms, xem "Còn mở"), nên manifest mặc định vẫn tắt |
+| MobileSAM automask, grasp search, background `method=sam` | **Chưa làm** |
 
 ### Rà lỗi sau refactor
 
@@ -241,7 +242,13 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
 
 ### Còn mở
 
-- 4 điểm nóng chưa làm (bảng trên).
+- 3 điểm nóng chưa làm (bảng trên).
+- **Head ONNX trên CPU.** Head chỉ mất khoảng 1 ms, nhưng thêm một session ORT CPU với thread
+  pool mặc định (spinning) làm detector chậm đi khoảng 3 lần khi hai session chạy xen kẽ (đo
+  bằng Python ORT 1.26: head 1 thread thì detector không chậm). Cần cho phép đặt
+  `intra_op_num_threads` theo từng role trong `engine`/`lifecycle` (binding v1.13 có
+  `SetIntraOpNumThreads`, không có `allow_spinning`). Có lẽ fast-path head trên CPU cũng bị như
+  vậy (chưa đo).
 - **Mask MobileSAM trên GPU** lệch 1–5 pixel biên khi tải song song. Lỗi có từ trước; có thể
   thử `use_deterministic_compute` của ORT.
 - **`detr.splitRF`** có thể gọi thẳng `SplitOutputs`, vì test đã chứng minh hai hàm chọn cùng
