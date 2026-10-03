@@ -308,7 +308,11 @@ def dpt_keep_aspect_size(w: int, h: int, tw: int, th: int, multiple: int = 1):
 
 
 def top_left_size(w: int, h: int, W: int, H: int):
-    """InsightFace scrfd.py detect(): fit by the aspect ratios, new size truncated."""
+    """(new_w, new_h): InsightFace scrfd.py detect()'s fit by the aspect ratios, sides truncated
+    (at least 1) — vision/preprocess.TopLeftSize. Like the Go side it does NOT return upstream's
+    det_scale = new_h / h: the sides are truncated separately, so the content's x scale is
+    new_w / w (a 10000x10 panorama -> 640x1: x scaled by 0.064, det_scale says 0.1). The Meta
+    records each axis's own scale."""
     im_ratio, model_ratio = h / w, H / W
     if im_ratio > model_ratio:
         nh = H
@@ -316,8 +320,7 @@ def top_left_size(w: int, h: int, W: int, H: int):
     else:
         nw = W
         nh = int(nw * im_ratio)
-    nw, nh = max(1, nw), max(1, nh)
-    return nw, nh, nh / h
+    return max(1, nw), max(1, nh)
 
 
 def long_side_size(w: int, h: int, W: int, H: int, no_upscale: bool = False):
@@ -394,13 +397,15 @@ def apply_spec(pil, spec: Spec):
     elif mode in ("letterbox", "top_left_pad"):
         if mode == "letterbox":
             nw, nh, s, px, py = letterbox_size(ow, oh, W, H)
+            sx = sy = s
         else:
-            (nw, nh, s), px, py = top_left_size(ow, oh, W, H), 0, 0
+            (nw, nh), px, py = top_left_size(ow, oh, W, H), 0, 0
+            sx, sy = nw / ow, nh / oh
         # The canvas is a pixel image: the pad is normalised like the image.
         x = np.full((H, W, 3), np.float32(spec.pad), np.float32)
         content = np.asarray(img.resize((nw, nh), rs), np.float32)
         x[py:py + nh, px:px + nw] = content[:H - py, :W - px]
-        meta = _meta(ow, oh, s, s, px, py)
+        meta = _meta(ow, oh, sx, sy, px, py)
     elif mode in ("long_side", "long_side_pad"):
         nw, nh, s = long_side_size(ow, oh, W, H, spec.no_upscale)
         x = _normalise(np.asarray(img.resize((nw, nh), rs), np.float32), spec)
@@ -436,8 +441,8 @@ def spec_meta(spec: Spec, ow: int, oh: int) -> dict:
         _, _, s, px, py = letterbox_size(ow, oh, W, H)
         return _meta(ow, oh, s, s, px, py)
     if mode == "top_left_pad":
-        s = top_left_size(ow, oh, W, H)[2]
-        return _meta(ow, oh, s, s)
+        nw, nh = top_left_size(ow, oh, W, H)
+        return _meta(ow, oh, nw / ow, nh / oh)
     if mode in ("long_side", "long_side_pad"):
         s = long_side_size(ow, oh, W, H, spec.no_upscale)[2]
         return _meta(ow, oh, s, s)

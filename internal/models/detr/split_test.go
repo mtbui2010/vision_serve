@@ -104,12 +104,33 @@ func indexOf(outs []engine.Tensor, t engine.Tensor) int {
 	return -2
 }
 
+// refRF is RF-DETR's own split as it stood before splitRF became a call to SplitOutputs:
+// boxes = the first output with last dim 4, logits = the first other output, extra outputs
+// ignored; fewer than two outputs, or no boxes, is an error.
+func refRF(outs []engine.Tensor) (boxes, logits engine.Tensor, ok bool) {
+	if len(outs) < 2 {
+		return boxes, logits, false
+	}
+	for _, t := range outs {
+		if t.Dim(-1) == 4 && boxes.Data == nil {
+			boxes = t
+		} else if logits.Data == nil {
+			logits = t
+		}
+	}
+	return boxes, logits, boxes.Data != nil && logits.Data != nil
+}
+
 func checkExport(t *testing.T, e export) {
 	t.Helper()
 	outs := fakeOuts(e.shapes)
 	rb, rl, err := splitRF(outs)
 	if err != nil {
 		t.Fatalf("%s: splitRF: %v", e.name, err)
+	}
+	if fb, fl, ok := refRF(outs); !ok || indexOf(outs, rb) != indexOf(outs, fb) || indexOf(outs, rl) != indexOf(outs, fl) {
+		t.Errorf("%s: splitRF picks %d/%d, the pre-SplitOutputs rule picked %d/%d (ok=%v)", e.name,
+			indexOf(outs, rb), indexOf(outs, rl), indexOf(outs, fb), indexOf(outs, fl), ok)
 	}
 	hb, hf := refHybrid(outs, e.nLabels)
 	for _, dFeat := range []int{0, 256} {
@@ -237,5 +258,54 @@ func TestSplitOutputsPrefersLabelCountOverOrder(t *testing.T) {
 	}
 	if indexOf(outs, o.Logits) != 2 || indexOf(outs, o.Feats) != 1 {
 		t.Errorf("logits/feats = %d/%d, want 2/1", indexOf(outs, o.Logits), indexOf(outs, o.Feats))
+	}
+}
+
+// splitRF is SplitOutputs(outs, 0, 0) behind the "at least two outputs" check. Pin it to the rule
+// it used to implement itself on shapes no shipped export has — malformed ones included: the same
+// tensors, an error exactly when the old rule refused, and an error that still says "rfdetr" and
+// what was wrong.
+func TestSplitRFMatchesReference(t *testing.T) {
+	cases := []struct {
+		name    string
+		shapes  [][]int64
+		wantErr string // "" = accepted
+	}{
+		{"no outputs", nil, "expected at least 2 outputs"},
+		{"boxes only", [][]int64{{1, 300, 4}}, "expected at least 2 outputs"},
+		{"logits only", [][]int64{{1, 300, 91}}, "expected at least 2 outputs"},
+		{"no boxes", [][]int64{{1, 300, 91}, {1, 300, 91}}, "could not identify the boxes tensor"},
+		{"no boxes, three outputs", [][]int64{{1, 300, 91}, crossAttn, {1, 300, 256}}, "could not identify the boxes tensor"},
+		{"scalar outputs", [][]int64{{}, {}}, "could not identify the boxes tensor"},
+		{"logits first", [][]int64{{1, 300, 91}, {1, 300, 4}}, ""},
+		{"two box-shaped outputs", [][]int64{{1, 300, 4}, {1, 300, 4}}, ""},
+		{"boxes in the middle", [][]int64{{1, 300, 91}, {1, 300, 4}, {1, 300, 23}}, ""},
+		{"cross-attn before logits", [][]int64{{1, 300, 4}, crossAttn, {1, 300, 91}}, ""},
+		{"features before logits", [][]int64{{1, 300, 4}, {1, 300, 256}, {1, 300, 23}}, ""},
+		{"query counts differ", [][]int64{{1, 300, 4}, {1, 100, 91}}, ""}, // postprocess rejects it
+		{"zero queries", [][]int64{{1, 0, 4}, {1, 0, 91}}, ""},            // postprocess rejects it
+		{"rank-2 outputs", [][]int64{{300, 4}, {300, 91}}, ""},
+	}
+	for _, c := range cases {
+		outs := fakeOuts(c.shapes)
+		b, l, err := splitRF(outs)
+		fb, fl, ok := refRF(outs)
+		if (err == nil) != ok {
+			t.Errorf("%s: splitRF err = %v, the old rule accepted = %v", c.name, err, ok)
+			continue
+		}
+		if err != nil {
+			if !strings.HasPrefix(err.Error(), "rfdetr: ") || !strings.Contains(err.Error(), c.wantErr) {
+				t.Errorf("%s: error %q, want the rfdetr prefix and %q", c.name, err, c.wantErr)
+			}
+			continue
+		}
+		if c.wantErr != "" {
+			t.Errorf("%s: accepted, want an error containing %q", c.name, c.wantErr)
+		}
+		if indexOf(outs, b) != indexOf(outs, fb) || indexOf(outs, l) != indexOf(outs, fl) {
+			t.Errorf("%s: splitRF picks %d/%d, the old rule picked %d/%d", c.name,
+				indexOf(outs, b), indexOf(outs, l), indexOf(outs, fb), indexOf(outs, fl))
+		}
 	}
 }

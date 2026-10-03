@@ -105,22 +105,25 @@ func (m *detr) postprocess(outs []engine.Tensor, meta models.PreprocessMeta) (mo
 
 // splitRF (RF-DETR): at least two outputs; the first output whose last dim is 4 is boxes,
 // the first other one is logits, and extra outputs (e.g. cross_attn_weights for explain)
-// are ignored.
+// are ignored. That is SplitOutputs with no label count and no feature width, so it is
+// SplitOutputs: the decoder, the router and the text-aligned head share one rule
+// (TestSplitRFMatchesReference pins it to the rule this function used to spell out itself).
 func splitRF(outs []engine.Tensor) (boxes, logits engine.Tensor, err error) {
 	if len(outs) < 2 {
 		return boxes, logits, fmt.Errorf("rfdetr: expected at least 2 outputs (logits + boxes), got %d — verify the ONNX export", len(outs))
 	}
-	for _, t := range outs {
-		if t.Dim(-1) == 4 && boxes.Data == nil {
-			boxes = t
-		} else if logits.Data == nil {
-			logits = t
-		}
-	}
-	if boxes.Data == nil || logits.Data == nil {
+	o, err := SplitOutputs(outs, 0, 0)
+	if err != nil {
+		// SplitOutputs fails only when no output has a last dim of 4. RF-DETR keeps its own
+		// wording, which /api/predict has always returned (pinned by internal/models/golden).
 		return boxes, logits, fmt.Errorf("rfdetr: could not identify the boxes tensor (no output has a last dimension == 4)")
 	}
-	return boxes, logits, nil
+	// With two or more outputs and nLabels = dFeat = 0 SplitOutputs always finds logits; an
+	// output without data (never produced by the engine) is still refused, not decoded.
+	if o.Boxes.Data == nil || o.Logits.Data == nil {
+		return boxes, logits, fmt.Errorf("rfdetr: boxes or logits output carries no data (shapes %v)", shapes(outs))
+	}
+	return o.Boxes, o.Logits, nil
 }
 
 // splitRT (RT-DETR): exactly two outputs, one of which has a last dim of 4.

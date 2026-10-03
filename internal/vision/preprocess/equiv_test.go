@@ -66,20 +66,20 @@ func specCases() []specCase {
 		{"scrfd-640", preprocess.Spec{Resize: preprocess.TopLeftPad, Width: 640, Height: 640, NoRescale: true,
 			Mean: []float32{127.5, 127.5, 127.5}, Std: []float32{128, 128, 128}},
 			func(img image.Image) (engine.Tensor, preprocess.Meta) {
-				return oldSCRFD(img, legacyCfg{Width: 640, Height: 640, Mean: []float32{127.5, 127.5, 127.5}, Std: []float32{128, 128, 128}})
+				return oldSCRFDTrueScale(img, legacyCfg{Width: 640, Height: 640, Mean: []float32{127.5, 127.5, 127.5}, Std: []float32{128, 128, 128}})
 			}, false},
 		{"scrfd-640x480", preprocess.Spec{Resize: preprocess.TopLeftPad, Width: 640, Height: 480, NoRescale: true,
 			Mean: []float32{127.5, 127.5, 127.5}, Std: []float32{128, 128, 128}},
 			func(img image.Image) (engine.Tensor, preprocess.Meta) {
-				return oldSCRFD(img, legacyCfg{Width: 640, Height: 480, Mean: []float32{127.5, 127.5, 127.5}, Std: []float32{128, 128, 128}})
+				return oldSCRFDTrueScale(img, legacyCfg{Width: 640, Height: 480, Mean: []float32{127.5, 127.5, 127.5}, Std: []float32{128, 128, 128}})
 			}, false},
 		{"scrfd-no-normalize", preprocess.Spec{Resize: preprocess.TopLeftPad, Width: 320, Height: 320},
 			func(img image.Image) (engine.Tensor, preprocess.Meta) {
-				return oldSCRFD(img, legacyCfg{Width: 320, Height: 320})
+				return oldSCRFDTrueScale(img, legacyCfg{Width: 320, Height: 320})
 			}, false},
 		{"scrfd-mean-only", preprocess.Spec{Resize: preprocess.TopLeftPad, Width: 320, Height: 320, NoRescale: true, Mean: []float32{127.5}, Legacy: true},
 			func(img image.Image) (engine.Tensor, preprocess.Meta) {
-				return oldSCRFD(img, legacyCfg{Width: 320, Height: 320, Mean: []float32{127.5}})
+				return oldSCRFDTrueScale(img, legacyCfg{Width: 320, Height: 320, Mean: []float32{127.5}})
 			}, false},
 		{"mobilesam-long-side-1024", preprocess.Spec{Resize: preprocess.LongSide, Width: 1024, Height: 1024, NoRescale: true, Layout: preprocess.HWC},
 			func(img image.Image) (engine.Tensor, preprocess.Meta) {
@@ -114,6 +114,23 @@ func specCases() []specCase {
 			return t, m
 		}, false},
 	}
+}
+
+// oldSCRFDTrueScale is the frozen SCRFD path with its ONE deliberate departure applied: the tensor
+// must still be bit-identical, but Meta records the scale the resized content really has on each
+// axis (new_w/w, new_h/h) instead of InsightFace's single det_scale = new_h/h on both — which, with
+// new_w and new_h truncated separately, maps x back wrong (badly so on extreme panoramas; see
+// preprocess.TopLeftSize). The frozen ScaleY already is new_h/h; new_w is recomputed here with
+// the frozen fit's own arithmetic, independently of TopLeftSize.
+func oldSCRFDTrueScale(img image.Image, cfg legacyCfg) (engine.Tensor, preprocess.Meta) {
+	ten, m := oldSCRFD(img, cfg)
+	imRatio := float64(m.OrigHeight) / float64(m.OrigWidth)
+	newW := cfg.Width
+	if imRatio > float64(cfg.Height)/float64(cfg.Width) {
+		newW = max(1, int(float64(cfg.Height)/imRatio))
+	}
+	m.ScaleX = float64(newW) / float64(m.OrigWidth)
+	return ten, m
 }
 
 // TestSpecMatchesFrozenCode: every Spec reproduces the code path it replaced, bit for bit, on

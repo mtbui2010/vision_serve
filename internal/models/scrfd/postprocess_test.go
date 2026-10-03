@@ -1,6 +1,7 @@
 package scrfd
 
 import (
+	"image"
 	"math"
 	"testing"
 
@@ -169,6 +170,52 @@ func TestPostprocess_RealShapes(t *testing.T) {
 	}
 	if math.Abs(res.Detections[0].Conf-0.88) > 1e-6 {
 		t.Errorf("Conf: want 0.88, got %v", res.Detections[0].Conf)
+	}
+}
+
+// TestPostprocess_ExtremePanoramaMapsBack runs preprocess -> postprocess and checks the box lands
+// on the ORIGINAL image where the content really was. A 10000×10 panorama is resized to 640×1
+// (new_h = int(0.64) -> 1), so x was scaled by 640/10000 and y by 1/10. InsightFace's single
+// det_scale = new_h/h = 0.1 would put the face at x = 3040 (w 320) instead of 4750 (w 500). The
+// 1919×1080 case is the ordinary one: 640×360, x scaled by 640/1919, not det_scale = 1/3.
+//
+// One face at stride 8, row r, col 40 (k = r*160 + 80): cx = 320, cy = 8r; distances (l,t,r,b)
+// in stride units.
+func TestPostprocess_ExtremePanoramaMapsBack(t *testing.T) {
+	cases := []struct {
+		w, h int
+		row  int
+		dist [4]float32
+		want [4]float64 // [x, y, w, h] on the original image
+	}{
+		// input [304, 0, 32, 8] -> x 304*10000/640, w 32*10000/640; y 0, h 8*10 clamped to 10
+		{10000, 10, 0, [4]float32{2, 0, 2, 1}, [4]float64{4750, 0, 500, 10}},
+		// input [304, 64, 32, 32] -> x 304*1919/640, w 32*1919/640; y, h ×3
+		{1919, 1080, 10, [4]float32{2, 2, 2, 2}, [4]float64{304 * 1919.0 / 640, 192, 32 * 1919.0 / 640, 96}},
+	}
+	cfg := models.Config{Width: 640, Height: 640, ConfThresh: 0.5, MaxDet: 100}
+	for _, c := range cases {
+		_, meta, err := preprocess(image.NewNRGBA(image.Rect(0, 0, c.w, c.h)), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		outs, scores, boxes := realOutputs(640, 640)
+		k := c.row*160 + 80
+		scores[0][k] = 0.9
+		copy(boxes[0][k*4:], c.dist[:])
+		res, err := postprocess(outs, meta, cfg)
+		if err != nil {
+			t.Fatalf("%dx%d: postprocess: %v", c.w, c.h, err)
+		}
+		if len(res.Detections) != 1 {
+			t.Fatalf("%dx%d: want 1 face, got %+v", c.w, c.h, res.Detections)
+		}
+		for i, v := range res.Detections[0].BBox {
+			if math.Abs(v-c.want[i]) > 1e-6 {
+				t.Errorf("%dx%d: bbox %v, want %v (original image coordinates)", c.w, c.h, res.Detections[0].BBox, c.want)
+				break
+			}
+		}
 	}
 }
 

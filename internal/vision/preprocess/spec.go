@@ -49,7 +49,8 @@ const (
 	LongSidePad Mode = "long_side_pad"
 	// TopLeftPad is InsightFace's SCRFD detect(): fit inside Width×Height by the image/model
 	// aspect ratios (new size truncated), paste at the TOP-LEFT of a PadValue canvas, then
-	// normalise. Default resample: bilinear.
+	// normalise. Default resample: bilinear. Meta carries the content's per-axis scales
+	// (new_w/w, new_h/h), not upstream's single det_scale = new_h/h (see TopLeftSize).
 	TopLeftPad Mode = "top_left_pad"
 	// None feeds the image at its original size (EfficientSAM: the graph resizes itself).
 	None Mode = "none"

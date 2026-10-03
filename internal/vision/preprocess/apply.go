@@ -60,9 +60,10 @@ func (s Spec) Apply(img image.Image) (engine.Tensor, Meta, error) {
 		return s.render(r, 0, 0, nw, nh, nw, nh, 0, 0, noPad), meta, nil
 
 	case TopLeftPad:
-		nw, nh, scale := TopLeftSize(ow, oh, W, H)
+		nw, nh := TopLeftSize(ow, oh, W, H)
 		r := imaging.Resize(img, nw, nh, s.Filter())
-		meta.ScaleX, meta.ScaleY = scale, scale
+		// The content's own per-axis scale, not upstream's single det_scale (see TopLeftSize).
+		meta.ScaleX, meta.ScaleY = float64(nw)/float64(ow), float64(nh)/float64(oh)
 		return s.render(r, 0, 0, nw, nh, W, H, 0, 0, pixelPad), meta, nil
 
 	case LongSide, LongSidePad:

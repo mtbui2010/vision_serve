@@ -89,12 +89,19 @@ func constrainToMultiple(v float64, m int) int {
 	return x
 }
 
-// TopLeftSize reproduces InsightFace scrfd.py detect()'s resize arithmetic:
+// TopLeftSize reproduces InsightFace scrfd.py detect()'s resize arithmetic (each side at least 1):
 //
 //	if h/w > H/W: new_h = H; new_w = int(new_h / (h/w))
 //	else:         new_w = W; new_h = int(new_w * (h/w))
-//	det_scale = new_h / h
-func TopLeftSize(w, h, W, H int) (nw, nh int, scale float64) {
+//
+// It deliberately does NOT return upstream's det_scale = new_h / h. Upstream maps boxes back by
+// dividing BOTH axes by it, but new_w and new_h are truncated separately, so the content's x
+// scale is new_w / w, not new_h / h. On ordinary images x is off by less than W/new_h input
+// pixels at the far edge of a landscape image (under 1.8 for 16:9 into 640×640) and less than
+// one in a portrait one; on extreme aspect ratios it is wildly off (10000×10 into 640×640:
+// new_h = int(0.64) -> 1, det_scale = 0.1, while x was scaled by 640/10000). Apply records
+// each axis's own scale.
+func TopLeftSize(w, h, W, H int) (nw, nh int) {
 	imRatio := float64(h) / float64(w)
 	modelRatio := float64(H) / float64(W)
 	if imRatio > modelRatio {
@@ -110,7 +117,7 @@ func TopLeftSize(w, h, W, H int) (nw, nh int, scale float64) {
 	if nh < 1 {
 		nh = 1
 	}
-	return nw, nh, float64(nh) / float64(h)
+	return nw, nh
 }
 
 // LongSideSize: scale = min(W/w, H/h) — for a square target, the long side goes to its target

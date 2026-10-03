@@ -204,6 +204,20 @@ def test_top_left_pad_places_the_image_at_the_origin_and_pads_pixels():
     np.testing.assert_allclose(x[0, :, 40, 10], [-127.5 / 128] * 3, atol=1e-6)  # black pixel pad, normalised
 
 
+def test_top_left_pad_meta_is_the_contents_own_scale_per_axis():
+    """new_w and new_h are truncated separately, so InsightFace's single det_scale = new_h / h is
+    not the x scale: a 10000x10 panorama becomes 640x1 (x * 0.064, y * 0.1)."""
+    s = spec.Spec(resize="top_left_pad", width=640, height=640, rescale=False)  # raw 0..255 values
+    for (w, h), (nw, nh) in {(10000, 10): (640, 1), (10, 10000): (1, 640), (1919, 1080): (640, 360),
+                             (1000, 3000): (213, 640), (640, 566): (640, 566)}.items():
+        assert spec.top_left_size(w, h, 640, 640) == (nw, nh)
+        want = {"orig_width": w, "orig_height": h, "scale_x": nw / w, "scale_y": nh / h, "pad_x": 0, "pad_y": 0}
+        assert spec.spec_meta(s, w, h) == want
+    x, meta = spec.apply_spec(_solid(10000, 10, (200, 200, 200)), s)
+    assert meta["scale_x"] == 0.064 and meta["scale_y"] == 0.1
+    assert (x[0, 0, 0, :640] == 200).all() and (x[0, 0, 1:, :] == 0).all()  # content is 640x1, top-left
+
+
 def test_long_side_pad_pads_the_normalised_tensor():
     s = spec.Spec(resize="long_side_pad", width=32, height=32, mean=IMN_MEAN, std=IMN_STD)
     x, meta = spec.apply_spec(_solid(40, 20, (10, 20, 30)), s)
