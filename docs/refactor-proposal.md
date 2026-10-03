@@ -171,3 +171,81 @@ Nguyên tắc chính:
 Mỗi bước đều phải có phép đo trước/sau: test tương đương, tầng B của converter, hoặc protocol
 held-out. Đây chính là bài học của BUGS_TO_FIX: tối ưu mà không có test tương đương thì thực
 chất là viết lại.
+
+---
+
+## 6. Trạng thái thực hiện (nhánh `refactor/2026-10`, 2026-10-03)
+
+Cả 6 bước của lộ trình đã xong trên nhánh `refactor/2026-10` (chưa push). Việc được chia thành 7
+luồng song song (A–G); mỗi luồng chỉ được merge sau khi qua cổng tương đương ở mục cuối.
+
+| Bước | Luồng | Commit chính |
+|---|---|---|
+| 1. `vision/mask`, `vision/geom`, `vision/nms` | A | e8a6824, c634c59, 973ef1c, f96a0b4, 1d01418; 4bdd0b9 gộp rf-detr/rt-detr thành một package `detr` |
+| 2. `vision/preprocess` + block `preprocess:` | F | 73b91d0, bb5c6d5, 37567c9, 7a1d410, 8bd148c — các trường `input.*` cũ vẫn là alias |
+| 3. `runtime` (lifecycle, engine) | B, E | 93cfbf4 (tách file), 28c7d4e (cache sha256), 88b0a09 + e111928 (admission), 92434b9 + ecb7a63 (bỏ `PipelineMu`, khóa theo từng model), 46fc739 (đọc I/O ONNX từ header protobuf) |
+| 4. `httpapi` (server) | C | 6fd30af (một request model, lỗi có kiểu → status, hủy theo ctx), 517fc45 (base64) |
+| 5. `pipeline/` | G | 76e9ca2, 68f3789 (cache embedding theo từ, một CropNamer), e9f5558 (router / grounded-sam / grasp thành cấu hình stage), 01edc6c |
+| 6. Catalog + đồng bộ Go/Python | D | be43477, 8018da5 (pull tiếp tục được), c293758 (dọn staging), 420d9a2 |
+
+### Điểm nóng của mục 4
+
+| Điểm nóng | Trạng thái |
+|---|---|
+| Hash sha256 mỗi lần load | **Xong**: cache theo (size, mtime, ctime, dev, inode) |
+| `imageproc.NMS` | **Xong**: `vision/nms` dùng lưới |
+| Mask/depth dạng JSON số | **Xong**: `encoding=base64` phía server; trong SDK Python là opt-in (`base64_arrays=True`) |
+| Allocation theo từng pixel | **Xong** trong `vision/preprocess` (đọc `Pix` theo stride) |
+| Admission control | **Xong**: `max(32, 2×slots)` request mỗi model, `VISIONSERVE_MAX_QUEUE`, 503 + `Retry-After` |
+| MobileSAM automask, grasp search, background `method=sam`, textalign `exact` | **Chưa làm** |
+
+### Rà lỗi sau refactor
+
+Có 4 agent review độc lập: lõi runtime; preprocess + model thường; pipeline open-vocab;
+catalog/SDK/docs. Thêm vào đó là một đợt fuzz Go/Python cho `preprocess.Spec` và một bài so
+sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. Lỗi tìm được và đã sửa:
+
+- **Lifecycle**: một Load đến sau khi Unload đã trả lời lại nhập vào lần load đã hủy, nên trả
+  500 (e69fda9). `/api/preprocess` trả 500 thay vì 400 khi model từ chối prompt (fd0ea04).
+  `/api/preprocess` chưa resolve `template_name` (399dfa4).
+- **Engine**: parser header ONNX panic với file hỏng (465c75f).
+- **HTTP**: lỗi prompt trên `/api/predict` (thiếu text, `" . "`, phrase quá dài, thiếu
+  template) trả 500. Nay `models.BadPrompt` khiến chúng trả 400 (dc0e9d1).
+- **Templates**: một request upload có thể decode hàng trăm GB trước khi chạm giới hạn của
+  store. Nay giới hạn được kiểm tra từ header ảnh (1349d1a).
+- **Preprocess**:
+  - `pad: .nan` lọt qua kiểm tra; NaN/Inf giờ bị từ chối ở cả Go lẫn Python (e1ea01d).
+  - Python đọc bool YAML, key null và list normalize lạ khác Go (e1ea01d).
+  - SAM/PaddleOCR âm thầm bỏ qua block `preprocess:`; nay đó là lỗi khi load (adf4d83).
+- **NMS**: panic khi có box không hữu hạn và từ 512 ứng viên trở lên (aff9680).
+- **Pipeline**: key của cache embedding giữ nguyên chuỗi từ, nên prompt dài làm RAM tăng không
+  giới hạn. Nay key là SHA-256 (5fe743b).
+- **Catalog**:
+  - Có thể xóa bản cài cũ khi đó là bản duy nhất (dcc32ec).
+  - `pull` một tên sai vẫn dọn registry (71c715b).
+  - Model cài từ thư mục có quyền 0700 (d78ae2b).
+- **SDK / client**:
+  - Python mặc định trả `FloatArray` thay vì `list`; nay base64 là opt-in (6519a3d).
+  - Client JS mặc định `localhost` (IPv6 trên Node 18) và `tsc` build lỗi (2331191).
+
+### Cổng tương đương (chạy lại sau commit cuối)
+
+- **Golden:** 43 case trên CPU, trùng bản gốc từng bit.
+- **Held-out protocol (GPU):** 89.75/49.54, 89.75/62.47, 89.75/48.11, 57.41/61.07, đúng như
+  trước, cùng số detection.
+- **So sánh trực tiếp bản cũ/bản mới:** khoảng 730 request (model thường + SAM, 22 ảnh có kích
+  thước và định dạng lạ) và 40 request open-vocab, trùng từng byte.
+- **Test:** `go test -race` (39 package), staticcheck, test Python, test trong image converter,
+  và `visionserve convert` e2e (PASS).
+- **Image Docker CPU:** smoke test đạt (health, predict rf-detr, prompt sai → 400, model lạ → 404).
+
+### Còn mở
+
+- 4 điểm nóng chưa làm (bảng trên).
+- **Mask MobileSAM trên GPU** lệch 1–5 pixel biên khi tải song song. Lỗi có từ trước; có thể
+  thử `use_deterministic_compute` của ORT.
+- **`detr.splitRF`** có thể gọi thẳng `SplitOutputs`, vì test đã chứng minh hai hàm chọn cùng
+  tensor.
+- **`Admit`** chưa nhận ctx, và multipart vẫn được parse trước `Admit`.
+- **`top_left_pad`** (SCRFD) ánh xạ sai trục x với ảnh panorama cực đoan. Đây là hành vi giống
+  InsightFace gốc, không phải hồi quy.
