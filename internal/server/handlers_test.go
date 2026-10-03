@@ -17,6 +17,7 @@ import (
 
 	"visionserve/internal/lifecycle"
 	"visionserve/internal/models"
+	"visionserve/internal/templates"
 	"visionserve/pkg/api"
 )
 
@@ -568,5 +569,36 @@ func TestTemplatesSuccessAnswersJSON(t *testing.T) {
 	}
 	if rec = do(h, httptest.NewRequest("DELETE", "/api/templates/cup", nil)); rec.Code != http.StatusNoContent || s.tmpl.Len() != 0 {
 		t.Fatalf("delete: %d", rec.Code)
+	}
+}
+
+// The store's pixel bound is enforced from the image headers before decoding, and replacing a
+// set counts the room its old images free.
+func TestTemplatesPixelBoundCheckedBeforeDecoding(t *testing.T) {
+	s, h := newTestServer(&fakeRuntime{})
+	s.tmpl = templates.NewWithLimits(4, 100) // 100 pixels in all
+
+	// 2 × 8×8 = 128 > 100: refused (400) before anything is stored.
+	rec := do(h, multipartRequest(t, "/api/templates", map[string]string{"name": "big"},
+		part{"images", "a.png", pngBytes(t, 8, 8)}, part{"images", "b.png", pngBytes(t, 8, 8)}))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "store is full") || s.tmpl.Len() != 0 {
+		t.Fatalf("over the bound: %d %s (sets %d)", rec.Code, rec.Body, s.tmpl.Len())
+	}
+	// A header that does not decode is a 400 too.
+	rec = do(h, multipartRequest(t, "/api/templates", map[string]string{"name": "junk"},
+		part{"images", "a.png", []byte("not an image")}))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("junk upload: %d %s", rec.Code, rec.Body)
+	}
+	// 8×8 = 64 fits; replacing it with 9×9 = 81 fits too (the old 64 are freed).
+	for _, side := range []int{8, 9} {
+		rec = do(h, multipartRequest(t, "/api/templates", map[string]string{"name": "cup"},
+			part{"images", "a.png", pngBytes(t, side, side)}))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%dx%d: %d %s", side, side, rec.Code, rec.Body)
+		}
+	}
+	if s.tmpl.Pixels() != 81 {
+		t.Fatalf("store holds %d pixels, want 81", s.tmpl.Pixels())
 	}
 }

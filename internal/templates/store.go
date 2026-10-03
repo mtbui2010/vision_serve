@@ -135,3 +135,15 @@ func (s *Store) Pixels() int64 {
 	defer s.mu.RUnlock()
 	return s.total
 }
+
+// Room returns how many decoded pixels a registration under name may hold right now (replacing
+// name frees its current set), or -1 when the store has no pixel bound. Uploads can be checked
+// against it from their headers, before they are decoded.
+func (s *Store) Room(name string) int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.maxPixels <= 0 {
+		return -1
+	}
+	return s.maxPixels - s.total + s.pixels[name]
+}

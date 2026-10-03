@@ -8,6 +8,8 @@ import (
 	"mime/multipart"
 	"net/http"
 	"sort"
+
+	"visionserve/internal/templates"
 )
 
 // maxTemplateFormMemory is the part of a template upload kept in memory; the rest spills to
@@ -35,15 +37,29 @@ func (s *Server) registerTemplates(r *http.Request) (string, int, error) {
 		return "", 0, badRequest(fmt.Errorf(`"name" is required`))
 	}
 	// Accept multiple files under the key "images" (or "image" for single).
-	var imgs []image.Image
-	for _, key := range []string{"images", "image"} {
-		for _, fh := range r.MultipartForm.File[key] {
-			img, err := decodeUploadedImage(fh)
+	files := append(append([]*multipart.FileHeader(nil), r.MultipartForm.File["images"]...), r.MultipartForm.File["image"]...)
+	// The store's pixel bound is checked from the headers BEFORE anything is decoded: a body of
+	// thousands of tiny flat 40 MP PNGs would otherwise decode hundreds of GB first.
+	if room := s.tmpl.Room(name); room >= 0 {
+		var px int64
+		for _, fh := range files {
+			w, h, err := uploadedImageSize(fh)
 			if err != nil {
 				return "", 0, err
 			}
-			imgs = append(imgs, img)
+			if px += int64(w) * int64(h); px > room {
+				return "", 0, badRequest(fmt.Errorf("%w: the uploaded templates exceed the %d pixels %q may still hold — delete a set first",
+					templates.ErrFull, room, name))
+			}
 		}
+	}
+	var imgs []image.Image
+	for _, fh := range files {
+		img, err := decodeUploadedImage(fh)
+		if err != nil {
+			return "", 0, err
+		}
+		imgs = append(imgs, img)
 	}
 	if len(imgs) == 0 {
 		return "", 0, badRequest(fmt.Errorf(`at least one "images" file is required`))
@@ -70,6 +86,20 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	s.tmpl.Delete(name)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// uploadedImageSize reads an uploaded image's size from its header only.
+func uploadedImageSize(fh *multipart.FileHeader) (int, int, error) {
+	f, err := fh.Open()
+	if err != nil {
+		return 0, 0, badRequest(fmt.Errorf("failed to decode image: %w", err))
+	}
+	defer f.Close()
+	cfg, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return 0, 0, badRequest(fmt.Errorf("failed to decode image: %w", err))
+	}
+	return cfg.Width, cfg.Height, nil
 }
 
 func decodeUploadedImage(fh *multipart.FileHeader) (image.Image, error) {
