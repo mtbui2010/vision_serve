@@ -39,6 +39,8 @@ func TestStatusOf(t *testing.T) {
 		{"oversized body", maxBytes, 413},
 		{"form too large to parse", badRequest(fmt.Errorf("failed to parse multipart form: %w", maxBytes)), 413},
 		{"image over the byte limit", tooLargeError{"image is larger than 32 MiB"}, 413},
+		{"model refused its prompt (wrapped by the pipeline)",
+			fmt.Errorf("rfdetr-gdino: %w", models.BadPrompt(errors.New("a text prompt is required"))), 400},
 		{"client gone", errClientGone, 499},
 		{"anything else", errors.New("onnx: run failed"), 500},
 	}

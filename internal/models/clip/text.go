@@ -68,8 +68,8 @@ func (m *textModel) Tokenizer() *Tokenizer { return m.tok }
 func (m *textModel) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
 	phrases := SplitPhrases(prompt.Text)
 	if len(phrases) == 0 {
-		return models.Result{}, fmt.Errorf(
-			"clip-text: empty prompt — pass the text to embed, e.g. --prompt \"cup. remote.\"")
+		return models.Result{}, models.BadPrompt(fmt.Errorf(
+			"clip-text: empty prompt — pass the text to embed, e.g. --prompt \"cup. remote.\""))
 	}
 
 	ids := m.tok.EncodeBatch(phrases)

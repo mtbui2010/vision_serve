@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"visionserve/internal/lifecycle"
+	"visionserve/internal/models"
 	"visionserve/pkg/api"
 )
 
@@ -64,7 +65,7 @@ func statusOf(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, lifecycle.ErrOverloaded):
 		return http.StatusServiceUnavailable
-	case errors.Is(err, lifecycle.ErrInvalidRequest):
+	case errors.Is(err, lifecycle.ErrInvalidRequest), errors.Is(err, models.ErrBadPrompt):
 		return http.StatusBadRequest
 	case errors.Is(err, errClientGone):
 		return statusClientClosedRequest

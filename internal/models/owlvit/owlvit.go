@@ -110,9 +110,9 @@ func (m *owlVIT) Roles() []string { return []string{roleModel} }
 // on the scene image, not the templates).
 func (m *owlVIT) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
 	if len(prompt.TemplateImages) == 0 {
-		return models.Result{}, fmt.Errorf(
+		return models.Result{}, models.BadPrompt(fmt.Errorf(
 			"owlvit: no template images in prompt — register templates via /api/templates first",
-		)
+		))
 	}
 
 	queryTensor, meta, err := m.preprocessImage(img)

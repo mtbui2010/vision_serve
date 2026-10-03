@@ -70,7 +70,7 @@ func (m *groundedSAM) Exclusive() bool { return true }
 // Infer runs detection then per-box segmentation; masks are index-aligned with detections.
 func (m *groundedSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
 	if strings.TrimSpace(prompt.Text) == "" {
-		return models.Result{}, fmt.Errorf("grounded-sam requires a text prompt, e.g. --prompt \"cat. remote.\"")
+		return models.Result{}, models.BadPrompt(fmt.Errorf("grounded-sam requires a text prompt, e.g. --prompt \"cat. remote.\""))
 	}
 	words, err := pipeline.TextPhrases(prompt.Text)
 	if err != nil {

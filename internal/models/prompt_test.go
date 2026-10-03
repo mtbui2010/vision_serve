@@ -1,6 +1,8 @@
 package models
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -46,5 +48,21 @@ func TestParsePromptRejectsNegativeSize(t *testing.T) {
 	// Negative x/y is a valid (partly out-of-frame) box.
 	if _, err := ParsePrompt("", "-5,-5,10,10", ""); err != nil {
 		t.Errorf("negative origin should be accepted: %v", err)
+	}
+}
+
+// BadPrompt marks an error as the caller's (errors.Is ErrBadPrompt, HTTP 400) and keeps both its
+// message and its chain.
+func TestBadPrompt(t *testing.T) {
+	inner := errors.New("grounding-dino requires a text prompt")
+	err := fmt.Errorf("pipeline: %w", BadPrompt(inner))
+	if !errors.Is(err, ErrBadPrompt) || !errors.Is(err, inner) {
+		t.Fatalf("errors.Is lost the mark or the cause: %v", err)
+	}
+	if err.Error() != "pipeline: grounding-dino requires a text prompt" {
+		t.Fatalf("message changed: %q", err.Error())
+	}
+	if errors.Is(inner, ErrBadPrompt) {
+		t.Fatal("an unmarked error matched ErrBadPrompt")
 	}
 }

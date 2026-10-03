@@ -1,6 +1,7 @@
 package models
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -79,3 +80,17 @@ func parseFloats(s string) ([]float64, error) {
 	}
 	return nums, nil
 }
+
+// ErrBadPrompt matches (errors.Is) every error a model returns for a prompt the caller got wrong
+// — a missing text prompt, a box/point where text is needed, an unknown template — so the HTTP
+// layer answers 400 instead of 500. Models mark such errors with BadPrompt.
+var ErrBadPrompt = errors.New("invalid prompt")
+
+// BadPrompt marks err as the caller's mistake (errors.Is(err, ErrBadPrompt)) without changing
+// its message.
+func BadPrompt(err error) error { return badPrompt{err} }
+
+type badPrompt struct{ error }
+
+func (b badPrompt) Unwrap() error      { return b.error }
+func (badPrompt) Is(target error) bool { return target == ErrBadPrompt }

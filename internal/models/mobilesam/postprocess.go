@@ -54,10 +54,10 @@ func promptToPointSets(p models.Prompt) ([]pointSet, error) {
 	}
 	if len(sets) == 0 {
 		if p.Text != "" {
-			return nil, fmt.Errorf("mobilesam: this model needs a BOX or POINT prompt, not text — "+
+			return nil, models.BadPrompt(fmt.Errorf("mobilesam: this model needs a BOX or POINT prompt, not text — "+
 				"a text prompt like %q is for the 'grounded-sam' model (text → boxes → masks). "+
 				"Either run `grounded-sam ... --prompt %q`, or give mobile-sam a box: `mobile-sam ... --box x,y,w,h`",
-				p.Text, p.Text)
+				p.Text, p.Text))
 		}
 		// No prompt at all → caller uses the Automatic Mask Generator.
 		return nil, nil

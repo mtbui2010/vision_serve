@@ -141,7 +141,7 @@ func (g *graspModel) setDetector(name string, cfg models.Config) error {
 // gdinoWords: the request's "."-separated phrases; a text prompt is required.
 func gdinoWords(p models.Prompt) ([]string, error) {
 	if strings.TrimSpace(p.Text) == "" {
-		return nil, fmt.Errorf("grasp: the grounding-dino detector requires a text prompt, e.g. --prompt \"cup. bottle.\"")
+		return nil, models.BadPrompt(fmt.Errorf("grasp: the grounding-dino detector requires a text prompt, e.g. --prompt \"cup. bottle.\""))
 	}
 	return pipeline.TextPhrases(p.Text)
 }

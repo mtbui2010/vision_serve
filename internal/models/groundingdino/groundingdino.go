@@ -137,7 +137,7 @@ func (m *groundingDINO) Exclusive() bool { return true }
 // Infer runs the full open-vocab detection pipeline for the text prompt.
 func (m *groundingDINO) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
 	if strings.TrimSpace(prompt.Text) == "" {
-		return models.Result{}, fmt.Errorf("grounding-dino requires a text prompt, e.g. --prompt \"cat. remote.\"")
+		return models.Result{}, models.BadPrompt(fmt.Errorf("grounding-dino requires a text prompt, e.g. --prompt \"cat. remote.\""))
 	}
 	boxThresh, textThresh := Thresholds(m.cfg.ConfThresh, m.cfg.TextThresh, prompt)
 
@@ -194,14 +194,14 @@ func Detect(
 	opts ...Option,
 ) ([]api.Detection, error) {
 	if strings.TrimSpace(text) == "" {
-		return nil, fmt.Errorf("grounding-dino requires a non-empty text prompt")
+		return nil, models.BadPrompt(fmt.Errorf("grounding-dino requires a non-empty text prompt"))
 	}
 	if tok == nil {
 		return nil, fmt.Errorf("grounding-dino: nil tokenizer")
 	}
 	phrases := SplitPhrases(text)
 	if len(phrases) == 0 {
-		return nil, fmt.Errorf("grounding-dino: prompt %q holds no class phrase", text)
+		return nil, models.BadPrompt(fmt.Errorf("grounding-dino: prompt %q holds no class phrase", text))
 	}
 	var o detectOpts
 	for _, opt := range opts {
@@ -214,9 +214,9 @@ func Detect(
 	for i, p := range phrases {
 		n := len(tok.tokenize(p))
 		if n+3 > MaxTextLen { // [CLS] phrase . [SEP]
-			return nil, fmt.Errorf("grounding-dino: class phrase %q is %d tokens; the model reads at most %d "+
+			return nil, models.BadPrompt(fmt.Errorf("grounding-dino: class phrase %q is %d tokens; the model reads at most %d "+
 				"text tokens per pass, so one phrase may hold at most %d — shorten it",
-				truncateForError(p), n, MaxTextLen, MaxTextLen-3)
+				truncateForError(p), n, MaxTextLen, MaxTextLen-3))
 		}
 		pp[i] = promptPhrase{text: p, ntok: n, labels: phraseLabels(p, tok)}
 	}

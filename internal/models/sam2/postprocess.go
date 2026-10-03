@@ -59,8 +59,8 @@ func promptToPointSets(p models.Prompt) ([]pointSet, error) {
 				"for text-driven segmentation use 'grounded-sam'. "+
 				"Got text prompt: %q", p.Text)
 		}
-		return nil, fmt.Errorf("sam2: a prompt (box or point) is required — " +
-			"e.g. `run sam2 img.jpg --box x,y,w,h`")
+		return nil, models.BadPrompt(fmt.Errorf("sam2: a prompt (box or point) is required — " +
+			"e.g. `run sam2 img.jpg --box x,y,w,h`"))
 	}
 	return sets, nil
 }

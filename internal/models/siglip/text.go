@@ -63,8 +63,8 @@ func (m *textModel) Roles() []string { return []string{roleModel} }
 func (m *textModel) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
 	phrases := clip.SplitPhrases(prompt.Text)
 	if len(phrases) == 0 {
-		return models.Result{}, fmt.Errorf(
-			"siglip-text: empty prompt — pass the text to embed, e.g. --prompt \"cup. remote.\"")
+		return models.Result{}, models.BadPrompt(fmt.Errorf(
+			"siglip-text: empty prompt — pass the text to embed, e.g. --prompt \"cup. remote.\""))
 	}
 
 	ids, err := m.tok.EncodeBatch(phrases)

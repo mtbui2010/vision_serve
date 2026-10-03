@@ -276,7 +276,7 @@ func (m *textAlign) Infer(img image.Image, prompt models.Prompt, r models.Runner
 		classes = m.baseVocab
 	}
 	if len(classes) == 0 {
-		return models.Result{}, fmt.Errorf("textalign: no vocabulary — pass one as the prompt, e.g. --prompt \"cup. cola can.\"")
+		return models.Result{}, models.BadPrompt(fmt.Errorf("textalign: no vocabulary — pass one as the prompt, e.g. --prompt \"cup. cola can.\""))
 	}
 
 	h, err := m.headFor(classes, r)

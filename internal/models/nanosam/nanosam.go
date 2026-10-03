@@ -84,8 +84,8 @@ func (m *nanoSAM) Roles() []string { return []string{roleEncoder, roleDecoder} }
 // Decoder step: runs once per box (or once for the combined point set) → one mask each.
 func (m *nanoSAM) Infer(img image.Image, prompt models.Prompt, runner models.Runner) (models.Result, error) {
 	if prompt.Empty() {
-		return models.Result{}, fmt.Errorf("nanosam: a box or point prompt is required — " +
-			"NanoSAM segments around a prompt, e.g. `run nano-sam img.jpg --box x,y,w,h`")
+		return models.Result{}, models.BadPrompt(fmt.Errorf("nanosam: a box or point prompt is required — " +
+			"NanoSAM segments around a prompt, e.g. `run nano-sam img.jpg --box x,y,w,h`"))
 	}
 
 	origW := img.Bounds().Dx()

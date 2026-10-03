@@ -66,12 +66,12 @@ func promptToPointSets(p models.Prompt) ([]pointSet, error) {
 	}
 	if len(sets) == 0 {
 		if p.Text != "" {
-			return nil, fmt.Errorf("efficientsam: text prompts are not supported — "+
+			return nil, models.BadPrompt(fmt.Errorf("efficientsam: text prompts are not supported — "+
 				"use a BOX or POINT prompt, e.g. --box x,y,w,h. "+
-				"For text-driven segmentation use the 'grounded-sam' model with --prompt %q", p.Text)
+				"For text-driven segmentation use the 'grounded-sam' model with --prompt %q", p.Text))
 		}
-		return nil, fmt.Errorf("efficientsam: a prompt (box or point) is required — " +
-			"EfficientSAM segments around a prompt, e.g. --box x,y,w,h")
+		return nil, models.BadPrompt(fmt.Errorf("efficientsam: a prompt (box or point) is required — " +
+			"EfficientSAM segments around a prompt, e.g. --box x,y,w,h"))
 	}
 	return sets, nil
 }

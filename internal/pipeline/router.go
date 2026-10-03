@@ -44,8 +44,8 @@ type Router struct {
 func (rt *Router) Infer(c Call) (models.Result, error) {
 	classes := ParseClasses(c.Prompt.Text)
 	if rt.Closed == nil && len(classes) == 0 {
-		return models.Result{}, fmt.Errorf("%s: a text prompt is required (e.g. \"cup. towel.\") — "+
-			"there is no closed-set detector to answer an empty one", rt.Name)
+		return models.Result{}, models.BadPrompt(fmt.Errorf("%s: a text prompt is required (e.g. \"cup. towel.\") — "+
+			"there is no closed-set detector to answer an empty one", rt.Name))
 	}
 	known, unknown := rt.Partition(classes)
 
