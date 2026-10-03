@@ -22,10 +22,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_, _ = w.Write(append(body, '\n'))
+	// Two writes, not append(body, '\n'): a depth map or embedding answer is megabytes, and the
+	// append would copy all of it to add one byte.
+	_, _ = w.Write(body)
+	_, _ = w.Write([]byte{'\n'})
 }
 
-// writeError returns JSON { "error": "..." } + the correct HTTP status (section 7 of the spec).
-func writeError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, api.ErrorResponse{Error: err.Error()})
+// writeResult answers a model Result, its large float arrays in the encoding the request chose
+// (api.EncodingJSON numbers by default, or api.EncodingBase64).
+func writeResult(w http.ResponseWriter, res api.Result, encoding string) {
+	if encoding == api.EncodingBase64 {
+		res.EncodeArraysBase64()
+	}
+	writeJSON(w, http.StatusOK, res)
 }

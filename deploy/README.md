@@ -6,6 +6,10 @@ The Go binary and ONNX Runtime are bundled — no host setup required.
 Model weights are **not** baked in; they are downloaded on first use via `visionserve pull`.
 
 * Default port: **11435**
+* Listen address: `visionserve serve` binds **`127.0.0.1:11435`** by default (loopback only, like
+  Ollama: the API has no authentication, so it is not exposed to the network unless you ask).
+  The images' `CMD` passes **`--addr :11435`** explicitly so the published port works; keep that
+  flag whenever you override the command (see [Keeping models resident](#keeping-models-resident-disabling-idle-unload)).
 * Health endpoint: `GET /api/health`
 * ONNX Runtime: **v1.20.1** (loaded at runtime via `ORT_DYLIB_PATH`)
 
@@ -146,7 +150,10 @@ re-create + CUDA init + first-inference autotune.
 * `N` — override every model to `N` seconds.
 
 Because the image's `CMD` is `serve --addr :11435`, args after the image name **replace**
-the whole CMD (the `visionserve` entrypoint stays), so you must repeat `--addr :11435`:
+the whole CMD (the `visionserve` entrypoint stays), so you must repeat `--addr :11435`.
+Without it the server binds its default `127.0.0.1:11435`, which inside a container is the
+container's own loopback: `-p 11435:11435` then reaches nothing and every request fails with
+"connection reset". The same applies to a compose `command:`.
 
 ```bash
 # GPU — keep models resident (never unload)

@@ -1,7 +1,7 @@
 package server
 
 import (
-	"encoding/json"
+	"fmt"
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
@@ -10,63 +10,62 @@ import (
 	"sort"
 )
 
+// maxTemplateFormMemory is the part of a template upload kept in memory; the rest spills to
+// temporary files (the whole body is capped by the route's limitBody).
+const maxTemplateFormMemory = 64 << 20
+
 // handleTemplateRegister: POST /api/templates
 // Multipart form: name=<string>, images=<files (multiple)>
 // Registers 1–N template images under the given name.
 func (s *Server) handleTemplateRegister(w http.ResponseWriter, r *http.Request) {
-	if err := r.ParseMultipartForm(64 << 20); err != nil { // 64 MiB
-		http.Error(w, "failed to parse form: "+err.Error(), http.StatusBadRequest)
+	name, n, err := s.registerTemplates(r)
+	if err != nil {
+		writeError(w, err)
 		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"name": name, "count": n})
+}
+
+func (s *Server) registerTemplates(r *http.Request) (string, int, error) {
+	if err := r.ParseMultipartForm(maxTemplateFormMemory); err != nil {
+		return "", 0, badRequest(fmt.Errorf("failed to parse form: %w", err))
 	}
 	name := r.FormValue("name")
 	if name == "" {
-		http.Error(w, `"name" is required`, http.StatusBadRequest)
-		return
+		return "", 0, badRequest(fmt.Errorf(`"name" is required`))
 	}
-
 	// Accept multiple files under the key "images" (or "image" for single).
 	var imgs []image.Image
 	for _, key := range []string{"images", "image"} {
-		files := r.MultipartForm.File[key]
-		for _, fh := range files {
+		for _, fh := range r.MultipartForm.File[key] {
 			img, err := decodeUploadedImage(fh)
 			if err != nil {
-				http.Error(w, "failed to decode image: "+err.Error(), http.StatusBadRequest)
-				return
+				return "", 0, err
 			}
 			imgs = append(imgs, img)
 		}
 	}
 	if len(imgs) == 0 {
-		http.Error(w, `at least one "images" file is required`, http.StatusBadRequest)
-		return
+		return "", 0, badRequest(fmt.Errorf(`at least one "images" file is required`))
 	}
-
 	if err := s.tmpl.Register(name, imgs); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+		return "", 0, badRequest(err)
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-		"name":  name,
-		"count": len(imgs),
-	})
+	return name, len(imgs), nil
 }
 
 // handleTemplateList: GET /api/templates
 func (s *Server) handleTemplateList(w http.ResponseWriter, r *http.Request) {
 	names := s.tmpl.List()
 	sort.Strings(names)
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"templates": names}) //nolint:errcheck
+	writeJSON(w, http.StatusOK, map[string]any{"templates": names})
 }
 
 // handleTemplateDelete: DELETE /api/templates/{name}
 func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name == "" {
-		http.Error(w, "name is required", http.StatusBadRequest)
+		writeError(w, badRequest(fmt.Errorf("name is required")))
 		return
 	}
 	s.tmpl.Delete(name)
@@ -76,8 +75,12 @@ func (s *Server) handleTemplateDelete(w http.ResponseWriter, r *http.Request) {
 func decodeUploadedImage(fh *multipart.FileHeader) (image.Image, error) {
 	f, err := fh.Open()
 	if err != nil {
-		return nil, err
+		return nil, badRequest(fmt.Errorf("failed to decode image: %w", err))
 	}
 	defer f.Close()
-	return decodeImage(f)
+	img, err := decodeImage(f)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode image: %w", err) // keeps decodeImage's 400/413
+	}
+	return img, nil
 }

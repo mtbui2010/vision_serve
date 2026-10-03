@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,10 +19,8 @@ import (
 
 	"visionserve/internal/imageproc"
 	"visionserve/internal/lifecycle"
-	"visionserve/internal/models"
-	"visionserve/internal/morph"
 	"visionserve/internal/registry"
-	roipkg "visionserve/internal/roi"
+	"visionserve/internal/server"
 	"visionserve/pkg/api"
 )
 
@@ -99,45 +98,40 @@ func runRun(args []string) error {
 		return err
 	}
 
-	prompt, err := models.ParsePrompt(*promptFlag, *boxFlag, *pointFlag)
+	// The same request model and prompt mapping as POST /api/predict (one place per option).
+	req := server.Request{PredictJSONRequest: api.PredictJSONRequest{
+		Model:     modelName,
+		Prompt:    *promptFlag,
+		Box:       *boxFlag,
+		Point:     *pointFlag,
+		MinSize:   *minSizeFlag,
+		MaxSize:   *maxSizeFlag,
+		ROI:       *roiFlag,
+		Method:    *methodFlag,
+		BgMaxArea: *bgMaxAreaFlag,
+		FgMinArea: *fgMinAreaFlag,
+		GridSize:  *gridSizeFlag,
+		Dilate:    *dilateFlag,
+	}}
+	prompt, err := req.ToPrompt(img.Bounds().Dx(), img.Bounds().Dy())
 	if err != nil {
 		return err
-	}
-	prompt.Method = *methodFlag
-	prompt.BgMaxArea, prompt.FgMinArea = *bgMaxAreaFlag, *fgMinAreaFlag
-	prompt.GridSize = *gridSizeFlag
-
-	// Region of interest (crop semantics): infer on the crop, but keep the ORIGINAL image
-	// (img) for visualization since results are mapped back to original coordinates.
-	fullW, fullH := img.Bounds().Dx(), img.Bounds().Dy()
-	inferImg := img
-	rect, hasROI := roipkg.Clamp(roipkg.Parse(*roiFlag), fullW, fullH)
-	if hasROI {
-		inferImg = roipkg.Crop(img, rect)
-		roipkg.ShiftPrompt(&prompt, rect)
 	}
 
 	mgr := lifecycle.NewManager(reg)
 	defer mgr.Close()
 
-	// Time ONLY the inference call (client wall-clock). The server's own
-	// inference-only measurement is reported separately as res.DurationMs. Both
-	// are captured BEFORE any image is drawn/saved, so visualization never
-	// inflates the reported latency.
+	// Time ONLY the prediction (client wall-clock): ROI crop + inference + mapping back. The
+	// server's own inference-only measurement is reported separately as res.DurationMs. Both
+	// are captured BEFORE any image is drawn/saved, so visualization never inflates the
+	// reported latency. The image passed in stays the ORIGINAL (for drawing): results come
+	// back in original coordinates.
 	clientStart := time.Now()
-	res, err := mgr.PredictPrompt(modelName, inferImg, prompt)
+	res, err := server.Predict(context.Background(), mgr, modelName, img, prompt)
 	if err != nil {
 		return err
 	}
 	clientMs := float64(time.Since(clientStart).Microseconds()) / 1000.0
-
-	if hasROI {
-		res = roipkg.MapResult(res, rect, fullW, fullH)
-	}
-	morph.ApplyToMasks(res.Masks, fullW, fullH, *dilateFlag)
-	if *minSizeFlag > 0 || *maxSizeFlag > 0 {
-		res = api.FilterBySizePct(res, *minSizeFlag, *maxSizeFlag, fullW, fullH)
-	}
 
 	// Resolve the output path: --save-as / --out (explicit) take precedence; a
 	// bare --save auto-names <stem>.go.<model>.<task>.png.

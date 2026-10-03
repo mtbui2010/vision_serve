@@ -1,31 +1,56 @@
 // Package server provides the HTTP REST API (JSON) for VisionServe.
-// Default port 11435 (to avoid clashing with Ollama's 11434).
+// Default address 127.0.0.1:11435 (port 11435 avoids clashing with Ollama's 11434).
 package server
 
 import (
 	"context"
+	"image"
 	"log"
+	"net"
 	"net/http"
 	"time"
 
+	"visionserve/internal/engine"
 	"visionserve/internal/lifecycle"
+	"visionserve/internal/models"
 	"visionserve/internal/registry"
 	"visionserve/internal/templates"
+	"visionserve/pkg/api"
 )
 
-// DefaultAddr is the default listen address.
-const DefaultAddr = ":11435"
+// DefaultAddr is the default listen address: loopback only, like Ollama. The API has no
+// authentication, so it is not exposed to the network unless asked for: --addr :11435 (or
+// 0.0.0.0:11435) listens on every interface, which is what the container images pass.
+const DefaultAddr = "127.0.0.1:11435"
+
+// modelRuntime is what the HTTP layer needs from lifecycle.Manager. It is an interface so the
+// handler tests can drive a fake (admission order, cancellation, status mapping) without ONNX.
+type modelRuntime interface {
+	Admit(name string) (release func(), err error)
+	Load(name string) error
+	Unload(name string) error
+	IsLoaded(name string) bool
+	PredictPrompt(name string, img image.Image, prompt models.Prompt) (api.Result, error)
+	InferTensor(name string, in engine.Tensor) (api.Result, error)
+	Explain(name string, img image.Image, req lifecycle.ExplainRequest) (lifecycle.ExplainResult, error)
+	Preprocess(name string, img image.Image, prompt models.Prompt) (lifecycle.PreprocessResult, error)
+	Close()
+}
 
 // Server ties together the registry + lifecycle Manager + HTTP server.
 type Server struct {
 	reg  *registry.Registry
-	mgr  *lifecycle.Manager
+	mgr  modelRuntime
 	tmpl *templates.Store // template store for instance_detection models
 	http *http.Server
 }
 
 // New creates a server. Empty addr -> DefaultAddr.
 func New(reg *registry.Registry, mgr *lifecycle.Manager, tmpl *templates.Store, addr string) *Server {
+	return newServer(reg, mgr, tmpl, addr)
+}
+
+func newServer(reg *registry.Registry, mgr modelRuntime, tmpl *templates.Store, addr string) *Server {
 	if addr == "" {
 		addr = DefaultAddr
 	}
@@ -63,7 +88,13 @@ func (s *Server) routes() http.Handler {
 
 // ListenAndServe starts the server (blocking).
 func (s *Server) ListenAndServe() error {
-	log.Printf("VisionServe listening on %s", s.http.Addr)
+	scope := ""
+	if host, _, err := net.SplitHostPort(s.http.Addr); err == nil {
+		if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+			scope = " (this machine only; --addr :11435 accepts other hosts)"
+		}
+	}
+	log.Printf("VisionServe listening on %s%s", s.http.Addr, scope)
 	return s.http.ListenAndServe()
 }
 

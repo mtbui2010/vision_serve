@@ -1,12 +1,9 @@
 package server
 
 import (
-	"bytes"
-	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"image"
 	"io"
 	"math"
 	"net/http"
@@ -18,9 +15,6 @@ import (
 	_ "image/png"
 
 	"visionserve/internal/engine"
-	"visionserve/internal/models"
-	"visionserve/internal/morph"
-	roipkg "visionserve/internal/roi"
 	"visionserve/pkg/api"
 )
 
@@ -56,76 +50,98 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, infos)
 }
 
-// POST /api/load { "model": "rf-detr" }
-func (s *Server) handleLoad(w http.ResponseWriter, r *http.Request) {
+// decodeLoadRequest reads the {"model": "..."} body of /api/load and /api/unload.
+func decodeLoadRequest(r *http.Request) (string, error) {
 	var req api.LoadRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON body: %w", err))
-		return
+		return "", badRequest(fmt.Errorf("invalid JSON body: %w", err))
 	}
 	if req.Model == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("missing 'model' field"))
+		return "", badRequest(fmt.Errorf("missing 'model' field"))
+	}
+	return req.Model, nil
+}
+
+// POST /api/load { "model": "rf-detr" }
+func (s *Server) handleLoad(w http.ResponseWriter, r *http.Request) {
+	model, err := decodeLoadRequest(r)
+	if err == nil {
+		err = s.mgr.Load(model)
+	}
+	if err != nil {
+		writeError(w, err)
 		return
 	}
-	if err := s.mgr.Load(req.Model); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]string{"model": req.Model, "state": "loaded"})
+	writeJSON(w, http.StatusOK, map[string]string{"model": model, "state": "loaded"})
 }
 
 // POST /api/unload { "model": "rf-detr" }
 func (s *Server) handleUnload(w http.ResponseWriter, r *http.Request) {
-	var req api.LoadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("invalid JSON body: %w", err))
+	model, err := decodeLoadRequest(r)
+	if err == nil {
+		err = s.mgr.Unload(model)
+	}
+	if err != nil {
+		writeError(w, err)
 		return
 	}
-	if req.Model == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("missing 'model' field"))
-		return
+	writeJSON(w, http.StatusOK, map[string]string{"model": model, "state": "unloaded"})
+}
+
+// admit takes an admission slot for model and checks that the client is still there. Every
+// inference handler calls it after reading the request envelope and BEFORE decoding the image,
+// so the memory a queued request holds stays bounded by its (compressed) upload. The caller
+// must defer release when err is nil.
+func (s *Server) admit(r *http.Request, model string) (release func(), err error) {
+	release, err = s.mgr.Admit(model)
+	if err != nil {
+		return nil, err
 	}
-	if err := s.mgr.Unload(req.Model); err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+	if r.Context().Err() != nil { // the client left while the request was queued
+		release()
+		return nil, errClientGone
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"model": req.Model, "state": "unloaded"})
+	return release, nil
 }
 
 // POST /api/predict
-//   - multipart: model=<name>, image=<file>
-//   - or JSON: { "model": "...", "image_base64": "..." }
+//   - multipart: model=<name>, image=<file>, depth=<file>, and the options of api.PredictJSONRequest
+//   - or JSON: api.PredictJSONRequest { "model": "...", "image_base64": "...", ... }
+//
+// ?encoding=base64 (or the "encoding" field) returns depth_map / embeddings as base64 float32.
 func (s *Server) handlePredict(w http.ResponseWriter, r *http.Request) {
-	model, img, prompt, minSize, maxSize, err := s.parsePredictRequest(r)
+	res, enc, err := s.predict(w, r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
+		writeError(w, err)
 		return
 	}
+	writeResult(w, res, enc)
+}
 
-	// Region of interest (generic, crop semantics): crop the image to the ROI, run the
-	// model on the crop (it only sees the ROI), then map results back to original coords.
-	fullW, fullH := img.Bounds().Dx(), img.Bounds().Dy()
-	rect, hasROI := roipkg.Clamp(prompt.ROI, fullW, fullH)
-	if hasROI {
-		img = roipkg.Crop(img, rect)
-		roipkg.ShiftPrompt(&prompt, rect)
-	}
-
-	res, err := s.mgr.PredictPrompt(model, img, prompt)
+func (s *Server) predict(w http.ResponseWriter, r *http.Request) (api.Result, string, error) {
+	q, err := decodeRequest(w, r)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
+		return api.Result{}, "", err
 	}
+	if err := q.validate(true); err != nil {
+		return api.Result{}, "", err
+	}
+	release, err := s.admit(r, q.Model)
+	if err != nil {
+		return api.Result{}, "", err
+	}
+	defer release()
 
-	if hasROI {
-		res = roipkg.MapResult(res, rect, fullW, fullH)
+	img, err := q.decodeImage()
+	if err != nil {
+		return api.Result{}, "", err
 	}
-	// Mask morphology (enlarge/shrink) in ORIGINAL-image terms, then size filter.
-	morph.ApplyToMasks(res.Masks, fullW, fullH, prompt.Dilate)
-	if minSize > 0 || maxSize > 0 {
-		res = api.FilterBySizePct(res, minSize, maxSize, fullW, fullH)
+	prompt, err := q.ToPrompt(img.Bounds().Dx(), img.Bounds().Dy())
+	if err != nil {
+		return api.Result{}, "", err
 	}
-	writeJSON(w, http.StatusOK, res)
+	res, err := Predict(r.Context(), s.mgr, q.Model, img, prompt)
+	return res, q.Encoding, err
 }
 
 // errBadDepth: a depth map was sent but does not match its declared size/dtype. It used to be
@@ -209,7 +225,7 @@ func resizeDepthNearestF(src []float32, sw, sh, dw, dh int) []float32 {
 	return out
 }
 
-// POST /api/infer_tensor?model=<name>&shape=N,C,H,W
+// POST /api/infer_tensor?model=<name>&shape=N,C,H,W[&encoding=base64]
 //
 //	body = raw little-endian float32, row-major NCHW (an ALREADY-PREPROCESSED tensor).
 //
@@ -217,41 +233,58 @@ func resizeDepthNearestF(src []float32, sw, sh, dw, dh int) []float32 {
 // pixel/feature tensor in memory (no JPEG/PNG round-trip) and for benchmarking the serving +
 // inference layer head-to-head with tensor-in servers (e.g. Triton). Simple models only.
 func (s *Server) handleInferTensor(w http.ResponseWriter, r *http.Request) {
-	model := r.URL.Query().Get("model")
+	res, enc, err := s.inferTensor(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeResult(w, res, enc)
+}
+
+func (s *Server) inferTensor(r *http.Request) (api.Result, string, error) {
+	query := r.URL.Query()
+	model := query.Get("model")
 	if model == "" {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("missing 'model' query param"))
-		return
+		return api.Result{}, "", badRequest(fmt.Errorf("missing 'model' query param"))
 	}
-	shape, err := parseShape(r.URL.Query().Get("shape"))
+	shape, err := parseShape(query.Get("shape"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+		return api.Result{}, "", badRequest(err)
 	}
-	raw, err := io.ReadAll(io.LimitReader(r.Body, maxTensorBytes))
+	enc, err := api.ParseEncoding(query.Get("encoding"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("reading tensor body: %w", err))
-		return
+		return api.Result{}, "", badRequest(err)
+	}
+	// Everything the slot depends on is in the URL, so admission comes before the body is read.
+	release, err := s.admit(r, model)
+	if err != nil {
+		return api.Result{}, "", err
+	}
+	defer release()
+
+	raw, err := io.ReadAll(io.LimitReader(r.Body, maxTensorBytes+1))
+	if err != nil {
+		return api.Result{}, "", badRequest(fmt.Errorf("reading tensor body: %w", err))
+	}
+	if len(raw) > maxTensorBytes {
+		return api.Result{}, "", tooLargeError{fmt.Sprintf("tensor body is larger than %d MiB", maxTensorBytes>>20)}
 	}
 	data, err := bytesToFloat32(raw)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
+		return api.Result{}, "", badRequest(err)
 	}
 	var want int64 = 1
 	for _, d := range shape {
 		want *= d
 	}
 	if int64(len(data)) != want {
-		writeError(w, http.StatusBadRequest,
-			fmt.Errorf("tensor has %d float32 but shape %v implies %d", len(data), shape, want))
-		return
+		return api.Result{}, "", badRequest(fmt.Errorf("tensor has %d float32 but shape %v implies %d", len(data), shape, want))
+	}
+	if r.Context().Err() != nil {
+		return api.Result{}, "", errClientGone
 	}
 	res, err := s.mgr.InferTensor(model, engine.Tensor{Data: data, Shape: shape, Dtype: "f32"})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, res)
+	return res, enc, err
 }
 
 // parseShape parses "N,C,H,W" into positive int64 dims.
@@ -281,132 +314,4 @@ func bytesToFloat32(b []byte) ([]float32, error) {
 		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
 	}
 	return out, nil
-}
-
-func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, models.Prompt, float64, float64, error) {
-	ct := r.Header.Get("Content-Type")
-
-	// JSON branch (image_base64 + optional prompt fields)
-	if len(ct) >= 16 && ct[:16] == "application/json" {
-		var req api.PredictJSONRequest
-		if err := json.NewDecoder(io.LimitReader(r.Body, maxImageBytes)).Decode(&req); err != nil {
-			return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("invalid JSON body: %w", err)
-		}
-		if req.Model == "" || req.ImageBase64 == "" {
-			return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("both 'model' and 'image_base64' are required")
-		}
-		raw, err := base64.StdEncoding.DecodeString(req.ImageBase64)
-		if err != nil {
-			return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("invalid image_base64: %w", err)
-		}
-		img, err := decodeImage(bytes.NewReader(raw))
-		if err != nil {
-			return "", nil, models.Prompt{}, 0, 0, err
-		}
-		prompt, err := models.ParsePrompt(req.Prompt, req.Box, req.Point)
-		if err != nil {
-			return "", nil, models.Prompt{}, 0, 0, err
-		}
-		// Per-request predict options threaded to the model (the grasp model reads them).
-		prompt.MinSize, prompt.MaxSize = req.MinSize, req.MaxSize
-		prompt.GripperMin, prompt.GripperMax = req.GripperMin, req.GripperMax
-		prompt.BoxThresh, prompt.TextThresh = req.BoxThreshold, req.TextThreshold
-		prompt.BgMaxArea, prompt.FgMinArea = req.BgMaxArea, req.FgMinArea
-		prompt.GridSize = clampGrid(req.GridSize)
-		prompt.Method = req.Method
-		prompt.ClaimThresh = req.ClaimThreshold
-		prompt.CropTemp = req.CropTemp
-		prompt.ROI = roipkg.Parse(req.ROI)
-		prompt.Dilate = req.Dilate
-		prompt.TemplateName = req.TemplateName
-		if req.DepthBase64 != "" {
-			raw, e := base64.StdEncoding.DecodeString(req.DepthBase64)
-			if e != nil {
-				return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("invalid depth_base64: %w", e)
-			}
-			prompt.Depth, prompt.DepthW, prompt.DepthH = parseDepth(
-				raw, req.DepthDtype, req.DepthWidth, req.DepthHeight, img.Bounds().Dx(), img.Bounds().Dy())
-			if prompt.Depth == nil {
-				return "", nil, models.Prompt{}, 0, 0, errBadDepth
-			}
-		}
-		return req.Model, img, prompt, req.MinSize, req.MaxSize, nil
-	}
-
-	// Multipart branch (form fields: model, image, optional prompt/box/point/min_size/max_size)
-	if err := r.ParseMultipartForm(maxImageBytes); err != nil {
-		return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("failed to parse multipart form: %w", err)
-	}
-	model := r.FormValue("model")
-	if model == "" {
-		return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("missing 'model' field")
-	}
-	file, _, err := r.FormFile("image")
-	if err != nil {
-		return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("missing 'image' file: %w", err)
-	}
-	defer file.Close()
-	img, err := decodeImage(file)
-	if err != nil {
-		return "", nil, models.Prompt{}, 0, 0, err
-	}
-	prompt, err := models.ParsePrompt(r.FormValue("prompt"), r.FormValue("box"), r.FormValue("point"))
-	if err != nil {
-		return "", nil, models.Prompt{}, 0, 0, err
-	}
-	// parse size filters; ignore parse errors (default 0 = no limit)
-	minSize, _ := strconv.ParseFloat(r.FormValue("min_size"), 64)
-	maxSize, _ := strconv.ParseFloat(r.FormValue("max_size"), 64)
-	// grasp gripper bounds (px); ignore parse errors (default 0 = manifest default)
-	gripperMin, _ := strconv.ParseFloat(r.FormValue("gripper_min"), 64)
-	gripperMax, _ := strconv.ParseFloat(r.FormValue("gripper_max"), 64)
-	// GroundingDINO threshold overrides; ignore parse errors (default 0 = manifest/default)
-	boxThresh, _ := strconv.ParseFloat(r.FormValue("box_threshold"), 64)
-	textThresh, _ := strconv.ParseFloat(r.FormValue("text_threshold"), 64)
-	// foreground background/noise area thresholds (% of image); 0 = model default
-	bgMaxArea, _ := strconv.ParseFloat(r.FormValue("bg_max_area"), 64)
-	fgMinArea, _ := strconv.ParseFloat(r.FormValue("fg_min_area"), 64)
-	gridSize, _ := strconv.Atoi(r.FormValue("grid_size"))
-	prompt.MinSize, prompt.MaxSize = minSize, maxSize
-	prompt.GripperMin, prompt.GripperMax = gripperMin, gripperMax
-	prompt.BoxThresh, prompt.TextThresh = boxThresh, textThresh
-	prompt.BgMaxArea, prompt.FgMinArea = bgMaxArea, fgMinArea
-	prompt.GridSize = clampGrid(gridSize)
-	prompt.Method = r.FormValue("method")
-	prompt.ClaimThresh, _ = strconv.ParseFloat(r.FormValue("claim_threshold"), 64)
-	prompt.CropTemp, _ = strconv.ParseFloat(r.FormValue("crop_temp"), 64)
-	prompt.ROI = roipkg.Parse(r.FormValue("roi"))
-	dilate, _ := strconv.Atoi(r.FormValue("dilate"))
-	prompt.Dilate = dilate
-	// instance_detection: resolve template by name via lifecycle + template store
-	if v := r.FormValue("template_name"); v != "" {
-		prompt.TemplateName = v
-	}
-	// Optional external depth map (RGB-D) as a raw little-endian array file.
-	if df, _, derr := r.FormFile("depth"); derr == nil {
-		defer df.Close()
-		raw, e := io.ReadAll(io.LimitReader(df, maxTensorBytes))
-		if e != nil {
-			return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("reading depth: %w", e)
-		}
-		dw, _ := strconv.Atoi(r.FormValue("depth_width"))
-		dh, _ := strconv.Atoi(r.FormValue("depth_height"))
-		prompt.Depth, prompt.DepthW, prompt.DepthH = parseDepth(
-			raw, r.FormValue("depth_dtype"), dw, dh, img.Bounds().Dx(), img.Bounds().Dy())
-		if prompt.Depth == nil {
-			return "", nil, models.Prompt{}, 0, 0, errBadDepth
-		}
-	}
-	return model, img, prompt, minSize, maxSize, nil
-}
-
-// maxGridSize bounds the automatic-mask grid: N×N decoder calls (and goroutines/allocations),
-// so an unchecked grid_size=1000 asked for a million decoder runs in one request.
-const maxGridSize = 64
-
-func clampGrid(n int) int {
-	if n > maxGridSize {
-		return maxGridSize
-	}
-	return n
 }

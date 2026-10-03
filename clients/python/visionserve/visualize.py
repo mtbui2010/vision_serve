@@ -307,46 +307,10 @@ def _quality_colour(q: float) -> Tuple[int, int, int]:
     return (int(255 * (1.0 - t)), 255, 0)
 
 
-def _grasp_object_key(g: Any, objects: List[Tuple[float, float, float, float]]) -> Any:
-    """Return the index of the SMALLEST object bbox whose interior contains the grasp
-    centre, or ``None`` if no bbox contains it."""
-    best = None
-    best_area: Optional[float] = None
-    for i, (x, y, w, h) in enumerate(objects):
-        if x <= g.x <= x + w and y <= g.y <= y + h:
-            area = w * h
-            if best_area is None or area < best_area:
-                best_area = area
-                best = i
-    return best
-
-
 def _grasps_per_object(result: "Result", max_per_object: Optional[int]) -> List[Any]:
-    """Group grasps by the object (detection bbox, else mask bbox) containing each
-    grasp centre and keep the ``max_per_object`` highest-quality grasps per group.
-
-    Falls back to grouping by class label when no object bbox contains a grasp (and
-    to a single group when there are no objects at all). ``None``/``<=0`` keeps all.
-    """
-    grasps = result.grasps
-    if max_per_object is None or max_per_object <= 0:
-        return list(grasps)
-
-    # Prefer detection bboxes (class-aware); else mask bboxes (class-agnostic automask).
-    objects = [d.bbox for d in result.detections] or [m.bbox for m in result.masks]
-
-    groups: dict = {}
-    for g in grasps:
-        key = _grasp_object_key(g, objects) if objects else None
-        if key is None:
-            key = ("cls", g.cls)  # ungrouped → bucket by label so we still sample per kind
-        groups.setdefault(key, []).append(g)
-
-    out: List[Any] = []
-    for gs in groups.values():
-        gs.sort(key=lambda g: g.quality, reverse=True)
-        out.extend(gs[:max_per_object])
-    return out
+    """The grasps to draw: the ``max_per_object`` highest-quality grasps per object, grouped
+    exactly as :meth:`~visionserve.Result.filter_grasps` does. ``None``/``<=0`` keeps all."""
+    return list(result.filter_grasps(max_per_object).grasps)
 
 
 def _draw_grasps(
@@ -448,7 +412,7 @@ def _draw_depth(result: "Result", Image: Any) -> Any:
     except ImportError:
         np = None
     if np is not None:  # vectorised: same ramp as _turbo_colour, ~100x faster than per pixel
-        d = np.asarray(depth, np.float64).reshape(dh, dw)
+        d = np.asarray(depth, np.float64).reshape(dh, dw)  # list or FloatArray (no Python floats)
         lo, hi = float(d.min()), float(d.max())
         t = np.clip((d - lo) / (hi - lo if hi > lo else 1.0), 0.0, 1.0)
         s = np.where(t < 0.25, t / 0.25, np.where(t < 0.5, (t - 0.25) / 0.25,
@@ -523,26 +487,10 @@ def _open_image(image: Any, Image: Any) -> Any:
     if isinstance(image, (bytes, bytearray)):
         import io as _io
         return Image.open(_io.BytesIO(bytes(image)))
-    # numpy ndarray — HWC uint8 or float [0,1]
-    try:
-        import numpy as np
-        if isinstance(image, np.ndarray):
-            a = image
-            if a.dtype.kind == "f":
-                a = np.clip(a, 0.0, 1.0)
-                a = (a * 255.0 + 0.5).astype(np.uint8)
-            elif a.dtype != np.uint8:
-                a = np.clip(a, 0, 255).astype(np.uint8)
-            if a.ndim == 3 and a.shape[2] == 1:
-                a = a[:, :, 0]
-            if a.ndim == 2:
-                a = np.stack([a, a, a], axis=-1)
-            if a.ndim != 3 or a.shape[2] not in (3, 4):
-                raise ValueError("unsupported ndarray shape %r; expected (H,W), (H,W,1), (H,W,3) or (H,W,4)"
-                                 % (image.shape,))
-            return Image.fromarray(np.ascontiguousarray(a))
-    except ImportError:
-        pass
+    from .client import _maybe_ndarray, _ndarray_to_pil  # the same ndarray rule as predict()
+
+    if _maybe_ndarray(image) is not None:
+        return _ndarray_to_pil(image)
     raise TypeError(
         "unsupported image type %r; expected PIL.Image, str path, bytes, or numpy.ndarray"
         % type(image)

@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 
 	"visionserve/internal/catalog"
+	"visionserve/internal/server"
 	"visionserve/pkg/api"
 )
 
@@ -21,7 +22,7 @@ import (
 
 func serverBase(addr string) string {
 	if addr == "" {
-		addr = ":11435"
+		addr = server.DefaultAddr
 	}
 	if addr[0] == ':' {
 		addr = "127.0.0.1" + addr
@@ -32,7 +33,7 @@ func serverBase(addr string) string {
 // runPs: visionserve ps — which models are loaded (filtered from GET /api/models).
 func runPs(args []string) error {
 	fs := flag.NewFlagSet("ps", flag.ContinueOnError)
-	addr := fs.String("addr", ":11435", "server address")
+	addr := fs.String("addr", server.DefaultAddr, "server address")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -62,7 +63,7 @@ func runPs(args []string) error {
 // runRm: visionserve rm <model> — unload a model from memory (POST /api/unload).
 func runRm(args []string) error {
 	fs := flag.NewFlagSet("rm", flag.ContinueOnError)
-	addr := fs.String("addr", ":11435", "server address")
+	addr := fs.String("addr", server.DefaultAddr, "server address")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

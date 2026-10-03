@@ -32,7 +32,7 @@ import json
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from . import __version__
 from .client import Client, VisionServeError
@@ -40,57 +40,6 @@ from .types import ModelInfo, Result
 
 CLIENT_TYPE = "python"
 DEFAULT_HOST = "http://localhost:11435"
-
-
-# --------------------------------------------------------------------------- #
-# Wire serialization (match the server schema in pkg/api/types.go exactly)
-# --------------------------------------------------------------------------- #
-def _result_to_wire(res: Result) -> Dict[str, Any]:
-    """Reconstruct the server's JSON wire shape from a parsed :class:`Result`.
-
-    Field names mirror ``pkg/api/types.go`` (notably ``class``, not ``cls``), and
-    empty collections are omitted to match the Go ``omitempty`` tags — so the JSON
-    printed here is identical to ``visionserve run`` (the Go CLI).
-    """
-    out: Dict[str, Any] = {"task": res.task, "model": res.model}
-    if res.device:
-        out["device"] = res.device
-    if res.detections:
-        out["detections"] = [
-            {"bbox": list(d.bbox), "class": d.cls, "conf": d.conf} for d in res.detections
-        ]
-    if res.masks:
-        out["masks"] = [
-            {"rle": m.rle, "bbox": list(m.bbox), "conf": m.conf} for m in res.masks
-        ]
-    if res.grasps:
-        grasps: List[Dict[str, Any]] = []
-        for g in res.grasps:
-            item: Dict[str, Any] = {
-                "x": g.x,
-                "y": g.y,
-                "theta": g.theta,
-                "width": g.width,
-                "quality": g.quality,
-            }
-            if g.cls:
-                item["class"] = g.cls
-            if g.conf:
-                item["conf"] = g.conf
-            grasps.append(item)
-        out["grasps"] = grasps
-    if res.classifications:
-        out["classifications"] = [
-            {"class": c.cls, "conf": c.conf} for c in res.classifications
-        ]
-    if res.embeddings:
-        out["embeddings"] = [list(v) for v in res.embeddings]
-    if res.depth_map:
-        out["depth_map"] = list(res.depth_map)
-        out["depth_width"] = res.depth_width
-        out["depth_height"] = res.depth_height
-    out["duration_ms"] = res.duration_ms
-    return out
 
 
 def _auto_name(image_path: str, model: str, task: str, ext: str) -> str:
@@ -397,8 +346,9 @@ def cmd_predict(client: Client, args: argparse.Namespace) -> int:
     else:
         res_out = res
 
-    # stdout: result JSON (wire-faithful, pipe-friendly).
-    wire = _result_to_wire(res_out)
+    # stdout: result JSON (wire-faithful, pipe-friendly): the server's schema, field names and
+    # omitempty rules (Result.to_json), so it matches `visionserve run` (the Go CLI).
+    wire = res_out.to_json()
     if args.compact:
         sys.stdout.write(json.dumps(wire, separators=(",", ":")) + "\n")
     else:
@@ -524,7 +474,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parser.parse_args(argv)
     host = getattr(args, "host", DEFAULT_HOST)
     timeout = getattr(args, "timeout", 120.0)
-    client = Client(host=host, timeout=timeout)
+    # The CLI prints JSON numbers, so it asks for them: the arrays it prints are then the
+    # server's own numbers (float32 shortest form), not float32 values widened to float64.
+    client = Client(host=host, timeout=timeout, base64_arrays=False)
     try:
         return args.func(client, args)
     except VisionServeError as exc:
