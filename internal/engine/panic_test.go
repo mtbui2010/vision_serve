@@ -65,7 +65,8 @@ func TestRealSessionUsableAfterJobPanic(t *testing.T) {
 		in, _ := ort.NewTensor(ort.NewShape(1, 3), []float32{1, 2, 3})
 		defer in.Destroy()
 		var nilMap map[string]int
-		nilMap["x"] = 1 // a real runtime panic, not a panic(string)
+		//lint:ignore SA5000 deliberate: the test needs a real runtime panic, not a panic(string)
+		nilMap["x"] = 1
 		return nil, nil
 	})
 	if !errors.Is(err, ErrInferencePanic) {

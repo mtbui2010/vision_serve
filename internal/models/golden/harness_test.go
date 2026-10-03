@@ -618,10 +618,3 @@ func (b blob) render(dst []float32, w, h int) {
 	}
 }
 
-func shapesOf(ts []engine.Tensor) [][]int64 {
-	out := make([][]int64, len(ts))
-	for i, t := range ts {
-		out[i] = t.Shape
-	}
-	return out
-}
