@@ -11,6 +11,9 @@
 # `*.onnx` catches only the small half and a plain `git add -A` stages the weights.
 *.onnx.data
 *.onnx_data
+# Sidecars named after the model rather than the .onnx (siglip-text-fp16.data, 220 MB) slipped
+# past the two lines above into a commit and blocked the push (GitHub refuses files > 100 MB).
+models/**/*.data
 *.pt
 *.pth
 *.engine
