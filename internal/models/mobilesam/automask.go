@@ -74,6 +74,13 @@ type amgResult struct {
 	err   error
 }
 
+// amgOut is one final-pass result after emit has converted it.
+type amgOut[T any] struct {
+	v     T
+	valid bool
+	err   error
+}
+
 // workFrame returns the filter-pass frame: the original size when its long side is
 // already ≤ autoWorkLongSide, else the aspect-preserving downscale to that long side.
 func workFrame(origW, origH int) (w, h int) {
@@ -114,6 +121,25 @@ func autoSegment(
 	decOutNames []string,
 	gridSize int,
 ) ([]MaskBitmap, error) {
+	return autoSegmentAs(img, embedding, scale, decRun, decOutNames, gridSize, keepBitmap)
+}
+
+// keepBitmap is the identity emit: the caller wants the bitmaps themselves.
+func keepBitmap(b MaskBitmap) MaskBitmap { return b }
+
+// autoSegmentAs is autoSegment with every surviving mask passed through emit as soon as it is
+// final, in the same order. With emit = MaskBitmap.ToMask the full-resolution bitmap of each
+// mask is dropped right after its RLE is made, instead of all of them being held until the end
+// (a 3200×2400 image keeps ~60 masks of 7.7 MB each).
+func autoSegmentAs[T any](
+	img image.Image,
+	embedding engine.Tensor,
+	scale float64,
+	decRun func(map[string]engine.Tensor) ([]engine.Tensor, error),
+	decOutNames []string,
+	gridSize int,
+	emit func(MaskBitmap) T,
+) ([]T, error) {
 	origW := img.Bounds().Dx()
 	origH := img.Bounds().Dy()
 	workW, workH := workFrame(origW, origH)
@@ -153,7 +179,7 @@ func autoSegment(
 		}
 	}
 	if len(cands) == 0 {
-		return []MaskBitmap{}, nil
+		return []T{}, nil
 	}
 
 	// 2) Greedy NMS on the work-frame bitmaps.
@@ -161,19 +187,19 @@ func autoSegment(
 
 	// 3) Final pass: original-resolution masks for the kept points only.
 	if workW == origW && workH == origH {
-		out := make([]MaskBitmap, 0, len(kept))
+		out := make([]T, 0, len(kept))
 		for _, c := range kept {
-			out = append(out, c.bitmap())
+			out = append(out, emit(c.bitmap()))
 		}
 		return out, nil
 	}
 
 	fullMin, fullMax := areaBounds(origW, origH)
-	finals := make([]amgResult, len(kept))
+	finals := make([]amgOut[T], len(kept))
 	parallelFor(len(kept), autoWorkers, func(k int) {
 		c, ok, err := decodePoint(kept[k].px, kept[k].py, origW, origH, embedding, decRun, decOutNames)
 		if err != nil {
-			finals[k] = amgResult{err: fmt.Errorf("mobilesam: amg full-res decoder: %w", err)}
+			finals[k] = amgOut[T]{err: fmt.Errorf("mobilesam: amg full-res decoder: %w", err)}
 			return
 		}
 		// Same area gate as the filter pass, now on the exact full-res mask.
@@ -181,15 +207,15 @@ func autoSegment(
 			return
 		}
 		c.conf = kept[k].conf // identical prompt → identical iou_predictions; keep the ranking value
-		finals[k] = amgResult{cand: c, valid: true}
+		finals[k] = amgOut[T]{v: emit(c.bitmap()), valid: true}
 	})
-	out := make([]MaskBitmap, 0, len(kept))
+	out := make([]T, 0, len(kept))
 	for _, r := range finals {
 		if r.err != nil {
 			return nil, r.err
 		}
 		if r.valid {
-			out = append(out, r.cand.bitmap())
+			out = append(out, r.v)
 		}
 	}
 	return out, nil

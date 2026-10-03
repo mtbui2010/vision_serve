@@ -90,7 +90,7 @@ func TestPanicDuringSessionCreationIsAnError(t *testing.T) {
 		t.Skip(err)
 	}
 	prev := createORTSession
-	createORTSession = func(string, []string, []string, []Provider) (*ort.DynamicAdvancedSession, Provider, error) {
+	createORTSession = func(string, []string, []string, []Provider, SessionOptions) (*ort.DynamicAdvancedSession, Provider, error) {
 		panic("simulated crash in session creation")
 	}
 	defer func() { createORTSession = prev }()

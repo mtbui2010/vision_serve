@@ -207,6 +207,91 @@ func TestFromMaskMatchesReference(t *testing.T) {
 	_ = math.Pi
 }
 
+// collectBoundaryDirect is collectBoundary by its definition: the r=2 Sobel-like kernels of
+// utils.mask2normalmap convolved directly at EVERY pixel of the image (zero padding outside),
+// with no bbox, no skip and no running sums.
+func collectBoundaryDirect(b Bitmap) []boundaryPoint {
+	const eps = 1e-10
+	const r = normalRadius
+	at := func(x, y int) int {
+		if x < 0 || y < 0 || x >= b.W || y >= b.H || !b.Data[y*b.W+x] {
+			return 0
+		}
+		return 1
+	}
+	var pts []boundaryPoint
+	for y := 0; y < b.H; y++ {
+		for x := 0; x < b.W; x++ {
+			sx, sy := 0, 0
+			for dy := -r; dy <= r; dy++ {
+				for dx := -r; dx <= r; dx++ {
+					v := at(x+dx, y+dy)
+					switch { // kernel_y: rows above +1, rows below -1; kernel_x its transpose
+					case dy < 0:
+						sy += v
+					case dy > 0:
+						sy -= v
+					}
+					switch {
+					case dx < 0:
+						sx += v
+					case dx > 0:
+						sx -= v
+					}
+				}
+			}
+			n := math.Hypot(float64(sx), float64(sy))
+			if n <= 0 {
+				continue
+			}
+			pts = append(pts, boundaryPoint{
+				loc: vec2{float64(x), float64(y)},
+				nrm: vec2{float64(sx) / (n + eps), float64(sy) / (n + eps)},
+			})
+		}
+	}
+	return pts
+}
+
+// collectBoundary must equal the direct convolution point for point and bit for bit, including
+// masks that touch every image edge, single pixels, thin lines and noise.
+func TestCollectBoundaryMatchesDirectConvolution(t *testing.T) {
+	rng := uint64(1)
+	next := func() uint64 { rng = rng*6364136223846793005 + 1442695040888963407; return rng >> 33 }
+	noise := func(W, H, pct int) Bitmap {
+		b := Bitmap{W: W, H: H, Data: make([]bool, W*H)}
+		for i := range b.Data {
+			b.Data[i] = int(next()%100) < pct
+		}
+		return b
+	}
+	full := Bitmap{W: 9, H: 7, Data: make([]bool, 63)}
+	for i := range full.Data {
+		full.Data[i] = true
+	}
+	masks := map[string]Bitmap{
+		"rect":          filledRect(100, 80, 30, 30, 40, 20),
+		"disk":          filledDisk(120, 120, 60, 60, 35),
+		"star":          filledStar(200, 200, 100, 100, 5, 90, 35),
+		"edge-touching": filledRect(40, 30, 0, 0, 40, 12),
+		"full-image":    full,
+		"single-pixel":  filledRect(10, 10, 4, 4, 1, 1),
+		"corner-pixel":  filledRect(10, 10, 0, 9, 1, 1),
+		"thin-line":     filledRect(50, 20, 3, 10, 44, 1),
+		"one-row-image": filledRect(30, 1, 5, 0, 10, 1),
+		"one-col-image": filledRect(1, 30, 0, 5, 1, 10),
+		"noise-sparse":  noise(64, 48, 5),
+		"noise-dense":   noise(64, 48, 60),
+		"noise-tall":    noise(7, 90, 40),
+	}
+	for name, m := range masks {
+		got, want := collectBoundary(m), collectBoundaryDirect(m)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %d boundary points, direct convolution gives %d (or they differ)", name, len(got), len(want))
+		}
+	}
+}
+
 // BenchmarkFromMaskStarReference is the pre-rewrite search on the same mask, for comparison
 // against BenchmarkFromMaskStar in one run.
 func BenchmarkFromMaskStarReference(b *testing.B) {

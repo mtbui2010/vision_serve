@@ -197,8 +197,12 @@ luồng song song (A–G); mỗi luồng chỉ được merge sau khi qua cổng
 | Mask/depth dạng JSON số | **Xong**: `encoding=base64` phía server; trong SDK Python là opt-in (`base64_arrays=True`) |
 | Allocation theo từng pixel | **Xong** trong `vision/preprocess` (đọc `Pix` theo stride) |
 | Admission control | **Xong**: `max(32, 2×slots)` request mỗi model, `VISIONSERVE_MAX_QUEUE`, 503 + `Retry-After` |
+| MobileSAM automask (không prompt) | **Xong**. Lọc + NMS ở khung 256 px, lọc trước bằng bbox, chỉ decode lại full-res cho mask được giữ: đã có từ efcf9de (3200×2400: 58 s / +3.7 GB → 19 s / +1.5 GB; 640×480 không đổi). Phần thời gian còn lại là do luồng ORT: 4 decoder trong pool, mỗi cái 24 luồng spin, khoảng 600 CPU-giây mỗi request. 5bea01e giới hạn mỗi session trong pool còn `NumCPU/(4n)` luồng (`VS_POOL_THREADS` để chỉnh). bbcf880 encode RLE ngay khi mỗi mask xong. Đo lại: 640×480: 14–15 s → **3.8 s**, peak RSS ~1.0 GB (0.63 GB là model đã load); 3200×2400: 17–18 s → **4.7–5.0 s**, peak 2.3 GB → **1.6–1.8 GB** |
+| Grasp search | **Xong**. Top-K + bỏ allocation từng candidate đã có từ efcf9de. bcf2571 bỏ bảng summed-area (8 byte mỗi pixel bbox) khi quét biên và kiểm tra độ mở tay kẹp trước force closure. Một mask lớn (ảnh 3200×2400): 105–170 ms / 41 MB → **60–100 ms / 7.7 MB**; 58 mask thật của một ảnh 3200×2400: 1.0–1.3 s / 256 MB → 0.8–1.0 s / 109 MB; mask ở ảnh 640 px tốn ≤ 30 ms. Cả request vẫn do SAM chi phối: `grasp-rfdetr` 3.7–5.8 s → 1.5–1.8 s nhờ 5bea01e |
+| Background `method=sam` | **Xong** từ efcf9de (`encoderOnce`). Đếm trên server thật: encoder chạy 6 → **1** lần mỗi request, decoder vẫn 6 lần. Thời gian: 14 s (trước efcf9de) → 2.8–3.9 s → **0.63–0.74 s** với 5bea01e |
 | textalign `exact` | **Xong, opt-in**: role `files.head: head.onnx` (sinh bằng `models/rfdetr-textalign-dec1-siglip/export_head_onnx.py`), Go là fallback khi không khai báo. ORT CPU so với Go: lệch tối đa 1.43e-6 logit. Đo cả request: GPU 62 → 25 ms; **CPU chậm hơn** (140 → 440 ms, xem "Còn mở"), nên manifest mặc định vẫn tắt |
-| MobileSAM automask, grasp search, background `method=sam` | **Chưa làm** |
+
+Các số trên đo trên CPU (`CUDA_VISIBLE_DEVICES=`), chạy qua server, peak RSS lấy từ `VmHWM`. Máy dùng chung 48 luồng và đang tải nặng (load 25–95), nên thời gian ghi dạng khoảng. Output trùng từng byte với bản trước, và golden 43 case trùng từng bit. Còn có thể giảm thêm bộ nhớ automask 3200×2400 (khoảng +0.8 GB): giữ bitmap dạng gọn hơn `[]bool` toàn khung cho grasp/background, hoặc bớt worker ở lượt full-res. Chưa làm.
 
 ### Rà lỗi sau refactor
 
@@ -242,7 +246,6 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
 
 ### Còn mở
 
-- 3 điểm nóng chưa làm (bảng trên).
 - **Head ONNX trên CPU.** Head chỉ mất khoảng 1 ms, nhưng thêm một session ORT CPU với thread
   pool mặc định (spinning) làm detector chậm đi khoảng 3 lần khi hai session chạy xen kẽ (đo
   bằng Python ORT 1.26: head 1 thread thì detector không chậm). Cần cho phép đặt

@@ -53,6 +53,20 @@ func TestStarMaskGraspCount(t *testing.T) {
 	}
 }
 
+// BenchmarkFromMaskLarge is one large object mask of a 3200×2400 image with the manifests'
+// default gripper opening (10..150 px) and per-mask cap (20): the boundary scan and the many
+// pairs wider than the gripper dominate, not the force-closure test.
+func BenchmarkFromMaskLarge(b *testing.B) {
+	mask := filledStar(3200, 2400, 1600, 1200, 5, 1100, 600)
+	p := DefaultParams()
+	p.MaxGrasps = 20
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		FromMask(mask, p)
+	}
+}
+
 func BenchmarkFromMaskStar(b *testing.B) {
 	mask := filledStar(400, 400, 200, 200, 5, 180, 70)
 	for _, k := range []int{0, 20} {
