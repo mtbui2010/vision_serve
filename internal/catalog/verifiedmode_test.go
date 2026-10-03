@@ -38,7 +38,7 @@ func TestAuditedEntriesArePinned(t *testing.T) {
 				t.Errorf("declares %q but the audited ledger records %q for %s — verified mode "+
 					"refuses this at load", e.License, led.License, led.SourcePrefix)
 			}
-			if !strings.Contains(e.RenderManifest(), "sha256:") {
+			if !strings.Contains(render(t, e), "sha256:") {
 				t.Errorf("upstream %s is audited, but the entry pins no sha256 — verified mode "+
 					"refuses an unpinned model, so `visionserve pull %s` would download "+
 					"successfully and then fail to load", led.SourcePrefix, e.Name)
@@ -105,7 +105,7 @@ func TestRenderedManifestPinsEveryPinnedFile(t *testing.T) {
 		}
 		t.Run(e.Name, func(t *testing.T) {
 			p := filepath.Join(t.TempDir(), "manifest.yaml")
-			if err := os.WriteFile(p, []byte(e.RenderManifest()), 0o644); err != nil {
+			if err := os.WriteFile(p, []byte(render(t, e)), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			m, err := registry.LoadManifest(p)

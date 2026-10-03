@@ -26,9 +26,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .common import log
+from .constants import IMAGE_EXT
 from .report import FAIL, PASS, SKIP, WARN, TierResult
 
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 _NA = {"n/a", "na", "", "background", "__background__", "no object"}
 
 

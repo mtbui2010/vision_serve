@@ -18,6 +18,7 @@ import time
 from typing import Callable, List, Optional
 
 from .common import log
+from .constants import TEXT_ARCHS
 from .metrics import percentile_ms
 from .report import INFO, SKIP, TierResult, fmt
 
@@ -74,7 +75,7 @@ def _device_name(dev: str) -> str:
 def tier_speed(plan, client, bundle, image, prompt=None, warmup: int = 3, iters: int = 50) -> TierResult:
     name = bundle.name
     levels, notes = {}, []
-    if bundle.architecture in ("siglip-text", "clip-text"):
+    if bundle.architecture in TEXT_ARCHS:
         return TierResult("speed", "speed", SKIP, "text towers are not benchmarked", model=name)
     pre = client.preprocess(name, image.src, prompt=prompt)
     feeds = dict(pre.inputs)

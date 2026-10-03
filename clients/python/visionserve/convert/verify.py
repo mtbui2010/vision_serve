@@ -25,9 +25,8 @@ from .reference import (ManifestReference, OnnxForward, Reference, TorchModuleRe
                         load_reference_script, resolve_device)
 from .report import (ERROR, FAIL, PASS, SKIP, WARN, Report, TierResult, fmt, grade_high, grade_low,
                      parse_thresholds, worst)
+from .constants import IMAGE_EXT, OPEN_VOCAB_ARCHS, TEXT_ARCHS
 
-IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
-TEXT_ARCHS = ("siglip-text", "clip-text")
 DEFAULT_PHRASES = ["a photo of a cat", "remote control", "water bottle"]
 
 
@@ -272,7 +271,7 @@ def tier_b2(plan: Plan, client, name: str, images: List[Img], th: dict, prompt=N
         conf = (b.postprocess or {}).get("conf_threshold")
         # GroundingDINO's official post-process labels a box with every prompt token above
         # text_threshold ("cup water bottle"); VisionServe gives each box its single best phrase.
-        open_vocab = b.architecture in ("grounding-dino", "grounded-sam", "gdino-siglip", "rfdetr-gdino")
+        open_vocab = b.architecture in OPEN_VOCAB_ARCHS
         m = compare_detections([(r.detections or [], s.detections, im.pil.size) for im, r, s in pairs],
                                conf_threshold=conf, iou_thr=th["b2_iou"], boundary=th["b2_boundary"],
                                label_match=phrase_in_merged_label if open_vocab else same_label)

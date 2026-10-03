@@ -35,6 +35,7 @@ import numpy as np
 
 from ..common import (IMAGENET_MEAN, IMAGENET_STD, Bundle, ConvertError, license_scan, log, parity,
                       resolve_license, sample_image, to_nchw)
+from ..constants import HUB_ID_RE, parse_wxh
 from ..reference import Reference
 
 HELP = ("HuggingFace transformers checkpoint: a local model directory (config.json + weights) or a "
@@ -136,7 +137,6 @@ class _Ctx:
 # Source + license
 # --------------------------------------------------------------------------------------------
 
-_HUB_ID = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
 _WEIGHT_SUFFIXES = (".safetensors",)
 _SIDE_SUFFIXES = (".json", ".txt", ".model")
 
@@ -150,7 +150,7 @@ def _fetch(args):
     if p.exists():
         raise ConvertError(f"{p} is a file; the hf format takes a model DIRECTORY (config.json + weights) "
                            "or a hub id like google/vit-base-patch16-224")
-    if not _HUB_ID.match(args.source):
+    if not HUB_ID_RE.match(args.source):
         raise ConvertError(f"{args.source!r} is neither an existing directory nor a hub id (org/name)")
 
     from huggingface_hub import HfApi, snapshot_download
@@ -235,14 +235,6 @@ def _read_json(path: Path):
 # Preprocessing (preprocessor_config.json -> what the Go side feeds)
 # --------------------------------------------------------------------------------------------
 
-def _parse_wxh(s):
-    try:
-        w, h = s.lower().split("x")
-        return int(w), int(h)
-    except ValueError:
-        raise ConvertError(f"--input must look like 224x224, got {s!r}")
-
-
 def _geometry(ctx, go_resample="bilinear", keep_aspect=False):
     """(width, height, mean, std, notes) for an image tower, as the Go preprocess must feed it:
     squash to WxH, /255, (x-mean)/std. Divergences from the HF processor that the Go side cannot
@@ -263,7 +255,7 @@ def _geometry(ctx, go_resample="bilinear", keep_aspect=False):
             notes.append(f"HF keeps the aspect ratio (multiple of {pp.get('ensure_multiple_of', 1)}); "
                          f"VisionServe squashes to {w}x{h}")
     if getattr(ctx.args, "input", None):
-        w, h = _parse_wxh(ctx.args.input)
+        w, h = parse_wxh(ctx.args.input)
     if not w or not h:
         raise ConvertError("preprocessor_config.json declares no fixed input size (e.g. GLPN's size_divisor); "
                            "pass --input WxH")

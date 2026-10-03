@@ -170,7 +170,7 @@ func TestPullRegeneratesOnlyGeneratedManifests(t *testing.T) {
 	if err := Pull("rfdetr-gdino", PullOptions{ModelsDir: dir, Out: &log}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(path); string(got) != e.RenderManifest() {
+	if got, _ := os.ReadFile(path); string(got) != render(t, e) {
 		t.Fatalf("stale generated manifest was kept:\n%s", got)
 	}
 
@@ -193,7 +193,7 @@ func TestDepthKeepAspectRendersAndParses(t *testing.T) {
 			t.Fatalf("%s not in the catalog", name)
 		}
 		p := filepath.Join(t.TempDir(), "manifest.yaml")
-		if err := os.WriteFile(p, []byte(e.RenderManifest()), 0o644); err != nil {
+		if err := os.WriteFile(p, []byte(render(t, e)), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		m, err := registry.LoadManifest(p)

@@ -30,7 +30,8 @@ import importlib.util
 import inspect
 from pathlib import Path
 
-from ..cli import add_generic_arguments, generic_bundle, parse_floats, parse_wxh
+from ..cli import add_generic_arguments, generic_bundle, parse_floats
+from ..constants import parse_wxh
 from ..common import (ConvertError, license_scan, log, onnx_io, parity, resolve_license, sample_image,
                       to_nchw)
 

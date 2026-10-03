@@ -27,8 +27,9 @@ from pathlib import Path
 
 import numpy as np
 
-from ..cli import add_generic_arguments, generic_bundle, parse_floats, parse_wxh
+from ..cli import add_generic_arguments, generic_bundle, parse_floats
 from ..common import ConvertError, log, parity, sample_image, to_nchw
+from ..constants import parse_wxh
 
 _HELP = {
     "tensorflow": "TensorFlow SavedModel directory -> ONNX (tf2onnx)",
