@@ -199,7 +199,8 @@ make run MODEL=mobile-sam IMAGE=img.jpg MIN_SIZE=0.1 MAX_SIZE=50
 ### 4. Run the server
 
 ```bash
-make serve                       # listen on :11435 (GPU by default; GPU=0 for CPU)
+make serve                       # listen on 127.0.0.1:11435 (GPU by default; GPU=0 for CPU)
+                                 # ADDR=:11435 to accept connections from other machines
 make serve ADDR=:8080            # custom address
 make serve IDLE=0                # keep models resident (never idle-unload)
 ```

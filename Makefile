@@ -17,7 +17,8 @@ endif
 # Defaults for run / serve / pull
 MODEL  ?= rf-detr
 IMAGE  ?= test/testdata/sample.jpg
-ADDR   ?= :11435
+# Local only by default, like `visionserve serve`; ADDR=:11435 listens on all interfaces.
+ADDR   ?= 127.0.0.1:11435
 MODELS ?= ./models
 # Idle auto-unload override for `make serve` (seconds): 0 = never unload (models stay
 # resident — no slow reload after an idle pause), -1 = use each manifest's value.
@@ -71,7 +72,7 @@ run: build ## Run on 1 image: make run MODEL=rf-detr IMAGE=path.jpg [OUT=r.png] 
 		$(if $(ROI),--roi "$(ROI)") $(if $(METHOD),--method "$(METHOD)") $(if $(BG_MAX_AREA),--bg-max-area "$(BG_MAX_AREA)") $(if $(GRID_SIZE),--grid-size "$(GRID_SIZE)") $(if $(DILATE),--dilate "$(DILATE)") \
 		$(if $(MIN_SIZE),--min-size "$(MIN_SIZE)") $(if $(MAX_SIZE),--max-size "$(MAX_SIZE)")'
 
-serve: build ## Start the HTTP server: make serve [ADDR=:11435] [GPU=0] [IDLE=0]
+serve: build ## Start the HTTP server: make serve [ADDR=127.0.0.1:11435] [GPU=0] [IDLE=0]
 	@bash -c 'if [ "$(GPU)" = "1" ] && source scripts/gpu-env.sh; then :; else export ORT_DYLIB_PATH="$(ORT_DYLIB_PATH)"; fi; \
 		"$(BIN_DIR)/$(BINARY)" serve --models "$(MODELS)" --addr "$(ADDR)" --idle-unload-seconds "$(IDLE)"'
 
