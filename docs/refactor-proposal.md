@@ -252,8 +252,32 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   `intra_op_num_threads` theo từng role trong `engine`/`lifecycle` (binding v1.13 có
   `SetIntraOpNumThreads`, không có `allow_spinning`). Có lẽ fast-path head trên CPU cũng bị như
   vậy (chưa đo).
-- **Mask MobileSAM trên GPU** lệch 1–5 pixel biên khi tải song song. Lỗi có từ trước; có thể
-  thử `use_deterministic_compute` của ORT.
+- **Mask MobileSAM trên GPU** lệch 1–43 pixel biên giữa các lần chạy. **Đã sửa (20d939b).**
+  - Không phải race trong Go. Với cùng một embedding, 4 session decoder trong pool cho kết quả
+    trùng từng bit, dù chạy tuần tự hay song song.
+  - Nguồn lỗi là encoder. Dump mọi tensor trung gian thì tensor lệch đầu tiên luôn là
+    `neck.3/ReduceMean_1`, tức phép lấy trung bình theo kênh trong LayerNorm2d cuối. Kernel
+    reduction của CUDA EP cộng theo thứ tự phụ thuộc vào việc GPU đang chạy gì khác. Embedding
+    lệch ở bit cuối của vài trăm giá trị, rồi ngưỡng logit>0 làm lật vài pixel biên.
+  - Lỗi cần có việc khác chạy cùng trên GPU (request khác, session khác, process khác). GPU rảnh:
+    0/2000 lần lệch. Có thêm một session encoder chạy song song: 26/1500.
+  - `cudnn_conv_algo_search=DEFAULT` không giúp: 78/2000 lần lệch và chậm khoảng 4 lần.
+  - Cách sửa: `SetDeterministicCompute` cho mọi session không phải CPU, **opt-in** bằng
+    `VISIONSERVE_DETERMINISTIC=1` cho cả process. Mặc định tắt, vì các con số mAP ghi trong
+    manifest được đo khi chưa bật (xem dưới). Session CPU giữ nguyên.
+  - Binding không bọc hàm này (kể cả bản mới nhất v1.36.0), và ORT cũng không có config key cho
+    nó. Vì vậy `internal/engine/deterministic_cgo.go` gọi thẳng C API. Đây là đoạn cgo đầu tiên
+    trong code của mình. Trên Windows chưa nối.
+  - Kết quả trên GPU 3 (RTX A6000, ORT 1.26). Encoder khi có tải: 0/1500 lần lệch. Server, cold
+    và song song 8: 0/2176 request lệch, trước đó khoảng 1/400. Độ trễ và throughput không đổi
+    trong mức nhiễu: mobile-sam ~61 ms, rf-detr ~23 ms, grounding-dino 122–127 ms, mobile-sam
+    song song 8 khoảng 37 req/s ở cả hai chế độ.
+  - Kernel tất định làm tròn khác, nên output GPU đổi một lần. Mask mobile-sam lệch 1–16 pixel ở
+    26/32 case so với trước, score GroundingDINO lệch tối đa ~0.002. Held-out protocol (GPU):
+    49.54→49.59, 62.47→62.43, 48.11 giữ nguyên, gdino-siglip 57.41/61.07→57.19/60.93, đổi theo
+    cả hai chiều. Khi tắt (mặc định), bản mới cho đúng số cũ. Khi bật thì snapshot GPU cũ phải chụp lại; CPU
+    không đổi.
+  - Test opt-in `TestEncoderBitwiseRepeatableOnGPU` tái hiện lỗi khi tắt và chứng minh đã sửa.
 - ~~**`Admit`** chưa nhận ctx, và multipart vẫn được parse trước `Admit`.~~ Đã xong:
   `Admit(ctx, name)` từ chối request mà client đã bỏ đi (499). Multipart nay được đọc từng
   part: request được admit ngay trước khi đọc part file đầu tiên (`image`/`depth`), nên một
