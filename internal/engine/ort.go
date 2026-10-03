@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -51,6 +52,18 @@ func ensureORT() error {
 // ErrClosed is returned by a session (or pool) used after Close — e.g. a request that raced an
 // unload. Callers report it as an ordinary error; it must never be a panic or a hang.
 var ErrClosed = errors.New("engine: session is closed")
+
+// ErrInferencePanic wraps a panic recovered on a session's worker thread (during a job or while
+// creating the session). The worker is not a request goroutine, so net/http's per-request
+// recovery never sees it: unrecovered, one bad call took the whole server down.
+var ErrInferencePanic = errors.New("engine: panic on the session thread")
+
+// recoverJob turns a panic on the worker thread into an error wrapping ErrInferencePanic, and
+// logs the stack (the error itself only carries the panic value).
+func recoverJob(p any) error {
+	fmt.Fprintf(os.Stderr, "engine: recovered panic on a session thread: %v\n%s", p, debug.Stack())
+	return fmt.Errorf("%w: %v", ErrInferencePanic, p)
+}
 
 // IOInfo describes the name + shape of an I/O tensor of the model (probed from the ONNX file).
 type IOInfo struct {
@@ -160,7 +173,14 @@ func (s *Session) worker(modelPath string, providers []Provider, ready chan<- er
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	sess, ep, err := createSession(modelPath, s.inputNames, s.outputNames, providers)
+	sess, ep, err := func() (sess *ort.DynamicAdvancedSession, ep Provider, err error) {
+		defer func() {
+			if p := recover(); p != nil {
+				sess, err = nil, recoverJob(p)
+			}
+		}()
+		return createORTSession(modelPath, s.inputNames, s.outputNames, providers)
+	}()
 	if err != nil {
 		ready <- err
 		return
@@ -174,6 +194,9 @@ func (s *Session) worker(modelPath string, providers []Provider, ready chan<- er
 	}
 	s.closeErr <- s.sess.Destroy() // jobs closed by Close: destroy on the same locked thread
 }
+
+// createORTSession is createSession; tests replace it to inject a failure on the worker thread.
+var createORTSession = createSession
 
 // createSession builds an ORT session, trying each EP in priority order with that single EP
 // appended. If session creation FAILS (not just a missing lib, but the EP cannot build/partition
@@ -381,8 +404,18 @@ func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
 		return nil, ErrClosed
 	}
 	s.jobs <- func() {
-		outs, err := work()
-		ch <- result{outs, err}
+		var r result
+		// A panic in the job must not unwind the worker (it would kill the process, and with it
+		// every other session). The session stays usable: the panic is in Go code around the ORT
+		// call — cgo cannot unwind a Go panic through C, ORT reports its own failures as error
+		// statuses — and the job's deferred tensor Destroy calls run during the unwind.
+		defer func() {
+			if p := recover(); p != nil {
+				r = result{nil, recoverJob(p)}
+			}
+			ch <- r
+		}()
+		r.outs, r.err = work()
 	}
 	s.jobsMu.RUnlock()
 	// Work accepted before Close still runs: the worker drains jobs before destroying the session.
