@@ -9,7 +9,7 @@
 // Usage (from a handler):
 //
 //	exp, err := explain.New(manifest.Explain)
-//	heatmap, W, H, err := exp.Heatmap(outputs, outputNames, meta, detIdx, origW, origH)
+//	heatmap, W, H, err := exp.Heatmap(outputs, outputNames, meta, query, origW, origH)
 //	if err := explain.RenderPNG(w, img, heatmap, W, H, 0.5); err != nil { ... }
 package explain
 
@@ -33,7 +33,8 @@ import (
 // The handler orchestrates:
 //  1. model.Preprocess(img) → inputTensor, meta
 //  2. explainEng.Run([]engine.Tensor{inputTensor}) → outputs, outputNames
-//  3. Explainer.Heatmap(outputs, outputNames, meta, detectionIdx, origW, origH)
+//  3. QueryForDetection(outputs, meta, dec, det) → the object query that produced det
+//  4. Explainer.Heatmap(outputs, outputNames, meta, query, origW, origH)
 //
 // This keeps the heavy engine sessions in lifecycle.Manager while the decode
 // logic lives here.
@@ -43,7 +44,9 @@ type Explainer interface {
 	// outputs: the result of explainEng.Run(), in ONNX output-name order.
 	// outputNames: []string returned by explainEng.OutputNames().
 	// meta: preprocess metadata (scale/pad) from model.Preprocess.
-	// detectionIdx: 0-based index of the detection query to explain.
+	// query: the object query to explain, a raw query index of the session, NOT the
+	// detection's position in the decoded (thresholded, confidence-sorted) list; see
+	// QueryForDetection.
 	// origW, origH: dimensions of the original image (heatmap is in this space).
 	//
 	// Returns heatmap []float32 of length W*H with values in [0,1], row-major.
@@ -51,7 +54,7 @@ type Explainer interface {
 		outputs []engine.Tensor,
 		outputNames []string,
 		meta models.PreprocessMeta,
-		detectionIdx int,
+		query int,
 		origW, origH int,
 	) (heatmap []float32, W, H int, err error)
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -37,16 +38,22 @@ var explainFiles = map[string]int64{"image": maxImageBytes + 1}
 //
 //	model          string  required   model name (must be loaded and have an explain manifest block)
 //	image          file    required   JPEG/PNG image
-//	detection_idx  int     optional   0-based detection index to explain (default 0)
+//	detection_idx  int     optional   0-based position in /api/predict's detections for this image (default 0)
 //	top_channels   int     optional   Score-CAM: max channels to sample (0 = manifest default)
 //	alpha          float   optional   overlay opacity [0,1] (default 0.5)
 //	format         string  optional   "png" (default) or "numpy" (raw float32 bytes)
-//	class          string  optional   class name hint — passed to the lifecycle for scoring
+//	class          string  optional   explain the first detection of this class instead of detection_idx
+//
+// The explained detection is one of those /api/predict returns for the same image and model
+// (without a prompt); an index past the end, or a class not detected, is a 400.
 //
 // Responses:
 //   - format=png:   Content-Type: image/png — heatmap overlaid on the input image
 //   - format=numpy: Content-Type: application/octet-stream — raw little-endian float32
 //     with headers X-Heatmap-Shape (H,W) and X-Heatmap-Dtype (float32).
+//
+// Both carry X-Explain-Detection (the explained detection as JSON: bbox, class, conf) and, for
+// attention, X-Explain-Query (the object query whose attention is shown).
 func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	var q explainRequest
 	data, err := decodeFields(w, r, &q, explainFiles, s.admitter(r))
@@ -94,6 +101,15 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, orClientGone(r.Context(), err))
 		return
+	}
+
+	// Which detection the heatmap explains, exactly as /api/predict reports it, so a client can
+	// label the heatmap without a second request (and see a class/index mix-up at once).
+	if det, err := json.Marshal(result.Detection); err == nil {
+		w.Header().Set("X-Explain-Detection", string(det))
+	}
+	if result.Query >= 0 {
+		w.Header().Set("X-Explain-Query", strconv.Itoa(result.Query))
 	}
 
 	switch q.Format {

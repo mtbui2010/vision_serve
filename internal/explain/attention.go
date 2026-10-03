@@ -13,8 +13,8 @@ import (
 // outputs and produces a spatial saliency map for a given detection query.
 //
 // Expected tensor shape: [num_layers, batch=1, num_heads, num_queries, spatial_tokens]
-// The explainer averages over all layers and heads, then picks the query at
-// detectionIdx.  The flat spatial vector is reshaped to a near-square grid and
+// The explainer averages over all layers and heads, then picks the given query: a QUERY index,
+// not a position in the decoded detection list (see QueryForDetection). The flat spatial vector is reshaped to a near-square grid and
 // upsampled to the original image dimensions.
 type attentionExplainer struct {
 	outputName    string // ONNX output node name for the attention weight tensor
@@ -26,7 +26,7 @@ func (e *attentionExplainer) Heatmap(
 	outputs []engine.Tensor,
 	outputNames []string,
 	meta models.PreprocessMeta,
-	detectionIdx int,
+	query int,
 	origW, origH int,
 ) ([]float32, int, int, error) {
 	attn, err := findOutput(outputs, outputNames, e.outputName)
@@ -46,9 +46,9 @@ func (e *attentionExplainer) Heatmap(
 	numQueries := int(attn.Shape[3])
 	numSpatial := int(attn.Shape[4])
 
-	if detectionIdx < 0 || detectionIdx >= numQueries {
+	if query < 0 || query >= numQueries {
 		return nil, 0, 0, fmt.Errorf(
-			"attention: detectionIdx %d out of range [0, %d)", detectionIdx, numQueries)
+			"attention: query %d out of range [0, %d)", query, numQueries)
 	}
 
 	// Average over all layers and heads → [numSpatial].
@@ -59,7 +59,7 @@ func (e *attentionExplainer) Heatmap(
 	stride_H := numQueries * numSpatial
 	for l := 0; l < numLayers; l++ {
 		for h := 0; h < numHeads; h++ {
-			base := l*stride_LBH + h*stride_H + detectionIdx*numSpatial
+			base := l*stride_LBH + h*stride_H + query*numSpatial
 			for s := 0; s < numSpatial; s++ {
 				spatialMap[s] += attn.Data[base+s]
 			}

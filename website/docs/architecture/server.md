@@ -370,9 +370,11 @@ works for simple single-session models only, and any boxes it returns are in **m
 coordinates, because there is no original image to map back to. Everything admission needs is in
 the URL, so admission happens before the body is read.
 
-**`/api/explain`** returns a heatmap for one detection (`detection_idx`) of a model whose
+**`/api/explain`** returns a heatmap for one detection (`detection_idx`, a position in what
+`/api/predict` returns for the same image, or the first detection of `class`) of a model whose
 manifest has an `explain:` block: a PNG overlay by default, or raw float32 with the shape in the
-`X-Heatmap-Shape` header when `format=numpy`.
+`X-Heatmap-Shape` header when `format=numpy`. The `X-Explain-Detection` header carries the
+explained detection as JSON.
 
 **`/api/templates`** stores named sets of example images for template-based detectors
 (`instance_detection` models such as OWL-ViT); a predict request then refers to a set by

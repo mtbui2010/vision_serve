@@ -414,6 +414,13 @@ lazily on the first explain call, attached to the leased `Session`, and closed w
 detection session itself is opened with those extra outputs filtered out, so ordinary predictions
 never pay for them.
 
+The detection to explain is picked from the list a predict of the same image returns
+(`detection_idx`, or the first detection of `class`). For attention maps the explain code then
+finds the object query behind it. The decoder drops the queries under the threshold and sorts the
+rest by confidence, so "detection 0" is usually not query 0. The query is the one whose decoded
+box equals the detection's box. Score-CAM instead follows the object by class and box on each
+masked re-run.
+
 ### Typed errors
 
 Lifecycle does not know about HTTP. It wraps three sentinel errors, and the server maps them to
