@@ -162,8 +162,14 @@ Measured on NVIDIA RTX A6000 via VisionServe HTTP server (warm, `duration_ms`):
 
 > **Why CUDA EP ≈ CPU for SAM:** ViT encoder and SAM cross-attention ops lack CUDA kernels
 > in ORT's standard build, falling back to CPU. TRT compiles the full graph to GPU.
+>
+> These numbers predate the switch to CUDA as the default and have not been re-measured. The
+> same "no CUDA kernels" explanation was given for GroundingDINO and turned out to be a silent
+> fallback to CPU (missing `libcudnn`; see `../grounding-dino/README.md`). Re-check with
+> `VISIONSERVE_TRACE=1` before relying on the CUDA column.
 
-VisionServe auto-detects TRT at startup. Check with `visionserve version` or look for
-`device: "gpu:0+trt"` in the API response.
+The manifest prefers `[cuda, cpu]`; TensorRT is opt-in for the whole server with
+`visionserve serve --tensorrt` or `VISIONSERVE_TENSORRT=1`. `visionserve version` prints the EP chain in effect, and the API response's
+`device` says which EP ran (`gpu:0+trt` for TensorRT).
 
 **ONNX size:** encoder 27 MB + decoder 16 MB. **VRAM:** ~966 MB (TRT). **Cold-start:** ~7–12 s.

@@ -154,16 +154,18 @@ Each manifest lists the EPs to try in `runtime.prefer`. Every shipped manifest s
 `cuda`, `coreml`, `directml`, `openvino`, `cpu`), removes duplicates, and always appends `cpu`, so
 every model can run somewhere. The environment variable `VISIONSERVE_EP` (comma-separated, e.g.
 `VISIONSERVE_EP=cpu`) replaces the manifest's list for every model; it is meant for benchmarking.
+The TensorRT opt-in (below) only applies when `VISIONSERVE_EP` is unset.
 
 ```go title="internal/engine/provider.go"
 func ResolveProviders(prefer []string) ([]Provider, error) {
 	// ...
-	if ov := strings.TrimSpace(os.Getenv("VISIONSERVE_EP")); ov != "" {
-		prefer = strings.Split(ov, ",")
+	override := EPOverride()
+	if override != "" {
+		prefer = strings.Split(override, ",")
 	}
 
 	seen := map[Provider]bool{}
-	out := make([]Provider, 0, len(prefer)+1)
+	out := make([]Provider, 0, len(prefer)+2)
 	for _, p := range prefer {
 		pv := Provider(strings.ToLower(strings.TrimSpace(p)))
 		// ...
@@ -172,6 +174,9 @@ func ResolveProviders(prefer []string) ([]Provider, error) {
 		}
 		// ...
 	}
+	if override == "" && TensorRTRequested() {
+		out = withTensorRT(out)
+	}
 	if !seen[ProviderCPU] {
 		out = append(out, ProviderCPU) // final fallback
 	}
@@ -179,7 +184,7 @@ func ResolveProviders(prefer []string) ([]Provider, error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L103-L132)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L169-L203)
 
 At session creation the engine tries one EP at a time, in order. An EP can fail in two ways, and
 both move on to the next one:
@@ -245,7 +250,7 @@ func DeviceString(ep Provider) string {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L37-L48)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L39-L50)
 
 Each session falls back on its own, so a multi-session model can end up split. If its roles agree,
 `device` is that one value; otherwise it names every role, e.g.
@@ -261,9 +266,19 @@ with the same weights on the held-out-names protocol, it was about 1.5× faster 
 but lost 6.83 mAP on the unseen names and dropped 243 boxes. It also compiles a new engine for
 every new prompt length, and the first compile of a transformer graph takes minutes
 (GroundingDINO about 155 s on an A6000). The accuracy numbers quoted in the manifests were measured
-on CUDA, so the default stays on CUDA (BUGS_TO_FIX.md #3). TensorRT is therefore opt-in: a
-manifest can list `tensorrt` in `runtime.prefer`, and a process-wide opt-in switch is being added.
-Do not make it a default again without re-measuring accuracy under it.
+on CUDA, so the default stays on CUDA (BUGS_TO_FIX.md #3). TensorRT is therefore opt-in, in two
+ways:
+
+- **For the whole process:** `visionserve serve --tensorrt` / `run --tensorrt`, or
+  `VISIONSERVE_TENSORRT=1`. `tensorrt` is then inserted right before `cuda` in every resolved
+  chain, so `[cuda, cpu]` becomes `tensorrt → cuda → cpu`. A chain without `cuda` (cpu-only,
+  CoreML, DirectML, OpenVINO) and one that already lists `tensorrt` are left alone.
+- **For one model:** its manifest lists `tensorrt` in `runtime.prefer`.
+
+`VISIONSERVE_EP` wins over both: it replaces the chain outright and the opt-in is not applied on
+top of it (`VISIONSERVE_EP=tensorrt` gives `tensorrt → cpu`, without CUDA). The startup log and
+`visionserve version` print the chain in effect. Do not make TensorRT a default again without
+re-measuring accuracy under it.
 
 When TensorRT is requested, the engine first checks that `libnvinfer.so.10` exists (loading the
 TensorRT provider without it aborts the process in C, which Go cannot recover from), and skips the

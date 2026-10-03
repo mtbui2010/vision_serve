@@ -30,7 +30,7 @@ is the ovd-edge work, some belongs to the repo owner and was never committed.
 |---|---|---:|---|
 | 1 | RF-DETR served letterboxed, trained squashed | **7.35 mAP** (512 group), 1.91 (560 group) | **fixed 2026-09-29** (served +7.13) |
 | 2 | `cropTemp = 0.02` documented as the measured vertex; it is not | 1.67 mAP | **fixed 2026-09-29** (router default 0.05, +1.53 served) |
-| 3 | TensorRT preferred on 4 manifests whose numbers were measured on CUDA | 6.91 mAP (open branch) | **fixed 2026-09-29**: owner moved EVERY model to `[cuda, cpu]` |
+| 3 | TensorRT preferred on 4 manifests whose numbers were measured on CUDA | 6.91 mAP (rfdetr-gdino open branch); 6.83 on standalone GroundingDINO | **fixed 2026-09-29**: owner moved EVERY model to `[cuda, cpu]`; TensorRT is now opt-in per process (`--tensorrt` / `VISIONSERVE_TENSORRT=1`) |
 | 4 | Fast-path head is a 59 M-MAC scalar Go loop | 19 ms per request | **fixed 2026-09-29** (head on ORT, ~36 ms/request saved) |
 | 5 | SigLIP tokenizer padded with `<pad>` (id 0) instead of `</s>` (id 1) | 4.3 mAP | fixed, keep the test |
 | 6 | Fast-path `conf_threshold` leaked into the shared RF-DETR postprocess | control moved +2.17 | fixed, keep it in code |
@@ -82,6 +82,15 @@ rescorer, TensorRT gives 57.82 (T=0.02) / 59.20 (T=0.05) against CUDA's 62.47. T
 `*-siglip*` entries stay on CUDA. Standalone `grounding-dino` (and its alias entry
 `grounding-dino-fixed`), by contrast, was **switched to `[cuda, cpu]`** at the owner's request:
 same weights, CUDA 45.25 / 44.61 (1959 boxes) against TensorRT 44.79 / 37.78 (1716 boxes).
+Two different numbers, do not mix them up: the "6.8 mAP lower on GroundingDINO" quoted in
+CLAUDE.md, the README and `visionserve --help` is this standalone figure (44.61 − 37.78 = 6.83,
+153 vs 104 ms); the −6.91 in the open item below is the rfdetr-gdino open branch (FINDINGS §7b,
+−6.95 after #1). The GroundingDINO manifest also records that TensorRT rebuilds its engine for
+every new prompt length.
+
+Since then TensorRT is opt-in for the whole process, not only per manifest: `serve --tensorrt` /
+`run --tensorrt` or `VISIONSERVE_TENSORRT=1` inserts `tensorrt` before `cuda` in every chain
+(`internal/engine/provider.go`), and the default stays CUDA → CPU.
 
 **#4.** `files.head: head.onnx` (from `models/rfdetr-gdino-fastpath/export_head_onnx.py`) runs the
 head through the Runner / `lifecycle.Manager` on the detector's provider; `head.bin` stays as the
@@ -152,6 +161,9 @@ to the measured vertex and rewrite the comment to cite that run, or keep 0.02 an
 "vertex". Do not leave the current comment: its argument rests on the tokenizer bug.
 
 ### 3. TensorRT preferred where the quoted numbers were measured on CUDA
+
+*Resolved 2026-09-29 (resolution log above): every manifest is `[cuda, cpu]`, and TensorRT is
+opt-in with `--tensorrt` / `VISIONSERVE_TENSORRT=1`. The text below is the original hand-over.*
 
 `models/rfdetr-gdino{,-etri,-sam,-sam-etri}/manifest.yaml` ship
 `prefer: [tensorrt, cuda, cpu]` while their comments quote accuracy measured on CUDA. TensorRT
