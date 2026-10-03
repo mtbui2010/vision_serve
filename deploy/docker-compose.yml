@@ -28,8 +28,10 @@ services:
       - ./models:/models
     command: ["serve", "--addr", ":11435", "--models", "/models"]
     healthcheck:
-      # Slim runtime has bash but not curl/wget; probe the port via bash /dev/tcp.
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/11435 && printf 'GET /api/health HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q . <&3"]
+      # The image has bash but not curl/wget. /dev/tcp is a bash feature, so call bash
+      # explicitly: CMD-SHELL runs /bin/sh, which is dash in this image and always failed.
+      # Healthy only on an HTTP 200 from /api/health.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/11435 && printf 'GET /api/health HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]
       interval: 30s
       timeout: 5s
       retries: 3

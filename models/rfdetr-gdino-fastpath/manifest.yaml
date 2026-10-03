@@ -44,10 +44,10 @@ architecture: rfdetr-gdino
 # Remove the line to fall back to scoring head.bin in scalar Go (~19 ms per request).
 files:
   head:   head.onnx
-  rfdetr: /home/trung/trung_workdir/vision_serve/models/rfdetr-textalign-dec1-siglip/detector.onnx
-  gdino:  /home/trung/trung_workdir/vision_serve/models/grounding-dino/model-fixedmask.onnx
-  crop:   /home/trung/trung_workdir/vision_serve/models/siglip-image-fp16/model.onnx
-  text:   /home/trung/trung_workdir/vision_serve/models/siglip-text-fp16/model.onnx
+  rfdetr: ../rfdetr-textalign-dec1-siglip/detector.onnx
+  gdino:  ../grounding-dino/model-fixedmask.onnx
+  crop:   ../siglip-image-fp16/model.onnx
+  text:   ../siglip-text-fp16/model.onnx
 
 input:
   width: 512
@@ -69,7 +69,7 @@ postprocess:
   conf_threshold: 0.35
   max_detections: 300
 
-labels: /home/trung/trung_workdir/vision_serve/models/rfdetr-textalign-dec1-siglip/labels.txt
+labels: ../rfdetr-textalign-dec1-siglip/labels.txt
 
 runtime:
   prefer: [cuda, cpu]
