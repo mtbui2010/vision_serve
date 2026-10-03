@@ -32,6 +32,15 @@ type Result struct {
 	DepthWidth      int              `json:"depth_width,omitempty"`
 	DepthHeight     int              `json:"depth_height,omitempty"`
 	DurationMs      float64          `json:"duration_ms"`
+
+	// Binary-friendly form of the two large float arrays, sent INSTEAD of depth_map /
+	// embeddings when the request asks for encoding=base64 (see EncodeArraysBase64): the
+	// base64 of the little-endian float32 bytes, row-major. DepthMapBase64 has shape
+	// [depth_height, depth_width]; EmbeddingsBase64 has shape EmbeddingsShape = [N, D].
+	// numpy.frombuffer(base64.b64decode(s), "<f4").reshape(shape) restores them bit for bit.
+	DepthMapBase64   string `json:"depth_map_base64,omitempty"`
+	EmbeddingsBase64 string `json:"embeddings_base64,omitempty"`
+	EmbeddingsShape  []int  `json:"embeddings_shape,omitempty"`
 }
 
 // Classification is a single class prediction for TaskClassification.
@@ -81,7 +90,11 @@ type ModelInfo struct {
 	State   string `json:"state"` // "not_downloaded" | "available" | "loaded"
 }
 
-// PredictJSONRequest is the JSON body alternative to multipart when calling /api/predict.
+// PredictJSONRequest is the option list of /api/predict (and /api/preprocess). It is the JSON
+// body, and it is ALSO the multipart form: every multipart field has the same name as the JSON
+// key here (the server fills one from the other by the json tag), so a new option is declared
+// once, in this struct. Only the binary parts differ: multipart sends the image and the depth
+// map as file parts "image" and "depth", JSON as image_base64 / depth_base64.
 // Prompt/Box/Point are optional, for models that need a prompt (SAM box, GroundingDINO text).
 type PredictJSONRequest struct {
 	Model       string  `json:"model"`
@@ -137,6 +150,10 @@ type PredictJSONRequest struct {
 	// TemplateName selects a named template set registered via POST /api/templates.
 	// Used by instance_detection models (OWL-ViT, SiamRPN, …); ignored by all others.
 	TemplateName string `json:"template_name,omitempty"`
+	// Encoding of the large float arrays in the response (depth_map, embeddings): "json"
+	// (default, number arrays) or "base64" (EncodingBase64). Also accepted as the query
+	// parameter ?encoding=base64.
+	Encoding string `json:"encoding,omitempty"`
 }
 
 // LoadRequest / UnloadRequest are used by /api/load and /api/unload.
