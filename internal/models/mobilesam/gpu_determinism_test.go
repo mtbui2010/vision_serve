@@ -24,7 +24,8 @@ import (
 // Opt-in, since it needs a GPU, the weights and about a minute: set
 // VISIONSERVE_GPU_DETERMINISM_RUNS (1500 is plenty: without the fix ~17 of 1500 runs differed),
 // ORT_DYLIB_PATH to a CUDA build, and VISIONSERVE_ONNX_DIR to the models directory if it is not the
-// repository's models/. With VISIONSERVE_DETERMINISTIC=0 it is expected to fail.
+// repository's models/. The test turns deterministic kernels on (VISIONSERVE_DETERMINISTIC=1, the
+// opt-in) unless the variable is already set; with VISIONSERVE_DETERMINISTIC=0 it is expected to fail.
 func TestEncoderBitwiseRepeatableOnGPU(t *testing.T) {
 	runs, _ := strconv.Atoi(os.Getenv("VISIONSERVE_GPU_DETERMINISM_RUNS"))
 	if runs <= 0 {
@@ -32,6 +33,9 @@ func TestEncoderBitwiseRepeatableOnGPU(t *testing.T) {
 	}
 	if os.Getenv("ORT_DYLIB_PATH") == "" {
 		t.Skip("needs ORT_DYLIB_PATH (a CUDA build of libonnxruntime.so)")
+	}
+	if _, set := os.LookupEnv("VISIONSERVE_DETERMINISTIC"); !set {
+		t.Setenv("VISIONSERVE_DETERMINISTIC", "1")
 	}
 	dir := os.Getenv("VISIONSERVE_ONNX_DIR")
 	if dir == "" {

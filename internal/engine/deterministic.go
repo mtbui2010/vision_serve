@@ -30,11 +30,12 @@ import (
 // kernels round differently, so GPU outputs move once (GroundingDINO scores by up to ~0.002) and
 // then stay put — see docs/refactor-proposal.md §6.
 //
-// It is ON by default for every GPU session: the same request should give the same answer, and a
-// golden comparison between two builds is useless when the GPU itself flips bits.
-// VISIONSERVE_DETERMINISTIC=0 turns it off for the whole process (a benchmarking switch, like
-// VISIONSERVE_EP). CPU sessions are left exactly as they were: ORT's CPU kernels are already
-// run-to-run deterministic, and not touching them keeps CPU outputs bit-identical to earlier builds.
+// It is OFF by default, opt-in with VISIONSERVE_DETERMINISTIC=1 for the whole process (it then
+// applies to every GPU session). The accuracy numbers quoted in the shipped manifests were measured
+// with ORT's default kernels, and turning this on moves them slightly (held-out mAP by up to 0.22),
+// so the default keeps served GPU outputs equal to those measurements. Turn it on where the same
+// request must give the same answer (e.g. a golden comparison between two builds on a GPU). CPU
+// sessions are never touched: ORT's CPU kernels are already run-to-run deterministic.
 //
 // The binding does not wrap SetDeterministicCompute (yalue/onnxruntime_go v1.13.0, nor any
 // release up to v1.36.0), and ORT has no session-config key for it, so setDeterministicCompute calls
@@ -45,12 +46,12 @@ import (
 const deterministicEnv = "VISIONSERVE_DETERMINISTIC"
 
 // deterministicRequested reports whether GPU sessions should ask for deterministic kernels:
-// true unless VISIONSERVE_DETERMINISTIC parses as false. A value that does not parse keeps the
-// default and is reported once.
+// false unless VISIONSERVE_DETERMINISTIC parses as true. A value that does not parse keeps the
+// default (off) and is reported once.
 func deterministicRequested() bool {
 	v := strings.TrimSpace(os.Getenv(deterministicEnv))
 	if v == "" {
-		return true
+		return false
 	}
 	switch strings.ToLower(v) {
 	case "on", "yes":
@@ -61,10 +62,10 @@ func deterministicRequested() bool {
 	b, err := strconv.ParseBool(v)
 	if err != nil {
 		badDeterministicEnv.Do(func() {
-			fmt.Fprintf(os.Stderr, "engine: ignoring %s=%q (want 1/0, true/false, on/off); deterministic GPU kernels stay on\n",
+			fmt.Fprintf(os.Stderr, "engine: ignoring %s=%q (want 1/0, true/false, on/off); deterministic GPU kernels stay off\n",
 				deterministicEnv, v)
 		})
-		return true
+		return false
 	}
 	return b
 }

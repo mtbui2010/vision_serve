@@ -188,15 +188,17 @@ means extending that allowlist plus the `appendProviders` switch in `ort.go` —
 the `yalue/onnxruntime_go` binding exposes can be wired (it currently does **not** expose
 ROCm, so AMD discrete GPUs are reachable only via DirectML on Windows).
 
-**Deterministic GPU kernels:** every GPU session is created with ORT's
-`SetDeterministicCompute(true)`, so the same request gives bit-identical output on the GPU too.
+**Deterministic GPU kernels (opt-in):** with `VISIONSERVE_DETERMINISTIC=1` every GPU session is
+created with ORT's `SetDeterministicCompute(true)`, so the same request gives bit-identical output
+on the GPU too.
 Without it, a CUDA reduction in the MobileSAM encoder sums in an order that depends on what else
 the GPU is running: under concurrent load about one encoder run in 60 differed in the last bit,
 which moved a few boundary pixels of the mask. No
 latency or throughput cost was measurable on MobileSAM, RF-DETR, GroundingDINO or Grounded-SAM
 (RTX A6000). The deterministic kernels round differently, so turning this on moved GPU outputs once
-(GroundingDINO scores by up to ~0.002). `VISIONSERVE_DETERMINISTIC=0` turns it off for the process;
-CPU sessions are never touched. The binding does not wrap this call, so
+(GroundingDINO scores by up to ~0.002; held-out mAP by up to 0.22). It is off by default because the
+accuracy numbers quoted in the shipped manifests were measured without it; CPU sessions are never
+touched. The binding does not wrap this call, so
 `internal/engine/deterministic_cgo.go` makes it through the C API (the only cgo in VisionServe's
 own code); on Windows it is not wired yet.
 

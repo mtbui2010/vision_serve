@@ -19,10 +19,10 @@ func TestDeterministicRequested(t *testing.T) {
 		env  string
 		want bool
 	}{
-		{"", true}, // the default
+		{"", false}, // the default: off
 		{"1", true}, {"true", true}, {"on", true}, {"YES", true},
 		{"0", false}, {"false", false}, {"off", false}, {"No", false}, {" 0 ", false},
-		{"sometimes", true}, // unparseable: keep the default
+		{"sometimes", false}, // unparseable: keep the default
 	} {
 		t.Setenv(deterministicEnv, tc.env)
 		if got := deterministicRequested(); got != tc.want {
@@ -32,7 +32,7 @@ func TestDeterministicRequested(t *testing.T) {
 }
 
 // TestApplyDeterministicOnlyOnGPU: CPU sessions are never touched (their outputs stay
-// bit-identical to earlier builds), GPU sessions are unless VISIONSERVE_DETERMINISTIC=0, and a
+// bit-identical to earlier builds), GPU sessions are when VISIONSERVE_DETERMINISTIC=1, and a
 // failure never fails the session.
 func TestApplyDeterministicOnlyOnGPU(t *testing.T) {
 	orig := setDeterministic
@@ -46,8 +46,10 @@ func TestApplyDeterministicOnlyOnGPU(t *testing.T) {
 		want int
 	}{
 		{ProviderCPU, "", 0},
-		{ProviderCUDA, "", 1},
-		{ProviderTensorRT, "", 1},
+		{ProviderCPU, "1", 0},
+		{ProviderCUDA, "", 0},
+		{ProviderCUDA, "1", 1},
+		{ProviderTensorRT, "on", 1},
 		{ProviderCoreML, "1", 1},
 		{ProviderCUDA, "0", 0},
 	} {
