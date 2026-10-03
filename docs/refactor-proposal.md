@@ -301,3 +301,18 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   Golden: 43 case vẫn trùng từng byte (hai ảnh SCRFD của golden có tỉ lệ đúng bằng 1). Đo thêm
   trên 200 ảnh COCO val có mặt người (40 ảnh × 5 kích thước): 2012 mặt, số mặt và điểm số không
   đổi, x lệch tối đa 3,96 px ảnh gốc (1,38 px input), trung vị 0,18 px.
+
+### Vẫn còn mở sau đợt này (2026-10-04)
+
+- `PredictPrompt` chờ slot session mà không theo ctx; khi quá tải, request multipart sai định
+  dạng có thể nhận 503 thay vì 400.
+- Kernel GPU tất định đang là opt-in. Bật mặc định thì phải đo lại và cập nhật các con số mAP
+  trong manifest. Trên Windows chưa nối. Có thể thay shim cgo bằng một PR nhỏ lên
+  `yalue/onnxruntime_go` (thêm `SessionOptions.SetDeterministicCompute`).
+- Giới hạn thread của pool (`NumCPU/(4n)`) mới chỉ đo trên máy 48 luồng với automask. Trên máy
+  edge nhỏ (ví dụ 8 CPU, 4 decoder) mỗi decoder chỉ còn 1 thread, nên request SAM có prompt có thể
+  chậm hơn; chưa đo. Sweep pool×concurrency (`VS_POOL_OVERRIDE`) cũng chịu giới hạn này, nên muốn
+  so với số cũ thì đặt `VISIONSERVE_POOL_THREADS=0`.
+- `head.onnx` của textalign chưa có trên catalog HF, nên manifest để opt-in.
+- Bộ nhớ automask ở 3200×2400 còn tăng khoảng +0.8 GB (bitmap `[]bool` toàn khung cho
+  grasp/background; số worker ở lượt full-res).
