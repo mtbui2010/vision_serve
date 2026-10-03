@@ -11,7 +11,8 @@
 #      libcudnn.so.9 unless we add them here (this is the usual cause of a SILENT fallback
 #      to CPU; run with VISIONSERVE_TRACE=1 to see it).
 #   3) LD_LIBRARY_PATH -> TensorRT 10 (libnvinfer.so.10 + libnvonnxparser.so.10), so the
-#      TensorRT EP can load. Optional: without it the chain just degrades to the CUDA EP.
+#      TensorRT EP can load when opted into (`serve --tensorrt` / VISIONSERVE_TENSORRT=1).
+#      Optional: the default chain is CUDA → CPU, and without it the opt-in degrades to CUDA.
 #      The `tensorrt-cu12-libs` pip wheel puts these under site-packages/tensorrt_libs/.
 #
 # Override the ORT lib by exporting VISIONSERVE_ORT_GPU=/path/to/libonnxruntime.so first.
@@ -58,8 +59,9 @@ else
 fi
 # 3) Add TensorRT 10 libs (libnvinfer.so.10, libnvonnxparser.so.10). Same "find the wheel
 # dir" dance as cuDNN above: the `tensorrt-cu12-libs` wheel installs them into
-# site-packages/tensorrt_libs/. This is OPTIONAL — shipped manifests prefer [cuda, cpu] and
-# only a manifest that lists tensorrt uses it, so a missing TensorRT is a warning, not an error. Override with
+# site-packages/tensorrt_libs/. This is OPTIONAL — the default chain is CUDA → CPU, and
+# TensorRT is used only with `--tensorrt` / VISIONSERVE_TENSORRT=1 (or a manifest that lists
+# tensorrt), so a missing TensorRT is a warning, not an error. Override with
 # VISIONSERVE_TRT_LIBS=/path/to/tensorrt/lib if TRT is installed outside a wheel
 # (e.g. an NVIDIA .tar.gz install, or JetPack's /usr/lib/aarch64-linux-gnu).
 if [ -n "${VISIONSERVE_TRT_LIBS:-}" ]; then
@@ -77,7 +79,7 @@ else
     _nvinfer="$(find "$HOME"/miniconda3 -maxdepth 8 -name 'libnvinfer.so.10' 2>/dev/null | head -1)"
     [ -n "$_nvinfer" ] && _trt="$(dirname "$_nvinfer")"
   fi
-  [ -z "$_trt" ] && echo "gpu-env: warning: libnvinfer.so.10 not found — TensorRT EP disabled, will use CUDA EP." >&2
+  [ -z "$_trt" ] && echo "gpu-env: warning: libnvinfer.so.10 not found — the TensorRT opt-in (--tensorrt) would fall back to the CUDA EP." >&2
 fi
 
 export LD_LIBRARY_PATH="$(dirname "$ORT_DYLIB_PATH"):${_nv}${_trt:+:$_trt}:${LD_LIBRARY_PATH:-}"

@@ -60,6 +60,7 @@ func runRun(args []string) error {
 	fgMinAreaFlag := fs.Float64("fg-min-area", 0, "background model (sam/automask): drop masks below this %% of image")
 	gridSizeFlag := fs.Int("grid-size", 0, "background/MobileSAM automask grid N (N*N decoder calls)")
 	dilateFlag := fs.Int("dilate", 0, "morph every output mask by |N| px: >0 enlarge (dilate), <0 shrink (erode)")
+	trtFlag := addTensorRTFlag(fs)
 
 	// Allow flags interleaved with positionals (e.g. `run rf-detr img.jpg --out r.png`). The
 	// standard flag package stops at the first positional, so we loop: parse flags -> take 1
@@ -76,6 +77,7 @@ func runRun(args []string) error {
 			rem = rem[1:]
 		}
 	}
+	applyTensorRTFlag(trtFlag) // run loads the model in this process
 	if len(positionals) < 2 {
 		return fmt.Errorf("usage: visionserve run [--out file.png] <model> <image>")
 	}

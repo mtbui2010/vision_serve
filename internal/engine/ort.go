@@ -1,12 +1,12 @@
 // Package engine wraps ONNX Runtime (binding github.com/yalue/onnxruntime_go).
 //
 // Principle (CLAUDE.md): do NOT write your own inference engine. All inference goes through ORT.
-// Why ORT: the same .onnx file runs on both GPU (TensorRT/CUDA EP) and CPU
-// — matching the edge↔server goal.
+// Why ORT: the same .onnx file runs on both GPU (CUDA EP by default, TensorRT EP opt-in) and
+// CPU — matching the edge↔server goal.
 //
 // The binding requires the libonnxruntime.so shared library at runtime. The path comes from
 // the ORT_DYLIB_PATH environment variable (e.g. /usr/local/lib/libonnxruntime.so). On Jetson
-// use an ORT build with TensorRT/CUDA EP.
+// use an ORT build with the CUDA EP (and the TensorRT EP if you opt into it).
 package engine
 
 import (
@@ -177,7 +177,8 @@ type SessionOptions struct {
 	IntraOpThreads int
 }
 
-// NewSession creates a session from the ONNX file with an EP fallback chain (TensorRT→CUDA→CPU).
+// NewSession creates a session from the ONNX file with an EP fallback chain (as resolved by
+// ResolveProviders: CUDA→CPU by default, TensorRT→CUDA→CPU with the TensorRT opt-in).
 // If inputNames/outputNames are empty, they are auto-probed from the ONNX file (Inspect: a header
 // read, so the graph is loaded once — by the session itself, not again by the probe).
 // A failure to append an EP (e.g. TensorRT missing on the host) is NOT fatal — it falls back to the next EP.

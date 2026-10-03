@@ -2,19 +2,20 @@
 #
 # Two variants (--build-arg ORT_VARIANT):
 #   cpu (default): slim Debian + ONNX Runtime CPU build.            ~141 MB
-#   gpu           : CUDA 12.4 + cuDNN 9 + TensorRT 10 + ORT GPU.   ~3-5 GB
+#   gpu           : CUDA 12.4 + cuDNN 9 + ORT GPU (CUDA + TensorRT providers). ~3-5 GB
 #
-# The GPU variant includes ORT's TensorRT provider (but not the TensorRT libraries — mount
-# libnvinfer.so.10 to use it) so it can be opted into per manifest; every shipped manifest
-# prefers [cuda, cpu] (TensorRT measured ~1.5x faster but 6.8 mAP lower on
-# GroundingDINO, and rebuilds its engine per prompt length).
+# The GPU variant runs CUDA → CPU. It includes ORT's TensorRT provider (but not the TensorRT
+# libraries) so TensorRT can be opted into: mount libnvinfer.so.10 and set
+# VISIONSERVE_TENSORRT=1 (or pass `serve --tensorrt`). It is off by default because it
+# measured ~1.5x faster but 6.8 mAP lower on GroundingDINO, and rebuilds its engine per prompt
+# length (BUGS_TO_FIX.md #3).
 #
 # Usage:
 #   # CPU image (default):
 #   make docker
 #   docker run --rm -p 11435:11435 visionserve:latest
 #
-#   # GPU image (CUDA EP; TensorRT EP once libnvinfer.so.10 is mounted):
+#   # GPU image (CUDA EP; TensorRT EP with -e VISIONSERVE_TENSORRT=1 + libnvinfer.so.10 mounted):
 #   make docker ORT_VARIANT=gpu
 #   docker run --rm --gpus all -p 11435:11435 visionserve:gpu
 #
@@ -93,8 +94,8 @@ RUN apt-get update && \
 # ORT TensorRT PROVIDER (libonnxruntime_providers_tensorrt.so) is kept — see the final stage:
 # VisionServe only asks ORT for the TensorRT EP when libnvinfer.so.10 is actually loadable
 # (internal/engine: availableProviders/TRTAvailable), so without it the EP is skipped up front
-# (no dlopen, no crash) and the chain continues with CUDA. Mount or install TensorRT 10.x to
-# opt in (deploy/README.md, "To enable TRT").
+# (no dlopen, no crash) and the chain continues with CUDA. To opt in, mount or install
+# TensorRT 10.x AND set VISIONSERVE_TENSORRT=1 (deploy/README.md, "To enable TensorRT").
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime-gpu
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \

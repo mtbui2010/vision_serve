@@ -47,7 +47,8 @@ postprocess:
 labels: coco.txt              # optional — one class per line
 
 runtime:
-  prefer: [cuda, cpu]   # EP fallback chain (CPU is always appended last); tensorrt is opt-in
+  prefer: [cuda, cpu]   # EP fallback chain (CPU is always appended last); tensorrt is opt-in:
+                                  # `serve --tensorrt` / VISIONSERVE_TENSORRT=1 inserts it before cuda
                                   # valid EPs: tensorrt, cuda, coreml, directml, openvino, cpu
   idle_unload_seconds: 300        # 0 = never auto-unload
 ```
@@ -110,7 +111,7 @@ runtime:
 | `postprocess.text_threshold` | **GroundingDINO only** — threshold for assigning text tokens to a detected box (open-vocab label gating) |
 | `postprocess.max_detections` | cap on returned detections |
 | `labels` | optional labels file (one class per line) |
-| `runtime.prefer` | EP fallback chain (NVIDIA `tensorrt`/`cuda`, Apple `coreml`, Windows `directml`, Intel `openvino`, `cpu`) |
+| `runtime.prefer` | EP fallback chain (NVIDIA `tensorrt`/`cuda`, Apple `coreml`, Windows `directml`, Intel `openvino`, `cpu`). Write `[cuda, cpu]` for NVIDIA: the operator turns TensorRT on for the whole server with `--tensorrt` / `VISIONSERVE_TENSORRT=1`, which inserts `tensorrt` before `cuda`. List `tensorrt` here only if the model was measured under it. `VISIONSERVE_EP` replaces this chain |
 | `runtime.idle_unload_seconds` | idle auto-unload (0 = never) |
 | `runtime.threads` | **optional** — map role → ONNX Runtime intra-op threads for that role's session(s), e.g. `threads: {head: 1}`. Overrides the default for that role only: ORT's own (one spinning thread per physical core) for a lone session, the pool cap (`NumCPU/(4n)`, `VISIONSERVE_POOL_THREADS`) for each session of a pool. `0` = ORT's default, explicitly. A value above the host's logical CPUs is capped at load (logged once). Roles not listed keep the default. Results do not depend on it; use it for a small session that runs between a large one's calls, whose default thread pool otherwise competes with the large one on CPU |
 

@@ -165,8 +165,8 @@ normalizes it and **always appends `cpu` last** so every model can run somewhere
 
 | EP | Hardware | `device` field | Notes |
 |----|----------|---------------|-------|
-| `tensorrt` | NVIDIA GPU (incl. Jetson) | `gpu:0+trt` | highest perf; 10–50× over CUDA EP for transformer models |
-| `cuda` | NVIDIA GPU | `gpu:0` | general CUDA; limited for custom attention ops |
+| `cuda` | NVIDIA GPU | `gpu:0` | the default on NVIDIA: every shipped manifest prefers `[cuda, cpu]` |
+| `tensorrt` | NVIDIA GPU (incl. Jetson) | `gpu:0+trt` | opt-in (below); ~1.5x faster than CUDA on GroundingDINO, 6.8 mAP lower |
 | `coreml` | Apple Silicon / macOS | `gpu:0` | Neural Engine / GPU |
 | `directml` | Windows GPU (AMD / Intel / NVIDIA) | `gpu:0` | DirectX 12 |
 | `openvino` | Intel CPU / iGPU / VPU | `openvino:0` | |
@@ -177,21 +177,33 @@ When all of its roles agree, `device` is that one value; otherwise it names ever
 `mixed(decoder=cpu,encoder=gpu:0)`. A session pool whose copies landed on different EPs (one
 decoder copy out of VRAM, say) reports `mixed(cpu,gpu:0)` for that role.
 
+**TensorRT is opt-in, process-wide.** `ResolveProviders` (`internal/engine/provider.go`) builds
+each session's chain from the manifest, then:
+
+1. `VISIONSERVE_EP=<ep>[,<ep>...]` set: it **replaces** the manifest chain (CPU still appended)
+   and nothing else applies. `VISIONSERVE_EP=tensorrt` gives `tensorrt → cpu`, without CUDA; it
+   is meant for EP benchmarking.
+2. Otherwise, with `visionserve serve --tensorrt` / `run --tensorrt` (`engine.SetTensorRT`) or
+   `VISIONSERVE_TENSORRT=1`: `tensorrt` is inserted right before `cuda`, so `[cuda, cpu]`
+   becomes `tensorrt → cuda → cpu`. A chain without `cuda` (cpu-only, CoreML, DirectML,
+   OpenVINO) and a manifest that already lists `tensorrt` are left as they are.
+3. Otherwise the manifest chain as written: CUDA → CPU for every shipped model.
+
+Why TensorRT is not the default: on GroundingDINO (same weights, held-out names) it measured
+~1.5x faster (104 vs 153 ms) but 6.8 mAP lower, and it rebuilds its engine for every new prompt
+length (10-40 s stalls). See BUGS_TO_FIX.md #3 and `models/grounding-dino/manifest.yaml`.
+
 **TRT auto-detect:** before attempting the TRT EP, VisionServe checks for `libnvinfer.so.10`
 in `LD_LIBRARY_PATH` and common system paths (`/usr/lib/x86_64-linux-gnu`, `/usr/local/lib`,
-etc.). If the lib is absent the TRT EP is skipped entirely — no hard crash, graceful fallback
-to CUDA. This check runs once at startup in a background goroutine and is cached.
-
-**Important for transformer models (GroundingDINO, MobileSAM):** ORT's CUDA EP falls back
-to CPU for ops like deformable multi-scale attention and custom ViT attention — there are no
-CUDA kernels for them in the standard ORT build. CUDA EP therefore gives no speedup over
-CPU for these models. TRT compiles the entire graph and eliminates the fallback, achieving
-10–50× speedup. The `device` field and startup logs tell you which EP is active.
+etc.). If the lib is absent the TRT EP is skipped entirely (`availableProviders` in `ort.go`) —
+no hard crash, graceful fallback to CUDA. The check runs once and is cached. The startup log and
+`visionserve version` print the chain in effect, and the `device` field reports which EP each
+session landed on.
 
 Appending an EP whose libraries are missing on the host is **not fatal** — the engine
 silently falls back to the next EP in the chain (set `VISIONSERVE_TRACE=1` to see which EP
 actually loaded). The EP allowlist lives in `internal/engine/provider.go`; adding a new EP
-means extending that allowlist plus the `appendProviders` switch in `ort.go` — but only EPs
+means extending that allowlist plus the `applyProvider` switch in `ort.go` — but only EPs
 the `yalue/onnxruntime_go` binding exposes can be wired (it currently does **not** expose
 ROCm, so AMD discrete GPUs are reachable only via DirectML on Windows).
 
@@ -214,7 +226,8 @@ own code); on Windows it is not wired yet.
 Every task returns the same `api.Result`. There is **no per-model schema**:
 
 - `Device` — `"cpu"` | `"gpu:0"` (CUDA EP) | `"gpu:0+trt"` (TensorRT EP).
-- `Hint` — non-empty when using `gpu:0` without TRT; recommends installing TensorRT.
+- `Hint` — non-empty only when TensorRT was requested (`--tensorrt` / `VISIONSERVE_TENSORRT`)
+  but `libnvinfer.so.10` is missing, so the request ran on CUDA (`gpu:0`).
 - `Detections` — each `{ bbox [x,y,w,h], class, conf }`, bbox in **original-image** coords.
   Used by detection (RF-DETR, RT-DETR, SCRFD) and open-vocab detection (GroundingDINO).
 - `Masks` — each `{ rle, bbox, conf }`, the mask encoded as **column-major RLE**
@@ -236,7 +249,7 @@ Open-vocab detection populates `Detections` (text → boxes); Grounded-SAM popul
 | `server` | REST API, JSON | unified `Result` schema; parses `prompt`/`box`/`point` |
 | `registry` | scan + validate manifests | **rejects AGPL / non-permissive licenses**, checks ONNX files (incl. multi-file `files:`) |
 | `lifecycle` | load/unload, idle reaper, role→`engine.Session`, `Runner` | **every ONNX session goes through here** (simple and pipeline) |
-| `engine` | wraps ONNX Runtime | EP fallback chain (shipped default CUDA→CPU; TensorRT opt-in per manifest); supported EPs: tensorrt, cuda, coreml, directml, openvino, cpu; `Run` thread-safe |
+| `engine` | wraps ONNX Runtime | EP fallback chain (default CUDA→CPU; TensorRT opt-in via `--tensorrt` / `VISIONSERVE_TENSORRT=1` or per manifest); supported EPs: tensorrt, cuda, coreml, directml, openvino, cpu; `Run` thread-safe |
 | `models/*` | per-architecture pre/postprocess (`Model`) or `Infer` orchestration (`PipelineModel`) | implement interface + `Register()` |
 | `imageproc` | draw; thin resize/letterbox/tensor wrappers over `vision/preprocess` | pure Go, no cgo |
 | `vision/preprocess` | `Spec` (manifest `preprocess:` block / legacy `input.*`) → input tensor + meta | pure Go; the ONE preprocessing implementation; the converter's reference mirrors it |
