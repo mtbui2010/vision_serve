@@ -174,7 +174,7 @@ def test_to_json_ragged_embeddings_stay_numbers():
 
 
 # --------------------------------------------------------------------------- #
-# Client: asks for base64 by default (numpy present), opt-out flag, transparent decode
+# Client: base64 arrays are opt-in (base64_arrays=True), decoded transparently
 # --------------------------------------------------------------------------- #
 class _Server:
     def __init__(self, answer):
@@ -203,24 +203,24 @@ class _Server:
         self.httpd.server_close()
 
 
-def test_client_requests_base64_by_default_and_decodes_it():
+def test_client_requests_base64_only_when_asked_and_decodes_it():
     depth = np.arange(6, dtype=np.float32) / 7
     srv = _Server({"task": "depth", "model": "midas", "depth_map_base64": b64(depth),
                    "depth_width": 3, "depth_height": 2, "duration_ms": 1})
     try:
-        res = Client(srv.url).predict("midas", b"\x89PNG fake")
+        res = Client(srv.url, base64_arrays=True).predict("midas", b"\x89PNG fake")
         assert b'name="encoding"\r\n\r\nbase64' in srv.bodies[-1]
         assert same_bits(res.depth_array(), depth.reshape(2, 3))
 
-        Client(srv.url, base64_arrays=False).predict("midas", b"\x89PNG fake")
+        Client(srv.url).predict("midas", b"\x89PNG fake")
         assert b'name="encoding"' not in srv.bodies[-1]
     finally:
         srv.close()
 
 
-def test_client_default_follows_numpy_availability(monkeypatch):
-    assert Client().base64_arrays is True
-    monkeypatch.setattr("visionserve.client._have_numpy", lambda: False)
+def test_client_default_keeps_plain_lists():
+    """Opt-in: with numpy installed the default must not turn depth_map / embeddings into
+    FloatArray — code that json.dumps them or appends to them broke when it did."""
     assert Client().base64_arrays is False
     assert Client(base64_arrays=True).base64_arrays is True
 

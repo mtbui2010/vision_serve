@@ -277,6 +277,11 @@ Result(
 )
 ```
 
+`Client(base64_arrays=True)` asks the server for `depth_map` / `embeddings` as base64 float32
+(exact values, several times cheaper for a large depth map). With numpy installed they then
+arrive as read-only, list-like `FloatArray` objects (`numpy.asarray(x)` without a copy;
+`.tolist()` before `json.dumps` or `append`). The default keeps plain lists.
+
 `Mask.to_ndarray(width, height) -> np.ndarray` decodes the COCO-style **column-major**
 uncompressed RLE into a boolean `(height, width)` array (requires numpy). It is the
 exact inverse of the server's encoder.

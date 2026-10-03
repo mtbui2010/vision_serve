@@ -47,10 +47,11 @@ class Client:
         base64_arrays: ask the server for depth maps and embeddings as base64 float32
             (``encoding=base64``) instead of JSON number arrays: exact float32 values, about
             half the bytes, and several times cheaper to encode and parse for a large depth map.
-            The :class:`Result` is decoded transparently either way (``depth_map`` /
-            ``embeddings`` are then list-like :class:`~visionserve.FloatArray` objects backed by
-            numpy). ``None`` (default) = on when numpy is installed; ``False`` = opt out, always
-            plain JSON numbers. A server that predates the option ignores it and sends numbers.
+            Opt-in (default ``False``): with it, ``depth_map`` / ``embeddings`` become read-only,
+            list-like :class:`~visionserve.FloatArray` objects backed by numpy (zero-copy
+            ``numpy.asarray``), which are not lists — ``json.dumps``, ``+`` and ``append`` need
+            ``.tolist()`` first. Requires numpy (without it the base64 is decoded into plain
+            lists). A server that predates the option ignores it and sends numbers.
     """
 
     def __init__(
@@ -58,12 +59,11 @@ class Client:
         host: str = "http://localhost:11435",
         timeout: float = 120,
         *,
-        base64_arrays: Optional[bool] = None,
+        base64_arrays: bool = False,
     ):
         self.host = host.rstrip("/")
         self.timeout = timeout
-        if base64_arrays is None:
-            base64_arrays = _have_numpy()
+        # Opt-in: the default keeps Result.depth_map / embeddings plain lists, as they always were.
         self.base64_arrays = bool(base64_arrays)
 
     # ------------------------------------------------------------------ #
@@ -380,14 +380,6 @@ def _maybe_ndarray(image: Any):
     if isinstance(image, np.ndarray):
         return image
     return None
-
-
-def _have_numpy() -> bool:
-    try:
-        import numpy  # noqa: F401
-    except ImportError:
-        return False
-    return True
 
 
 def _pil_to_png(img) -> bytes:

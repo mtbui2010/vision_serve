@@ -18,12 +18,14 @@ from typing import Any, Dict, List, Optional, Sequence
 
 class FloatArray(_SequenceABC):
     """A read-only, list-like float32 array: how :class:`Result` holds ``depth_map`` and
-    ``embeddings`` when the server sent them base64-encoded (the default with numpy installed).
+    ``embeddings`` when the server sent them base64-encoded (``Client(base64_arrays=True)``).
 
-    It behaves like the ``List[float]`` / ``List[List[float]]`` that JSON numbers decode to, so
-    code written for lists keeps working — ``len``, indexing, iteration, truthiness, ``==`` with
-    a list — while numpy gets the decoded buffer WITHOUT a copy: ``numpy.asarray(x)``,
-    ``x.array``, :meth:`Result.depth_array` and :meth:`Result.embeddings_array`.
+    It supports what reading a ``List[float]`` / ``List[List[float]]`` needs — ``len``,
+    indexing, iteration, truthiness, ``==`` with a list — while numpy gets the decoded buffer
+    WITHOUT a copy: ``numpy.asarray(x)``, ``x.array``, :meth:`Result.depth_array` and
+    :meth:`Result.embeddings_array`. It is NOT a list: ``json.dumps``, ``+`` and ``append`` need
+    ``.tolist()`` (or :meth:`Result.to_json`) first, and its values are the exact float32 ones,
+    so ``==`` against the same answer sent as JSON numbers can differ in the last digits.
     """
 
     __slots__ = ("array",)
