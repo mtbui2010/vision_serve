@@ -62,22 +62,25 @@ func (s *Session) worker(modelPath string, providers []Provider, so SessionOptio
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L235-L259)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L237-L261)
 
 `Run` and `RunNamed` wrap the work in a closure and send it to the worker over the `jobs` channel.
 Because the worker handles one job at a time, this also makes a session safe to call from many
 goroutines: concurrent callers simply queue.
 
 ```go title="internal/engine/ort.go"
-func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
+func (s *Session) submit(ctx context.Context, work func() ([]Tensor, error)) ([]Tensor, error) {
 	// ...
+	if err := ctx.Err(); err != nil { // an idle worker must not win over a ctx already done
+		return nil, gaveUp(err)
+	}
 	ch := make(chan result, 1)
 	s.jobsMu.RLock()
 	if s.closed {
 		s.jobsMu.RUnlock()
 		return nil, ErrClosed
 	}
-	s.jobs <- func() {
+	job := func() {
 		var r result
 		// ...
 		defer func() {
@@ -88,6 +91,12 @@ func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
 		}()
 		r.outs, r.err = work()
 	}
+	select {
+	case s.jobs <- job:
+	case <-ctx.Done():
+		s.jobsMu.RUnlock()
+		return nil, gaveUp(ctx.Err())
+	}
 	s.jobsMu.RUnlock()
 	// Work accepted before Close still runs: the worker drains jobs before destroying the session.
 	r := <-ch
@@ -95,12 +104,21 @@ func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L476-L505)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L543-L581)
 
-Two safety details are visible here. A call after `Close` gets `ErrClosed` instead of a "send on
-closed channel" panic. And a panic inside a job is recovered on the worker: the worker is not a
-request goroutine, so Go's HTTP server would never catch it, and one bad call would otherwise take
-the whole process down. It comes back as an error wrapping `ErrInferencePanic`.
+Three safety details are visible here. The hand-over to the worker follows the request's `ctx`: a
+caller whose client left (or whose deadline passed) while it queued behind other jobs gives up with
+an error wrapping `ctx.Err()`, and its job never runs. Once the worker has the job, `submit` waits
+for the result whatever `ctx` does, because an ORT run cannot be interrupted. A call after `Close`
+gets `ErrClosed` instead of a "send on closed channel" panic. And a panic inside a job is
+recovered on the worker: the worker is not a request goroutine, so Go's HTTP server would never
+catch it, and one bad call would otherwise take the whole process down. It comes back as an
+error wrapping `ErrInferencePanic`.
+
+`Close` marks the session closed, lets the worker finish the jobs it already accepted, and then
+destroys the ORT session on the worker's own thread, which also releases that thread's CUDA
+state. It is safe to call more than once and from several goroutines: the first call does the
+work and returns the destroy error, the others wait for it and return `nil`.
 
 A related guard sits in `cmd/visionserve`: at startup the binary re-executes itself once with
 `GODEBUG=asyncpreemptoff=1`, because ORT and CUDA install signal handlers that crash when Go's
@@ -115,8 +133,8 @@ them (MobileSAM's decoder, see [Lifecycle manager](lifecycle.md)). Both `Session
 
 ```go title="internal/engine/pool.go"
 type Runnable interface {
-	Run(inputs []Tensor) ([]Tensor, error)
-	RunNamed(inputs map[string]Tensor) ([]Tensor, error)
+	Run(ctx context.Context, inputs []Tensor) ([]Tensor, error)
+	RunNamed(ctx context.Context, inputs map[string]Tensor) ([]Tensor, error)
 	InputNames() []string
 	OutputNames() []string
 	ActiveEP() Provider
@@ -124,7 +142,10 @@ type Runnable interface {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/pool.go#L7-L14)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/pool.go#L15-L22)
+
+For a pool, `ctx` bounds the wait for a free copy in the same way: a call whose `ctx` ends first
+returns without running anything.
 
 ### The tensor type
 
@@ -146,6 +167,43 @@ type Tensor struct {
 
 `Run` binds inputs by position; `RunNamed` binds them by name, which is what pipeline models use
 (the SAM decoder has six inputs whose order is not obvious).
+
+`RunNamedInto` is `RunNamed` with caller-owned buffers for chosen outputs: ORT writes those
+outputs straight into the caller's `float32` slices, instead of allocating them in its arena and
+then copying them into Go memory. It is meant for large outputs that are used and dropped at once,
+such as MobileSAM's full-resolution mask logits (30 MB at 3200×2400), so the caller can reuse one
+buffer across calls. The values are the same either way, and when the call returns, for any
+reason, ORT has stopped writing into the buffers.
+
+```go title="internal/engine/ort.go"
+func (s *Session) RunNamedInto(ctx context.Context, inputs, into map[string]Tensor) ([]Tensor, error) {
+```
+
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L498)
+
+### CPU sessions run without ORT's memory pattern
+
+ORT has two allocation features for the CPU: the *arena* keeps freed memory for reuse, and the
+*memory pattern* plans, after the first run, one block for all of a graph's intermediate tensors.
+With both on, the first run allocates its tensors one by one from the arena, and the second plans
+one block that the fragmented first-run chunks cannot hold, so the arena grows a new region and
+keeps both copies. Resident memory grew from the second request on: on CPU, GroundingDINO peaked
+at 3.47 GB instead of 2.24 GB, RF-DETR at 0.48 instead of 0.32 GB, MobileSAM automask at 0.98
+instead of 0.65 GB, and more for every new input shape. CPU sessions are therefore created with
+the memory pattern off (the arena stays on). Each model then stays at its first-request peak,
+latency did not move, and outputs are bit-identical, since the pattern only decides where buffers
+go. GPU sessions keep ORT's defaults.
+
+```go title="internal/engine/ort.go"
+if ep == ProviderCPU {
+	if err := opts.SetMemPattern(false); err != nil {
+		opts.Destroy()
+		return nil, activeEP, fmt.Errorf("engine: disable the memory pattern: %w", err)
+	}
+}
+```
+
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L308-L313)
 
 ### Execution providers and the fallback chain
 
@@ -225,7 +283,7 @@ func epWasDropped(ortOutput string) bool {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L589-L605)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L692-L708)
 
 If it matches, the engine logs a warning and records the session as CPU. The binding offers no
 logging callback, so the capture briefly redirects the process's stderr (file descriptor 2). Only
@@ -311,7 +369,7 @@ func applyDeterministic(opts *ort.SessionOptions, ep Provider) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic.go#L107-L122)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic.go#L88-L103)
 
 No latency cost was measurable, but the deterministic kernels round differently, so turning it on
 shifts GPU outputs once (GroundingDINO scores by up to about 0.002, held-out mAP by up to 0.22). It
@@ -345,7 +403,7 @@ func Inspect(modelPath string) (inputs, outputs []IOInfo, err error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L95-L108)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L96-L109)
 
 A file the reader cannot parse falls back to ORT's own probe, logged once per file. Output shapes
 are the ones declared in the file; a live ORT session may resolve some symbolic dimensions further,
@@ -356,7 +414,7 @@ so code that needs real output shapes reads them from `Run`'s results.
 !!! code "Where in the code"
     | File | Responsibility |
     |---|---|
-    | `internal/engine/ort.go` | ORT init (`ORT_DYLIB_PATH`), `Session`, worker thread, EP fallback in `createSession`, `Run`/`RunNamed`, `Inspect` |
+    | `internal/engine/ort.go` | ORT init (`ORT_DYLIB_PATH`), `Session`, worker thread, EP fallback and the CPU memory-pattern setting in `createSession`, `Run`/`RunNamed`/`RunNamedInto`, `Inspect` |
     | `internal/engine/pool.go` | `Runnable` interface, `SessionPool` |
     | `internal/engine/tensor.go` | `Tensor` (float32 / int64) |
     | `internal/engine/provider.go` | EP allowlist, `ResolveProviders`, `VISIONSERVE_EP`, `DeviceString`, mixed-device reporting |

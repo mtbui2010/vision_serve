@@ -168,7 +168,7 @@ The rules of the border between Go and C, as this function follows them:
 
 The function never fails the session. Its caller only logs a failure and continues with
 nondeterministic kernels
-([deterministic.go#L105-L124](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic.go#L105-L124)).
+([deterministic.go#L86-L105](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic.go#L86-L105)).
 
 ### 4. `unsafe`: reaching an unexported pointer
 
@@ -176,7 +176,7 @@ The C function needs the raw `OrtSessionOptions*` that lives inside the binding'
 `SessionOptions` struct, in an unexported field. Go's `reflect` and `unsafe` packages can
 read it anyway, and this code checks the struct's shape before trusting it:
 
-```go title="internal/engine/deterministic.go (lines 85-103)"
+```go title="internal/engine/deterministic.go (lines 66-84)"
 // sessionOptionsHandle returns the OrtSessionOptions* behind the binding's SessionOptions, whose
 // only field is that unexported pointer. The layout is checked, not assumed: a binding that
 // changes it gets an error here (and a nondeterministic session), never a bad pointer passed to C.
@@ -198,7 +198,7 @@ func sessionOptionsHandle(o *ort.SessionOptions) (unsafe.Pointer, error) {
 }
 ```
 
-[deterministic.go#L85-L103 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic.go#L85-L103)
+[deterministic.go#L66-L84 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic.go#L66-L84)
 
 `unsafe.Pointer` is a pointer with no type, which the compiler lets you reinterpret as any
 other pointer. Line 98 says: "take the address of field 0, treat it as the address of a
@@ -310,7 +310,7 @@ All of the binding's Go files contain `import "C"`; with cgo off, none of them i
 The fix is to turn cgo on and name a C compiler **for the target CPU**. This is what CI does
 for the Jetson target:
 
-```yaml title=".github/workflows/ci.yml (lines 54-62)"
+```yaml title=".github/workflows/ci.yml (lines 56-64)"
       - name: Cài cross toolchain aarch64
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Build arm64 (Jetson target)
@@ -322,17 +322,22 @@ for the Jetson target:
         run: go build ./...
 ```
 
-[ci.yml#L42-L62 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/.github/workflows/ci.yml#L42-L62)
+[ci.yml#L56-L64 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/.github/workflows/ci.yml#L56-L64)
 
 The edge Docker image does the same in its build stage
-([deploy/Dockerfile.edge#L41-L56](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile.edge#L41-L56)):
+([deploy/Dockerfile.edge#L41-L61](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile.edge#L41-L61)):
 `CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build ...`, then copies
-the binary into an arm64 image that also contains `libonnxruntime.so`.
+the binary into an arm64 image that also contains `libonnxruntime.so`. The stage installs
+`libc6-dev-arm64-cross` (the arm64 C library headers) next to the compiler: with
+`--no-install-recommends` it is not pulled in, and cgo then fails on missing `<bits/...>`
+headers.
 
-!!! warning "`make build-linux-arm64`"
-    At the time of writing this Makefile target runs `GOOS=linux GOARCH=arm64 go build` without
-    `CGO_ENABLED=1` and `CC` ([Makefile#L139-L141](https://github.com/mtbui2010/vision_serve/blob/main/Makefile#L139-L141)),
-    so it fails with the error above. Use the CI command, or `make docker-arm`.
+!!! note "`make build-linux-arm64`"
+    The Makefile target runs the same command: `CGO_ENABLED=1` with
+    `CC=aarch64-linux-gnu-gcc` (override with `ARM64_CC=...`), and it stops with a clear
+    message when that compiler is not installed
+    ([Makefile#L146-L151](https://github.com/mtbui2010/vision_serve/blob/main/Makefile#L146-L151)).
+    `make docker-arm` builds the whole arm64 image instead.
 
 ## Try it
 

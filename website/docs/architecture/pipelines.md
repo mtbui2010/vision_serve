@@ -65,7 +65,7 @@ type GraspPlanner interface {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/pipeline/stage.go#L31-L66)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/pipeline/stage.go#L31-L75)
 
 The concrete stages wrap existing model packages instead of copying them:
 
@@ -141,7 +141,7 @@ func (m *groundedSAM) PoolSizes() map[string]int { return map[string]int{roleDec
 func (m *groundedSAM) Exclusive() bool { return true }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/groundedsam/groundedsam.go#L49-L68)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/groundedsam/groundedsam.go#L57-L76)
 
 Masks come back index-aligned with the detections, and each mask carries its detection's `bbox`
 and `conf`, so a client can pair them without the detections list.
@@ -177,7 +177,7 @@ func packPhrases(pp []promptPhrase) [][]promptPhrase {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/groundingdino/groundingdino.go#L270-L282)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/groundingdino/groundingdino.go#L277-L289)
 
 A single phrase too long to fit on its own is rejected up front as a bad prompt (HTTP 400),
 before any pass runs. Thresholds resolve in one order for every GroundingDINO pipeline: the
@@ -339,7 +339,12 @@ Whenever a detector is configured, incoming `box` prompts are ignored: the detec
 the ones segmented.
 
 The segmenter hands the planner raw bitmaps alongside the RLE-encoded masks, so the planner never
-decodes the RLE again. Gripper bounds resolve as built-in default (10 to 150 px), then the
+decodes the RLE again. In the class-agnostic automask case the segmenter also streams: through
+`SegmentEach` (the optional `EachBitmapSegmenter` interface) each mask is size-filtered and
+planned as soon as it is final, and its full-resolution bitmap is dropped. Before, every bitmap
+(about 30 of 7.7 MB each at 3200×2400) was held until the last one was decoded. The masks, the
+filter, the planner and the order are the same, so the grasps are byte-identical; a segmenter
+that cannot stream falls back to `SegmentBitmaps`. Gripper bounds resolve as built-in default (10 to 150 px), then the
 manifest, then the request (`gripper_min` / `gripper_max`). Each mask returns at most 20 grasps,
 best first; this cap is separate from the detector's `max_detections`.
 
@@ -373,18 +378,21 @@ func (m *backgroundModel) backgroundAuto(img image.Image, prompt models.Prompt, 
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/background/background.go#L212-L224)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/background/background.go#L219-L231)
 
 A manifest may declare only the sessions it needs; asking for a method whose sessions are missing
 is an error that names the missing `files:` role. `bg_max_area`, `fg_min_area` and `grid_size`
-tune the mask classification for `sam` and `automask`.
+tune the mask classification for `sam` and `automask`. Like grasp, `automask` consumes MobileSAM's
+masks as they become final: each one is tested and OR-ed into the union, then its bitmap is
+dropped. OR does not depend on order, so the union is exactly the one built from all bitmaps at
+once.
 
 ## Where in the code
 
 !!! code "Where in the code"
     | File | Responsibility |
     |---|---|
-    | `internal/pipeline/stage.go` | `Call` and the stage interfaces (Detector, Rescorer, Segmenter, BitmapSegmenter, GraspPlanner) |
+    | `internal/pipeline/stage.go` | `Call` and the stage interfaces (Detector, Rescorer, Segmenter, BitmapSegmenter, EachBitmapSegmenter, GraspPlanner) |
     | `internal/pipeline/closed.go` | `Closed` detector stage over any plain `Model`; `ClosedPass` keeps DETR query features for a head |
     | `internal/pipeline/gdino.go` | `GDINO` detector stage; `TextPhrases` splits a prompt into phrases |
     | `internal/pipeline/sam.go` | `SAM` and `SAMBitmaps` segmenter stages over MobileSAM |

@@ -391,7 +391,7 @@ var licenseAllowlist = map[string]string{
 	m.License = canonLicense
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L275-L279)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L287-L291)
 
 The Python converter keeps its own copy so it can refuse a model *before* a long export (see
 [Clients and the converter](clients.md)); `internal/registry/sync_test.go` parses the Python

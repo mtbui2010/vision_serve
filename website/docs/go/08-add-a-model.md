@@ -121,6 +121,9 @@ import (
 	"visionserve/internal/vision/preprocess"
 )
 
+// Compile-time check: the build fails if *top1Model is missing a models.Model method.
+var _ models.Model = (*top1Model)(nil)
+
 // init runs once, when the package is imported: it adds our factory to the registry.
 func init() {
 	models.Register("top1", New)
@@ -199,7 +202,9 @@ How each part maps to the earlier chapters:
 - **`top1Model` is unexported** (chapter 1). Nobody outside the package needs the type; they
   get it through the `models.Base` that `New` returns.
 - **Six methods with pointer receivers** make `*top1Model` satisfy `models.Model` (chapters 2–3).
-  There is no `implements`.
+  There is no `implements`. The `var _ models.Model = (*top1Model)(nil)` line makes the
+  compiler check it, as every model package in the repository does: a misspelled method is a
+  build error instead of a load-time failure.
 - **`New` returns an error** for an invalid manifest (chapter 4) instead of failing later, on
   the first request.
 - **Preprocessing is declared, not hand-written.** `preprocess.Arch` says which resize modes
@@ -218,7 +223,7 @@ How each part maps to the earlier chapters:
     A detector must also use the `meta` argument: `Detection.BBox` is **always in original
     image coordinates**, `[x, y, w, h]`. `meta.Affine()` gives the mapping from model-input
     pixels back to the original image
-    ([spec.go#L335-L339](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L335-L339)).
+    ([spec.go#L337-L341](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L337-L341)).
     A classifier has no coordinates, so `top1` ignores `meta` (`_`).
 
 ## Step 3: test pre- and postprocess
@@ -397,7 +402,7 @@ The struct tags of chapter 2 turn this file into a `registry.Manifest`, and life
 the fields into the `models.Config` that `New` receives: `conf_threshold` becomes
 `cfg.ConfThresh`, the lines of `imagenet1k.txt` become `cfg.Labels`, `input:` becomes the
 preprocessing spec
-([load.go#L385-L409](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L385-L409)).
+([load.go#L415-L439](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L415-L439)).
 
 !!! danger "The license field is not decoration"
     Change `license:` to `AGPL-3.0` and the registry refuses the whole manifest:
@@ -478,7 +483,7 @@ requests and releases the ONNX sessions.
 |---|---|
 | `models: no factory registered for "top1"` | the blank import in `cmd/visionserve/main.go` is missing, or you did not rebuild |
 | `model "mobilenet-top1" not found in registry` | the manifest failed validation: read the `registry warning:` line above it |
-| `implements neither Model nor PipelineModel` | a method name or signature is off; add `var _ models.Model = (*top1Model)(nil)` to get a compile error instead (chapter 3) |
+| `implements neither Model nor PipelineModel` | a method name or signature is off and the `var _ models.Model = (*top1Model)(nil)` line is missing; put it back to get a compile error instead (chapter 3) |
 | `failed to initialize ONNX Runtime (set ORT_DYLIB_PATH ...)` | `ORT_DYLIB_PATH` is not set or points to the wrong file |
 | WEIGHTS shows `missing` | `model_file` does not exist in the model directory |
 

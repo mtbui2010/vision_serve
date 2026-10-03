@@ -148,7 +148,7 @@ callers never see base64.
             embeddings = [[float(v) for v in row] for row in (d.get("embeddings") or [])]
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L374-L382)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L375-L383)
 
 With numpy installed, the decoded arrays are `FloatArray` objects: read-only, list-like
 (`len`, indexing, iteration, `==` with a list) and handed to numpy without a copy. They are not
@@ -310,7 +310,7 @@ ENTRYPOINT ["visionserve"]
 CMD ["serve", "--addr", ":11435"]
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile#L134-L145)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile#L135-L146)
 
 Weights are never baked into an image. Pull them into the running container
 (`docker exec -it visionserve visionserve pull rf-detr`) or bind-mount a host folder onto

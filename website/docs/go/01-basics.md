@@ -100,7 +100,8 @@ type Options struct {
 	// IoU is the suppression threshold: a box is suppressed when its overlap with an
 	// already-kept, higher-scoring box is STRICTLY greater than IoU.
 	IoU float64
-	// ClassAgnostic lets boxes of different Class suppress each other. ...
+	// ClassAgnostic lets boxes of different Class suppress each other. The default
+	// (false) only suppresses within the same Class.
 	ClassAgnostic bool
 	// ...
 }
@@ -155,7 +156,7 @@ More often the project uses *string* constants of a named type, so the JSON and 
 readable: `TaskDetection Task = "detection"` in
 [pkg/api/types.go#L9-L18](https://github.com/mtbui2010/vision_serve/blob/main/pkg/api/types.go#L9-L18)
 or `ProviderCUDA Provider = "cuda"` in
-[engine/provider.go#L13-L20](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L13-L20).
+[engine/provider.go#L15-L22](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L15-L22).
 
 ## Functions with several results
 
@@ -204,7 +205,7 @@ Softmax in the classification model shows the everyday operations:
 
 === "Go"
 
-    ```go title="internal/models/classification/postprocess.go (lines 81-109)"
+    ```go title="internal/models/classification/postprocess.go (lines 83-111)"
     // softmax converts logits to probabilities (numerically stable via max subtraction).
     func softmax(logits []float32) []float32 {
     	if len(logits) == 0 {
@@ -246,7 +247,7 @@ Softmax in the classification model shows the everyday operations:
         return (e / e.sum()).astype(np.float32)
     ```
 
-[postprocess.go#L81-L109 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/postprocess.go#L81-L109)
+[postprocess.go#L83-L111 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/postprocess.go#L83-L111)
 
 There is no vectorised maths in Go: you write the loop. That is fine. A Go loop compiles to
 machine code, so it is in the same league as the C loop inside numpy, not a slow Python loop.
@@ -358,14 +359,14 @@ func canonicalLicense(declared string) (string, bool) {
 !!! note "Map order is random on purpose"
     Go randomises map iteration order, so code cannot depend on it by accident. When the
     order matters, collect the keys and sort them, as `models.Registered()` does
-    ([model.go#L310-L320](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L310-L320)).
+    ([model.go#L323-L333](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L323-L333)).
 
 ## `switch`
 
 A `switch` has no fall-through (no `break` needed), and a `switch` with no value is a
 clean if/else-if chain. The classification postprocess checks the output shape this way:
 
-```go title="internal/models/classification/postprocess.go (lines 29-41)"
+```go title="internal/models/classification/postprocess.go (lines 30-42)"
 	// Accept [1, C] or [C] — some ONNX exports drop the batch dimension.
 	var numClasses int
 	switch len(out.Shape) {
@@ -381,7 +382,7 @@ clean if/else-if chain. The classification postprocess checks the output shape t
 	}
 ```
 
-[postprocess.go#L29-L41 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/postprocess.go#L29-L41)
+[postprocess.go#L30-L42 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/postprocess.go#L30-L42)
 
 ## Try it
 

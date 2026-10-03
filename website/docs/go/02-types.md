@@ -78,7 +78,7 @@ serves every task without sending empty `"masks": []` to a detection client.
 The manifest parser uses the same trick with `yaml:"..."` tags. Nested YAML maps become
 nested structs, which can be written inline:
 
-```go title="internal/registry/manifest.go (lines 113-229, trimmed)"
+```go title="internal/registry/manifest.go (lines 123-242, trimmed)"
 type Manifest struct {
 	Name      string `yaml:"name"`
 	Task      string `yaml:"task"`
@@ -100,7 +100,7 @@ type Manifest struct {
 }
 ```
 
-[manifest.go#L113-L229 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L113-L229)
+[manifest.go#L123-L242 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L123-L242)
 
 So this manifest fragment fills `m.Input.Normalize.Mean`:
 
@@ -114,7 +114,7 @@ input:
 Reading the file is then two calls. Note `&m`: the decoder needs the *address* of `m` so
 it can write into it (more on pointers below):
 
-```go title="internal/registry/manifest.go (lines 231-240)"
+```go title="internal/registry/manifest.go (lines 250-259)"
 // LoadManifest reads + parses + validates a manifest.yaml file.
 func LoadManifest(path string) (*Manifest, error) {
 	raw, err := os.ReadFile(path)
@@ -127,13 +127,16 @@ func LoadManifest(path string) (*Manifest, error) {
 	}
 ```
 
-[manifest.go#L231-L251 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L231-L251)
+[manifest.go#L250-L259 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L250-L259)
 
-!!! tip "Unknown YAML keys are ignored"
-    A misspelt key (`idle_unload_second:`) does not fail; it simply leaves the field at its
-    zero value. When a manifest "does nothing", compare its keys with the tags above. The
+!!! tip "Unknown YAML keys are ignored, with a warning"
+    `yaml.Unmarshal` does not fail on a misspelt key (`idle_unload_second:`); it simply leaves
+    the field at its zero value. `LoadManifest` therefore walks the YAML a second time and
+    lists every key no field reads, and the registry scan logs them:
+    `unknown key(s) ignored, check for a typo: runtime.idle_unload_second (line 14)`. When a
+    manifest "does nothing", look for that warning, or compare its keys with the tags above. The
     tag `yaml:"-"` (used on `dir` at
-    [L222-L223](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L222-L223))
+    [L232-L233](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L232-L233))
     means "never read this field from YAML".
 
 ## Zero values: empty means default
@@ -141,7 +144,7 @@ func LoadManifest(path string) (*Manifest, error) {
 Every Go type has a zero value, and a struct's zero value has every field at zero. The
 project leans on this deliberately. The preprocessing spec says so in its doc comment:
 
-```go title="internal/vision/preprocess/spec.go (lines 96-137, trimmed)"
+```go title="internal/vision/preprocess/spec.go (lines 98-139, trimmed)"
 // Spec declares one model's preprocessing. The zero value of each field is the common case.
 // ...
 type Spec struct {
@@ -163,7 +166,7 @@ type Spec struct {
 }
 ```
 
-[spec.go#L96-L137 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L96-L137)
+[spec.go#L98-L139 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L98-L139)
 
 `NoRescale bool` is named so that its zero value (`false`) is the usual case (divide by 255).
 A manifest that does not mention it gets the right behaviour without a default value
@@ -175,7 +178,7 @@ anywhere. In Python you would write `no_rescale: bool = False`; in Go you choose
 You can define a new type on top of a basic one and attach methods to it. The resize
 mode is a string, but a *typed* one:
 
-```go title="internal/vision/preprocess/spec.go (lines 22-29, 57, 62-64, trimmed)"
+```go title="internal/vision/preprocess/spec.go (lines 24-31, 59, 64-66, trimmed)"
 // Mode is how an image is brought to the model's input size. Only modes that a served
 // architecture really uses exist; each one reproduces its upstream recipe exactly.
 type Mode string
@@ -192,8 +195,8 @@ const (
 func (m Mode) Pads() bool { return m == Letterbox || m == TopLeftPad || m == LongSidePad }
 ```
 
-[spec.go#L22-L29](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L22-L29),
-[#L62-L64](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L62-L64)
+[spec.go#L24-L31](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L24-L31),
+[#L64-L66](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L64-L66)
 
 `(m Mode)` before the name is the **receiver**: Go's `self`, but written explicitly and
 named by you (usually one or two letters). You call it as `spec.Resize.Pads()`. A function
@@ -203,7 +206,7 @@ bugs a type checker in Python would only catch with `Literal[...]` or an `Enum`.
 A named type can even control how it is decoded. `wholeNumber` refuses `1.5` where an
 integer is expected, because yaml.v3 would otherwise truncate it silently:
 
-```go title="internal/registry/manifest.go (lines 401-415)"
+```go title="internal/registry/manifest.go (lines 423-437)"
 // wholeNumber is an int that refuses a YAML float: yaml.v3 truncates `1.5` into an int field
 // silently, and a thread count of 1 written as 1.5 should be an error, not a guess.
 type wholeNumber int
@@ -221,7 +224,7 @@ func (w *wholeNumber) UnmarshalYAML(n *yaml.Node) error {
 }
 ```
 
-[manifest.go#L401-L415 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L401-L415)
+[manifest.go#L423-L437 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L423-L437)
 
 This is the Go equivalent of a pydantic validator. yaml.v3 sees the method and calls it.
 
@@ -239,7 +242,7 @@ In Python every object is passed by reference, so `self.license = ...` always ch
 original. In Go a value receiver changes only its copy. `validate` must write the
 canonical license back, so it takes a pointer:
 
-```go title="internal/registry/manifest.go (lines 263-269)"
+```go title="internal/registry/manifest.go (lines 285-291)"
 	// License: required + must be in the permissive allowlist (case-insensitive match,
 	// stored back in canonical SPDX form so later == comparisons see one spelling).
 	canonLicense, ok := canonicalLicense(m.License)
@@ -249,7 +252,7 @@ canonical license back, so it takes a pointer:
 	m.License = canonLicense
 ```
 
-[manifest.go#L253-L269 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L253-L269)
+[manifest.go#L285-L291 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L285-L291)
 
 `preprocess.Spec`, `preprocess.Meta` and `engine.Tensor` use value receivers: they are
 plain data, and `Tensor` only holds slice *headers* (pointer + length), so copying it does
@@ -283,7 +286,7 @@ type Request struct {
 [request.go#L47-L51 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L47-L51)
 
 So the handler can write `q.Model` and `q.Encoding`
-([handlers.go#L163-L164](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L163-L164))
+([handlers.go#L164-L165](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L164-L165))
 although those fields belong to `api.PredictJSONRequest`.
 
 The tests use embedding to build a variant of a fake model that adds one method:
@@ -336,7 +339,7 @@ system: a `models.Result` *is* an `api.Result`.
 ??? note "Generics, briefly"
     Go has had generics since 1.18. The project uses them sparingly, e.g. MobileSAM's
     automatic mask generator collects results of any type `T`:
-    ```go title="internal/models/mobilesam/automask.go (lines 77-82)"
+    ```go title="internal/models/mobilesam/automask.go (lines 105-110)"
     // amgOut is one final-pass result after emit has converted it.
     type amgOut[T any] struct {
     	v     T
@@ -344,7 +347,7 @@ system: a `models.Result` *is* an `api.Result`.
     	err   error
     }
     ```
-    [automask.go#L77-L82](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/mobilesam/automask.go#L77-L82).
+    [automask.go#L105-L110](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/mobilesam/automask.go#L105-L110).
     `[T any]` is like `Generic[T]` in Python typing. You will rarely need to write generic code
     for a model.
 

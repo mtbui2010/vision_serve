@@ -88,7 +88,7 @@ func TestStatusOf(t *testing.T) {
 	}
 ```
 
-[handlers_test.go#L28-L56 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers_test.go#L28-L56)
+[handlers_test.go#L28-L51 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers_test.go#L28-L51)
 
 Adding a case is one line. With `t.Run(name, func(t *testing.T) {...})` each case becomes a
 named **subtest** that reports separately and can be run alone:
@@ -175,14 +175,14 @@ func newFakeManager(t *testing.T, reg *registry.Registry) (*Manager, *fakeOpener
 }
 ```
 
-[fixtures_test.go#L117-L183 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/fixtures_test.go#L117-L183)
+[fixtures_test.go#L175-L183 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/fixtures_test.go#L175-L183)
 
 `m.openRunnable = op.open` is a common Go testing **seam**: production code calls a
 function stored in a field or package variable, and the test replaces it. You will find
 several, e.g. `var createORTSession = createSession` in the engine
-([ort.go#L261-L262](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L261-L262))
+([ort.go#L263-L264](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L263-L264))
 and `newEngineSession` swapped in
-[pool_threads_test.go#L50-L67](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/pool_threads_test.go#L50-L67)
+[pool_threads_test.go#L51-L69](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/pool_threads_test.go#L51-L69)
 together with `t.Setenv`. It is Go's version of `unittest.mock.patch`, but explicit. The
 HTTP tests use the other approach, a fake behind an interface (chapter 3).
 
@@ -217,7 +217,7 @@ func TestMatchesNaive(t *testing.T) {
 }
 ```
 
-[nms_test.go#L91-L171 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/nms/nms_test.go#L91-L171)
+[nms_test.go#L137-L171 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/nms/nms_test.go#L137-L171)
 
 `rand.NewSource(seed)` makes the "random" data the same on every run, so a failure is
 reproducible. This pattern is very useful for model code: keep a slow, obviously correct

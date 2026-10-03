@@ -62,7 +62,7 @@ func (s *Server) routes() http.Handler {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L70-L87)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L75-L92)
 
 | Route | What it does |
 |---|---|
@@ -86,7 +86,11 @@ pass. Port 11435 avoids clashing with Ollama's 11434.
 const DefaultAddr = "127.0.0.1:11435"
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L21-L24)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L22-L25)
+
+On a loopback address the startup log says so, so a user who cannot reach the server from another
+machine sees why: `VisionServe listening on 127.0.0.1:11435 (this machine only; --addr :11435
+accepts other hosts)`.
 
 ### One request type for JSON and multipart
 
@@ -159,7 +163,7 @@ func (s *Server) predict(w http.ResponseWriter, r *http.Request) (api.Result, st
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L142-L165)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L143-L166)
 
 The bound itself (by default `max(32, 2 × the model's inference slots)`, tunable with
 `VISIONSERVE_MAX_QUEUE`) lives in the lifecycle package; see
@@ -187,7 +191,7 @@ the upload.
 		u, err := spool(p, limit, &fileMemLeft, &memLeft)
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/multipart.go#L203-L212)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/multipart.go#L210-L219)
 
 Why a probe and not the real slot? A slot held during the upload would let a few dozen slow
 clients fill a model's bound and lock everyone else out for as long as the server's
@@ -280,12 +284,15 @@ func statusOf(err error) int {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/errors.go#L48-L75)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/errors.go#L60-L87)
 
 The body is always `{"error": "..."}`. A 499 ("client closed request", borrowed from nginx)
 means the client disconnected before inference started, so the server did not run the model;
 nobody reads that response, it is there for the access log. The context is checked right
-before inference in `Predict`, so a request whose client has gone does not burn GPU time.
+before inference in `Predict`, and it is passed down to the lifecycle manager, which follows it
+while the request waits for the model to load, for a session or for a model's lock. A request
+whose client has gone therefore does not burn GPU time, and `orClientGone` turns the manager's
+"gave up waiting" error into the same 499.
 
 ### `Predict`: the shared wrapper around the model
 
@@ -301,9 +308,9 @@ func Predict(ctx context.Context, p Predictor, model string, img image.Image, pr
 	if ctx.Err() != nil {
 		return api.Result{}, errClientGone
 	}
-	res, err := p.PredictPrompt(model, img, prompt)
+	res, err := p.PredictPrompt(ctx, model, img, prompt)
 	if err != nil {
-		return api.Result{}, err
+		return api.Result{}, orClientGone(ctx, err)
 	}
 	if hasROI {
 		res = roipkg.MapResult(res, rect, fullW, fullH)
@@ -317,7 +324,7 @@ func Predict(ctx context.Context, p Predictor, model string, img image.Image, pr
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L23-L42)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L24-L43)
 
 ### Big arrays as base64 (opt-in)
 
@@ -374,7 +381,9 @@ the URL, so admission happens before the body is read.
 `/api/predict` returns for the same image, or the first detection of `class`) of a model whose
 manifest has an `explain:` block: a PNG overlay by default, or raw float32 with the shape in the
 `X-Heatmap-Shape` header when `format=numpy`. The `X-Explain-Detection` header carries the
-explained detection as JSON.
+explained detection as JSON. The heatmap is for that detection: lifecycle finds the model's
+object query whose decoded box matches the detection's box (see
+[Lifecycle manager](lifecycle.md#explain-heatmaps)), since detection 0 is usually not query 0.
 
 **`/api/templates`** stores named sets of example images for template-based detectors
 (`instance_detection` models such as OWL-ViT); a predict request then refers to a set by
@@ -409,7 +418,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L104-L108)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L117-L121)
 
 ## Where in the code
 
