@@ -82,12 +82,16 @@ const normalRadius = 2
 //	sy = (#set in rows y-r..y-1) - (#set in rows y+1..y+r)  over cols x-r..x+r
 //	sx = (#set in cols x-r..x-1) - (#set in cols x+1..x+r)  over rows y-r..y+r
 //
-// Each rectangle count is O(1) via a summed-area table (integral image) of the
-// mask, so collectBoundary is O(bbox area) instead of O(bbox area·(2r+1)²). The
-// result is bit-for-bit identical to the direct convolution (same sx, sy), so the
-// downstream grasps are unchanged. We only scan the bbox expanded by r (clamped to
-// the image): every pixel that can carry a nonzero normal lies within r of a set
-// pixel.
+// The scan walks the rows once, keeping for every column the number of set pixels
+// in the r rows above, the row itself and the r rows below (updated incrementally
+// as the row advances). A prefix sum over those column counts then gives each
+// rectangle count in O(1), so collectBoundary is O(bbox area) time and O(bbox
+// width) memory. (A summed-area table over the whole bbox gave the same counts but
+// cost 8 bytes per bbox pixel: ~47 MB for one large mask of a 3200×2400 image.)
+// The counts are exact integers, so the result is bit-for-bit identical to the
+// direct convolution (same sx, sy) and the downstream grasps are unchanged. We
+// only scan the bbox expanded by r (clamped to the image): every pixel that can
+// carry a nonzero normal lies within r of a set pixel.
 func collectBoundary(b Bitmap) []boundaryPoint {
 	const eps = 1e-10
 	const r = normalRadius
@@ -96,47 +100,6 @@ func collectBoundary(b Bitmap) []boundaryPoint {
 		return nil
 	}
 	bx0, by0, bx1, by1 := ext.MinX, ext.MinY, ext.MaxX, ext.MaxY
-
-	// Summed-area table over the TIGHT bbox: sat[(j+1)*stride+(i+1)] = number of set
-	// pixels in the local rectangle [0..i]×[0..j]. Set pixels exist only inside the
-	// tight bbox, so rectangle queries clamp to it (everything outside is background).
-	bw, bh := bx1-bx0+1, by1-by0+1
-	stride := bw + 1
-	sat := make([]int, stride*(bh+1))
-	for j := 0; j < bh; j++ {
-		rowAbove := j * stride
-		rowCur := (j + 1) * stride
-		base := (by0 + j) * b.W
-		for i := 0; i < bw; i++ {
-			set := 0
-			if b.Data[base+bx0+i] {
-				set = 1
-			}
-			sat[rowCur+i+1] = set + sat[rowAbove+i+1] + sat[rowCur+i] - sat[rowAbove+i]
-		}
-	}
-	// rectCount: number of set pixels in the inclusive GLOBAL rectangle cols [a..b],
-	// rows [c..d], clamped to the tight bbox (outside the bbox is all background).
-	rectCount := func(a, bb, c, d int) int {
-		if a < bx0 {
-			a = bx0
-		}
-		if bb > bx1 {
-			bb = bx1
-		}
-		if c < by0 {
-			c = by0
-		}
-		if d > by1 {
-			d = by1
-		}
-		if a > bb || c > d {
-			return 0
-		}
-		la, lb := a-bx0, bb-bx0
-		lc, ld := c-by0, d-by0
-		return sat[(ld+1)*stride+(lb+1)] - sat[lc*stride+(lb+1)] - sat[(ld+1)*stride+la] + sat[lc*stride+la]
-	}
 
 	// scan region = bbox expanded by r, clamped to the image.
 	sx0, sy0, sx1, sy1 := bx0-r, by0-r, bx1+r, by1+r
@@ -153,22 +116,74 @@ func collectBoundary(b Bitmap) []boundaryPoint {
 		sy1 = b.H - 1
 	}
 
+	// Column arrays cover cols lo..sx1+r (the scan region padded by r so every window is
+	// in range); index k is column lo+k. Columns outside the tight bbox stay 0.
+	lo := sx0 - r
+	ncols := sx1 + r - lo + 1
+	off, bw := bx0-lo, bx1-bx0+1  // index of column bx0, and the bbox width
+	upAll := make([]int32, ncols) // set pixels in rows y-r..y-1 of each column
+	dnAll := make([]int32, ncols) // set pixels in rows y+1..y+r
+	up, dn := upAll[off:off+bw], dnAll[off:off+bw]
+	// tot/dif are prefix sums over the columns: tot = all 2r+1 rows, dif = rows above − rows
+	// below. Entries 0..off (columns left of the bbox) are never written and stay 0.
+	tot := make([]int32, ncols+1)
+	dif := make([]int32, ncols+1)
+	// row returns the bbox columns of a row; rows outside the tight bbox are background.
+	empty := make([]bool, bw)
+	row := func(y int) []bool {
+		if y < by0 || y > by1 {
+			return empty
+		}
+		return b.Data[y*b.W+bx0 : y*b.W+bx1+1]
+	}
+	for d := 1; d <= r; d++ { // window rows of the first scanned row
+		above, below := row(sy0-d), row(sy0+d)
+		for i := 0; i < bw; i++ {
+			up[i] += b2i(above[i])
+			dn[i] += b2i(below[i])
+		}
+	}
+
 	const full = (2*r + 1) * (2*r + 1) // taps in a complete window
 	var pts []boundaryPoint
 	for y := sy0; y <= sy1; y++ {
+		// Sliding down one row: row y-1 enters "above" and row y-1-r leaves it; row y+r
+		// enters "below" and row y leaves it (it becomes the middle row). The first row has
+		// nothing to slide.
+		upIn, upOut, dnIn, dnOut := empty, empty, empty, empty
+		if y > sy0 {
+			upIn, upOut, dnIn, dnOut = row(y-1), row(y-1-r), row(y+r), row(y)
+		}
+		mid := row(y)
+		upIn, upOut, dnIn, dnOut, mid = upIn[:bw], upOut[:bw], dnIn[:bw], dnOut[:bw], mid[:bw]
+		var t, d int32
+		for i := 0; i < bw; i++ {
+			u := up[i] + b2i(upIn[i]) - b2i(upOut[i])
+			v := dn[i] + b2i(dnIn[i]) - b2i(dnOut[i])
+			up[i], dn[i] = u, v
+			t += u + v + b2i(mid[i])
+			d += u - v
+			tot[off+i+1] = t
+			dif[off+i+1] = d
+		}
+		for k := off + bw; k < ncols; k++ { // columns right of the bbox add nothing
+			tot[k+1] = t
+			dif[k+1] = d
+		}
 		for x := sx0; x <= sx1; x++ {
+			k := x - lo // column x-r is index k-r; x+r is k+r
 			// Fast skip: a window that is uniformly background or uniformly set has a
 			// zero normal (sy = #above - #below = 0, likewise sx). This is the common
 			// case — object interior and surrounding background — so only the ~(2r+1)-
 			// wide boundary band runs the full sums. Exact: skipped pixels contribute
 			// nothing to the boundary.
-			if c := rectCount(x-r, x+r, y-r, y+r); c == 0 || c == full {
+			if c := tot[k+r+1] - tot[k-r]; c == 0 || c == full {
 				continue
 			}
 			// sy: rows above (+1) minus rows below (-1), over cols x-r..x+r.
-			sy := float64(rectCount(x-r, x+r, y-r, y-1) - rectCount(x-r, x+r, y+1, y+r))
+			sy := float64(dif[k+r+1] - dif[k-r])
 			// sx: cols left (+1) minus cols right (-1), over rows y-r..y+r.
-			sx := float64(rectCount(x-r, x-1, y-r, y+r) - rectCount(x+1, x+r, y-r, y+r))
+			sx := float64((tot[k] - tot[k-r]) - (tot[k+r+1] - tot[k+1]))
 			n := math.Hypot(sx, sy)
 			if n <= 0 {
 				continue
@@ -180,6 +195,14 @@ func collectBoundary(b Bitmap) []boundaryPoint {
 		}
 	}
 	return pts
+}
+
+// b2i is 1 for a set pixel, else 0.
+func b2i(on bool) int32 {
+	if on {
+		return 1
+	}
+	return 0
 }
 
 // decimate thins the boundary contacts on a polar grid about their centroid,
@@ -328,6 +351,23 @@ func FromMask(mask Bitmap, p Params) []api.Grasp {
 
 	// enumerate all nfingers-combinations of boundary points.
 	combinations(n, nf, func(idx []int) {
+		// pairwise finger distances (gripper widths); all must be in (dmin,dmax). Checked
+		// BEFORE force closure: it is one distance per pair, and on a large mask most pairs
+		// are wider than the gripper opens. Both tests only reject, and every value kept
+		// (minD, insSum) is computed exactly as before, so the order changes no output.
+		minD := math.Inf(1)
+		for a := 0; a < len(idx); a++ {
+			for b := a + 1; b < len(idx); b++ {
+				dist := pts[idx[a]].loc.sub(pts[idx[b]].loc).norm()
+				if !(p.Dmin < dist && dist < p.Dmax) {
+					return
+				}
+				if dist < minD {
+					minD = dist
+				}
+			}
+		}
+
 		// grasp center = mean of contacts (Xmean).
 		var xmean vec2
 		for _, i := range idx {
@@ -339,7 +379,6 @@ func FromMask(mask Bitmap, p Params) []api.Grasp {
 
 		// force directions: each finger toward the finger centroid.
 		// force-closure: F·n > kf for every contact (friction cone).
-		minD := math.Inf(1)
 		insSum := 0.0
 		for _, i := range idx {
 			d := pts[i].loc.sub(xmean)
@@ -353,23 +392,6 @@ func FromMask(mask Bitmap, p Params) []api.Grasp {
 				return
 			}
 			insSum += ins
-		}
-
-		// pairwise finger distances (gripper widths); all must be in (dmin,dmax).
-		ok := true
-		for a := 0; a < len(idx); a++ {
-			for b := a + 1; b < len(idx); b++ {
-				dist := pts[idx[a]].loc.sub(pts[idx[b]].loc).norm()
-				if !(p.Dmin < dist && dist < p.Dmax) {
-					ok = false
-				}
-				if dist < minD {
-					minD = dist
-				}
-			}
-		}
-		if !ok {
-			return
 		}
 
 		cands = append(cands, cand{
