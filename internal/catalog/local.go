@@ -30,7 +30,8 @@ import (
 // blob store). The copy is staged in a hidden directory next to the destination and renamed into
 // place only once it is complete, so a failed install leaves nothing behind and a failed --force
 // leaves the previous install intact. An existing model of the same name is only replaced when
-// opts.Force is set. The source is never written to.
+// opts.Force is set. The source is never written to. Staging directories that an earlier, killed
+// install left in the registry are removed first (cleanStaleStaging).
 func InstallLocal(srcDir string, opts PullOptions) error {
 	out := opts.Out
 	if out == nil {
@@ -108,6 +109,8 @@ func InstallLocal(srcDir string, opts PullOptions) error {
 	if err != nil {
 		return fmt.Errorf("resolve models dir: %w", err)
 	}
+	// Staging leftovers of earlier installs that were killed mid-copy or mid-swap.
+	cleanStaleStaging(realModels, out)
 	dstDir := filepath.Join(opts.ModelsDir, m.Name) // as the user named it, for messages
 	dst := filepath.Join(realModels, m.Name)        // what is actually operated on
 
@@ -164,7 +167,7 @@ func InstallLocal(srcDir string, opts PullOptions) error {
 	aside := ""
 	if dstExists {
 		aside = stage + "-old"
-		if err := os.Rename(dst, aside); err != nil {
+		if err := moveAside(dst, aside); err != nil {
 			return fmt.Errorf("move previous install aside: %w", err)
 		}
 	}
@@ -266,6 +269,9 @@ func copyTree(src, dst string) (int, error) {
 		if err := copyFile(path, target); err != nil {
 			return err
 		}
+		// Keep the staging root's mtime fresh: a file copied into a sub-directory does not
+		// update it, and cleanStaleStaging judges liveness by it.
+		touchDir(dst)
 		count++
 		return nil
 	})

@@ -27,6 +27,12 @@ const minSaneSize = 1024 // 1 KiB
 // idempotent: files already present are skipped unless Force is set. Existing
 // files are never overwritten unless Force is set.
 func Pull(name string, opts PullOptions) error {
+	out := opts.Out
+	if out == nil {
+		out = os.Stderr
+	}
+	// Any install is a good moment to drop what interrupted `pull <folder>` runs left behind.
+	cleanStaleStaging(opts.ModelsDir, out)
 	return pull(name, opts, map[string]bool{})
 }
 
