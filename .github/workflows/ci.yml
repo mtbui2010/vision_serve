@@ -39,7 +39,16 @@ jobs:
         run: go build ./...
 
       - name: go test
-        run: go test ./... -count=1
+        run: |
+          set -o pipefail
+          go test ./... -count=1 2>&1 | tee go-test.log
+
+      # Job logs need a login to read; annotations are public, so surface the failures there.
+      - name: Annotate test failures
+        if: failure()
+        run: |
+          grep -E -- '--- FAIL|^FAIL|panic:|_test\.go:[0-9]+:' go-test.log | head -40 |
+            while IFS= read -r line; do echo "::error::${line}"; done
 
   cross-build-edge:
     name: Cross-build edge (linux/arm64)
