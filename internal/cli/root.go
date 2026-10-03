@@ -16,7 +16,7 @@ var Version = "0.1.18-dev"
 const usage = `visionserve — Ollama for Computer Vision (local-first, edge-GPU)
 
 Usage:
-  visionserve serve                 start the HTTP server (port 11435)
+  visionserve serve                 start the HTTP server on 127.0.0.1:11435 (this machine only)
   visionserve run <model> <image>   load model + predict + print JSON to stdout (alias: predict)
   visionserve list                  list models in the registry
   visionserve ps                    show models loaded in memory (requires a running server)
@@ -29,7 +29,9 @@ Usage:
 
 Common flags:
   --models <dir>   model registry directory (default ~/.visionserve/models, or $VISIONSERVE_MODELS)
-  --addr <host:port>  server address (default :11435)
+  --addr <host:port>  server address (default 127.0.0.1:11435). serve listens on loopback only
+                   by default (no authentication, so no LAN exposure); --addr :11435 listens
+                   on all interfaces (what the Docker images pass)
   --save           (run) save an annotated image, auto-named <stem>.go.<model>.<task>.png
   --save-as <file> (run) save the annotated image to this exact path (.png/.jpg; alias: --out)
   --prompt <text>  (run) text prompt for open-vocab models, e.g. "cat. remote."

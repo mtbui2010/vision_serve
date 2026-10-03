@@ -7,6 +7,9 @@
 # GPU is opt-in via a compose profile (requires nvidia-container-toolkit on the host). Always
 # NAME the service: `--profile gpu up` alone starts both services on the same port 11435.
 #   docker compose -f deploy/docker-compose.yml --profile gpu up --build visionserve-gpu
+#
+# Every `serve` command below passes --addr :11435: the binary's default is 127.0.0.1:11435
+# (loopback only), which inside a container the published port cannot reach.
 
 services:
   visionserve:

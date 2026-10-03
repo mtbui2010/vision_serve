@@ -22,7 +22,7 @@ import (
 func runServe(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	modelsFlag := fs.String("models", "", "model registry directory")
-	addr := fs.String("addr", server.DefaultAddr, "listen address host:port")
+	addr := fs.String("addr", server.DefaultAddr, "listen address host:port; the default is loopback only (this machine, like Ollama) — the API has no authentication. Use :11435 (or 0.0.0.0:11435) to accept other hosts, e.g. in a container")
 	preloadFlag := fs.String("preload", "", "comma-separated models to load at startup, e.g. mobile-sam,rf-detr")
 	idleFlag := fs.Int("idle-unload-seconds", -1, "override every model's idle auto-unload (seconds); 0 = never unload (stay resident, no slow reload after an idle pause); -1 = use each manifest's value")
 	if err := fs.Parse(args); err != nil {

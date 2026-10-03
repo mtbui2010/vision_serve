@@ -139,4 +139,6 @@ VOLUME ["/root/.models"]
 EXPOSE 11435
 ENTRYPOINT ["visionserve"]
 # No --models flag needed: VISIONSERVE_MODELS above points the binary at /root/.models.
+# --addr :11435 is REQUIRED: serve binds 127.0.0.1:11435 by default (loopback only), which in a
+# container is unreachable through -p. Keep it in any command that overrides this CMD.
 CMD ["serve", "--addr", ":11435"]
