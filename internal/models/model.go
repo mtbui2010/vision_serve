@@ -243,8 +243,9 @@ type ExplainPreprocessor interface {
 
 // Exclusive is an optional interface for PipelineModels whose Infer must never run concurrently
 // with another Infer of the SAME loaded model. The runtime (lifecycle) holds a per-session lock
-// around Infer when Exclusive() is true. It replaces package-level mutexes in model packages
-// (groundingdino.PipelineMu), so the concurrency policy lives in one place.
+// around Infer when Exclusive() is true, so the concurrency policy lives in the runtime rather
+// than in package-level mutexes (grounding-dino, grounded-sam and grasp-gd use it; the router keeps
+// a narrower per-model lock around its GroundingDINO section only).
 type Exclusive interface {
 	Exclusive() bool
 }
