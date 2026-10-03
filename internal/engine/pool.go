@@ -79,6 +79,9 @@ func (p *SessionPool) take() (*Session, error) {
 	}
 }
 
+// Size is the number of sessions in the pool: how many inferences it runs at once.
+func (p *SessionPool) Size() int { return cap(p.ch) }
+
 func (p *SessionPool) InputNames() []string  { return p.inputNames }
 func (p *SessionPool) OutputNames() []string { return p.outputNames }
 func (p *SessionPool) ActiveEP() Provider    { return p.activeEP }

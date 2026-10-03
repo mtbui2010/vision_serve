@@ -5,6 +5,7 @@
 //
 // Files:
 //   - manager.go: the Manager, its constructor and the request entrypoints (Predict*, Close).
+//   - admission.go: Admit, the per-model bound on requests running + waiting.
 //   - load.go:    Load (singleflight), building a model from its manifest, creating sessions.
 //   - lease.go:   acquire/release of a live session, Unload, retiring a session.
 //   - reaper.go:  the idle auto-unload loop.
@@ -38,6 +39,11 @@ type Manager struct {
 	// closed is set by Close: nothing may load afterwards.
 	closed bool
 
+	// admitted counts the requests each model currently holds (running + waiting); maxQueue is the
+	// configured bound: queueAuto, queueUnbounded or a positive limit. See admission.go.
+	admitted map[string]int
+	maxQueue int
+
 	// idleOverrideSec, when >= 0, overrides every model's manifest
 	// idle_unload_seconds at Load time (0 = never auto-unload). -1 keeps the
 	// per-manifest value. Set once at startup via SetIdleUnloadOverride.
@@ -58,6 +64,8 @@ func NewManager(reg *registry.Registry) *Manager {
 		live:            map[string]*Session{},
 		loading:         map[string]*loadCall{},
 		idleOverrideSec: -1, // -1 = use each manifest's idle_unload_seconds
+		admitted:        map[string]int{},
+		maxQueue:        maxQueueFromEnv(),
 		stop:            make(chan struct{}),
 	}
 	go m.reaper()

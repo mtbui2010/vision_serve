@@ -160,6 +160,24 @@ func (s *Session) predictSimple(img image.Image) (api.Result, error) {
 	return s.model.Postprocess(outs, meta)
 }
 
+// slots is how many requests this model can run at once: the largest session pool among its
+// roles (1 for single sessions). Admission control bounds each model at a multiple of it.
+func (s *Session) slots() int {
+	n := runnableSlots(s.engine)
+	for _, e := range s.engines {
+		n = max(n, runnableSlots(e))
+	}
+	return n
+}
+
+// runnableSlots is the concurrency of one session or pool (engine.SessionPool reports Size).
+func runnableSlots(r engine.Runnable) int {
+	if p, ok := r.(interface{ Size() int }); ok && p.Size() > 1 {
+		return p.Size()
+	}
+	return 1
+}
+
 // runner is the lifecycle-backed implementation of models.Runner: it exposes the
 // loaded sessions to a PipelineModel by role, without giving away ownership.
 type runner struct {

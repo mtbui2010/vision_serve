@@ -131,6 +131,13 @@ resident — avoids the slow cold reload after an idle pause), and `N` overrides
 model to `N` seconds. The reaper still skips any model whose effective idle timeout is
 `0`.
 
+**Admission control.** `Manager.Admit(model)` reserves a slot before the server decodes an
+upload, so memory does not grow with the number of requests queued behind a busy model. Each
+model admits at most `VISIONSERVE_MAX_QUEUE` requests (running + waiting); unset, the bound is
+`2 × the model's inference slots` (its largest session pool, 1 for a single session) and
+never below 4. `VISIONSERVE_MAX_QUEUE=0` turns the bound off. A
+refused request fails at once with `lifecycle.ErrOverloaded` (HTTP 503); it never waits.
+
 ## Hardware / execution providers
 
 All inference runs through **ONNX Runtime** (VisionServe never implements its own kernels),
