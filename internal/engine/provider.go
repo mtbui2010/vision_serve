@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -44,6 +45,56 @@ func DeviceString(ep Provider) string {
 	default:
 		return "cpu"
 	}
+}
+
+// RunnableDevice is the device string of one session or pool. A pool whose members run on
+// different EPs reports all of them, e.g. "mixed(cpu,gpu:0)", instead of its first member's; a
+// uniform pool and a single session report exactly DeviceString of their EP.
+func RunnableDevice(r Runnable) string {
+	multi, ok := r.(interface{ ActiveEPs() []Provider })
+	if !ok {
+		return DeviceString(r.ActiveEP())
+	}
+	seen := map[string]bool{}
+	var devs []string
+	for _, ep := range multi.ActiveEPs() {
+		if d := DeviceString(ep); !seen[d] {
+			seen[d] = true
+			devs = append(devs, d)
+		}
+	}
+	switch len(devs) {
+	case 0:
+		return DeviceString(r.ActiveEP())
+	case 1:
+		return devs[0]
+	}
+	sort.Strings(devs)
+	return "mixed(" + strings.Join(devs, ",") + ")"
+}
+
+// epSpeedRank orders EPs from fastest to slowest for slowestEP; CPU is the floor.
+var epSpeedRank = map[Provider]int{
+	ProviderTensorRT: 0,
+	ProviderCUDA:     1,
+	ProviderCoreML:   2,
+	ProviderDirectML: 3,
+	ProviderOpenVINO: 4,
+	ProviderCPU:      5,
+}
+
+// slowestEP returns the slowest EP among eps (ProviderCPU for an empty list).
+func slowestEP(eps []Provider) Provider {
+	if len(eps) == 0 {
+		return ProviderCPU
+	}
+	slowest := eps[0]
+	for _, ep := range eps[1:] {
+		if epSpeedRank[ep] > epSpeedRank[slowest] {
+			slowest = ep
+		}
+	}
+	return slowest
 }
 
 // ResolveProviders normalizes + validates the fallback chain from the manifest (runtime.prefer).

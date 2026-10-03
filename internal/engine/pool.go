@@ -26,11 +26,14 @@ type SessionPool struct {
 	closeOnce   sync.Once
 	inputNames  []string
 	outputNames []string
-	activeEP    Provider
+	// eps is each member's active EP. Members are created from the same graph and EP chain, but
+	// each creation falls back on its own: one copy can land on the CPU (a CUDA out-of-memory on
+	// the 4th decoder) while the others run on the GPU.
+	eps []Provider
 }
 
 // NewSessionPool builds a pool from pre-created sessions. All sessions must use
-// the same ONNX graph (identical input/output names and execution provider).
+// the same ONNX graph (identical input/output names).
 func NewSessionPool(sessions []*Session) *SessionPool {
 	ch := make(chan *Session, len(sessions))
 	for _, s := range sessions {
@@ -40,7 +43,9 @@ func NewSessionPool(sessions []*Session) *SessionPool {
 	if len(sessions) > 0 {
 		p.inputNames = sessions[0].InputNames()
 		p.outputNames = sessions[0].OutputNames()
-		p.activeEP = sessions[0].ActiveEP()
+	}
+	for _, s := range sessions {
+		p.eps = append(p.eps, s.ActiveEP())
 	}
 	return p
 }
@@ -84,7 +89,14 @@ func (p *SessionPool) Size() int { return cap(p.ch) }
 
 func (p *SessionPool) InputNames() []string  { return p.inputNames }
 func (p *SessionPool) OutputNames() []string { return p.outputNames }
-func (p *SessionPool) ActiveEP() Provider    { return p.activeEP }
+
+// ActiveEP reports the EP every request on the pool is guaranteed: the members' common EP, or,
+// when they differ, the slowest one among them (a request may be served by that member). Use
+// ActiveEPs or RunnableDevice for the full picture.
+func (p *SessionPool) ActiveEP() Provider { return slowestEP(p.eps) }
+
+// ActiveEPs returns each member's active EP, in creation order.
+func (p *SessionPool) ActiveEPs() []Provider { return append([]Provider(nil), p.eps...) }
 
 // Close drains the pool and destroys every session. Blocks until all in-flight
 // sessions have been returned — call only after all requests are done (e.g. from

@@ -157,6 +157,11 @@ normalizes it and **always appends `cpu` last** so every model can run somewhere
 | `openvino` | Intel CPU / iGPU / VPU | `openvino:0` | |
 | `cpu` | any CPU | `cpu` | always-present final fallback |
 
+Each session falls back on its own, so a multi-session model can end up split across devices.
+When all of its roles agree, `device` is that one value; otherwise it names every role, e.g.
+`mixed(decoder=cpu,encoder=gpu:0)`. A session pool whose copies landed on different EPs (one
+decoder copy out of VRAM, say) reports `mixed(cpu,gpu:0)` for that role.
+
 **TRT auto-detect:** before attempting the TRT EP, VisionServe checks for `libnvinfer.so.10`
 in `LD_LIBRARY_PATH` and common system paths (`/usr/lib/x86_64-linux-gnu`, `/usr/local/lib`,
 etc.). If the lib is absent the TRT EP is skipped entirely — no hard crash, graceful fallback

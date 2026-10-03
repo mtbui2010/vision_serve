@@ -3,6 +3,8 @@ package lifecycle
 import (
 	"fmt"
 	"image"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -23,7 +25,7 @@ import (
 type Session struct {
 	name        string
 	task        api.Task
-	device      string // "gpu:0" or "cpu" — set from the active EP on load
+	device      string // "gpu:0", "cpu", … or "mixed(…)" — from the active EP(s) at load (pipelineDevice)
 	idleTimeout time.Duration
 
 	// man is the manifest this session was built from, captured at load time. Everything that
@@ -60,7 +62,7 @@ func newSimpleSession(name string, task api.Task, m models.Model, eng engine.Run
 	return &Session{
 		name:        name,
 		task:        task,
-		device:      engine.DeviceString(eng.ActiveEP()),
+		device:      engine.RunnableDevice(eng),
 		model:       m,
 		engine:      eng,
 		idleTimeout: idle,
@@ -69,23 +71,45 @@ func newSimpleSession(name string, task api.Task, m models.Model, eng engine.Run
 }
 
 func newPipelineSession(name string, task api.Task, p models.PipelineModel, engs map[string]engine.Runnable, idle time.Duration, now time.Time) *Session {
-	// Determine device from the first session in the map (all roles share the same EP).
-	dev := "cpu"
-	for _, e := range engs {
-		dev = engine.DeviceString(e.ActiveEP())
-		break
-	}
 	ex, ok := p.(models.Exclusive)
 	return &Session{
 		name:        name,
 		task:        task,
-		device:      dev,
+		device:      pipelineDevice(engs),
 		pipeline:    p,
 		engines:     engs,
 		exclusive:   ok && ex.Exclusive(),
 		idleTimeout: idle,
 		lastUsed:    now,
 	}
+}
+
+// pipelineDevice reports where a pipeline's roles run. When every role is on the same device the
+// answer is that device ("gpu:0", "cpu" — the format clients already parse); otherwise it names
+// each role, sorted: "mixed(decoder=cpu,encoder=gpu:0)". Each EP falls back on its own (TensorRT
+// can reject one graph and accept the other), so roles do not necessarily share one. A pipeline
+// with no session reports "cpu".
+func pipelineDevice(engs map[string]engine.Runnable) string {
+	if len(engs) == 0 {
+		return "cpu"
+	}
+	roles := make([]string, 0, len(engs))
+	for role := range engs {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	parts := make([]string, len(roles))
+	uniform := true
+	first := engine.RunnableDevice(engs[roles[0]])
+	for i, role := range roles {
+		dev := engine.RunnableDevice(engs[role])
+		uniform = uniform && dev == first
+		parts[i] = role + "=" + dev
+	}
+	if uniform {
+		return first
+	}
+	return "mixed(" + strings.Join(parts, ",") + ")"
 }
 
 // inferPipeline runs the pipeline model's Infer, under the session's lock when it is Exclusive.
