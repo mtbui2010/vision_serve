@@ -78,6 +78,45 @@ func TestUnloadDuringLoadRetiresTheNewSession(t *testing.T) {
 	}
 }
 
+// A request that arrives AFTER Unload returned, while the cancelled load is still building (POST
+// /api/load right after POST /api/unload answered), did not ask for that load: it used to join it
+// and fail with "unloaded while it was loading" (HTTP 500) until the old build ended. It must wait
+// for the cancelled build (two builds of one model never overlap) and then load the model.
+func TestLoadAfterUnloadDuringLoadLoadsAgain(t *testing.T) {
+	root := t.TempDir()
+	writeTestModel(t, root, "again", "test-pipe", "")
+	m, op := newFakeManager(t, scanRegistry(t, root))
+	gate := testHooks.gate(t, "again")
+
+	leader := make(chan error, 1)
+	go func() { leader <- m.Load("again") }()
+	<-gate.started
+	if err := m.Unload("again"); err != nil {
+		t.Fatal(err)
+	}
+	after := make(chan error, 1)
+	go func() { after <- m.Load("again") }()
+	waitFor(t, "the late request to wait on the cancelled load", func() bool { return m.waitersFor("again") == 1 })
+	if n := len(op.engines()); n != 0 {
+		t.Fatalf("%d engines built while the cancelled load still runs, want 0 (no overlapping build)", n)
+	}
+	close(gate.proceed)
+
+	if err := <-leader; err == nil {
+		t.Error("the load that was unloaded under it reported success")
+	}
+	if err := <-after; err != nil {
+		t.Fatalf("a Load issued after Unload returned failed: %v", err)
+	}
+	if !m.IsLoaded("again") {
+		t.Fatal("model not loaded after a Load issued after the Unload")
+	}
+	engs := op.engines()
+	if len(engs) != 2 || !engs[0].closed.Load() || engs[1].closed.Load() {
+		t.Fatalf("want the cancelled build closed and one live rebuild, got %d engines", len(engs))
+	}
+}
+
 // Shutdown during a load (a --preload still building when SIGTERM arrives): the session must be
 // closed when the load finishes, and nothing may load after Close.
 func TestCloseDuringLoadDropsTheNewSession(t *testing.T) {

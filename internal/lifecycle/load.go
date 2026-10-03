@@ -53,11 +53,15 @@ func (m *Manager) Load(name string) error {
 			m.mu.Unlock()
 			return m.lead(name, call)
 		}
+		// A request that arrives after an Unload already cancelled this load did not ask for it:
+		// it waits for the cancelled load to finish (two builds of one model must not overlap)
+		// and then loads the model again.
+		joinedCancelled := call.cancelled
 		call.waiters++
 		m.mu.Unlock()
 		<-call.done
 		// Nothing writes call after done is closed (it has left m.loading), so no lock is needed.
-		if call.cancelled {
+		if call.cancelled && !joinedCancelled {
 			// Unloaded while it was loading. This request asked for THAT load; loading the model
 			// again for it would undo the unload the moment it returned.
 			return call.err
