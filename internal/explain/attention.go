@@ -40,9 +40,9 @@ func (e *attentionExplainer) Heatmap(
 			"attention: expected 5D tensor [L,B,H,Q,S], got shape %v", attn.Shape)
 	}
 
-	numLayers  := int(attn.Shape[0])
+	numLayers := int(attn.Shape[0])
 	// batch    := int(attn.Shape[1])  // always 1
-	numHeads   := int(attn.Shape[2])
+	numHeads := int(attn.Shape[2])
 	numQueries := int(attn.Shape[3])
 	numSpatial := int(attn.Shape[4])
 
@@ -56,7 +56,7 @@ func (e *attentionExplainer) Heatmap(
 	// Element index: l*(numHeads*numQueries*numSpatial) + h*(numQueries*numSpatial) + q*numSpatial + s
 	spatialMap := make([]float32, numSpatial)
 	stride_LBH := numHeads * numQueries * numSpatial // stride per (layer, batch=0 implied)
-	stride_H   := numQueries * numSpatial
+	stride_H := numQueries * numSpatial
 	for l := 0; l < numLayers; l++ {
 		for h := 0; h < numHeads; h++ {
 			base := l*stride_LBH + h*stride_H + detectionIdx*numSpatial

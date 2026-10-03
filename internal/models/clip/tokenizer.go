@@ -67,11 +67,11 @@ var (
 //
 // A Tokenizer is immutable after loading and therefore safe for concurrent use.
 type Tokenizer struct {
-	vocab   map[string]int   // BPE token string → id
-	idToTok []string         // id → token string (for Decode)
-	ranks   map[string]int   // merge pair "a b" → rank (lower merges first)
-	byteEnc map[byte]rune    // GPT-2 byte→unicode mapping
-	byteDec map[rune]byte    // inverse, for Decode
+	vocab   map[string]int // BPE token string → id
+	idToTok []string       // id → token string (for Decode)
+	ranks   map[string]int // merge pair "a b" → rank (lower merges first)
+	byteEnc map[byte]rune  // GPT-2 byte→unicode mapping
+	byteDec map[rune]byte  // inverse, for Decode
 }
 
 // LoadTokenizer reads vocab.json + merges.txt from the model directory (the same

@@ -13,7 +13,8 @@ import (
 //
 // ===================== OUTPUT FORMAT =====================
 // EfficientNet-B0 and MobileNet-V3 emit a single output tensor of shape:
-//   [1, num_classes]   — raw logits (before softmax), float32
+//
+//	[1, num_classes]   — raw logits (before softmax), float32
 //
 // We apply softmax to obtain probabilities, then select the top-K entries.
 // K = cfg.MaxDet if > 0, otherwise defaults to 5.

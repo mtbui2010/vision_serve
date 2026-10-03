@@ -617,4 +617,3 @@ func (b blob) render(dst []float32, w, h int) {
 		}
 	}
 }
-

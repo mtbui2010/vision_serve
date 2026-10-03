@@ -3,11 +3,11 @@
 package registry
 
 import (
-	"strings"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
 

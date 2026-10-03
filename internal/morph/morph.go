@@ -23,8 +23,8 @@ func Dilate(data []bool, w, h, radius int) []bool {
 	if erode {
 		r = -r
 	}
-	tmp := pass1D(data, w, h, r, erode, true)  // horizontal
-	return pass1D(tmp, w, h, r, erode, false)  // vertical
+	tmp := pass1D(data, w, h, r, erode, true) // horizontal
+	return pass1D(tmp, w, h, r, erode, false) // vertical
 }
 
 // pass1D runs one separable 1-D dilation (OR) or erosion (AND) over a sliding window of

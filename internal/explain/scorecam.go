@@ -55,8 +55,8 @@ func (e *scoreCamExplainer) Heatmap(
 // uses ScoreCAMHeatmap for the full version when it has a detect runner.
 func scoreCAMStructural(feat engine.Tensor, topChannels, origW, origH int) ([]float32, int, int, error) {
 	numC := int(feat.Shape[1])
-	fH   := int(feat.Shape[2])
-	fW   := int(feat.Shape[3])
+	fH := int(feat.Shape[2])
+	fW := int(feat.Shape[3])
 
 	k := topChannels
 	if k <= 0 || k > numC {
@@ -84,7 +84,7 @@ func scoreCAMStructural(feat engine.Tensor, topChannels, origW, origH int) ([]fl
 
 	heatmap := make([]float32, origW*origH)
 	for i := 0; i < k; i++ {
-		c    := entries[i].idx
+		c := entries[i].idx
 		base := c * fH * fW
 
 		ch := make([]float32, fH*fW)
@@ -126,8 +126,8 @@ func ScoreCAMHeatmap(
 		return nil, 0, 0, fmt.Errorf("score_cam: expected 4D tensor [1,C,H,W], got %v", featTensor.Shape)
 	}
 	numC := int(featTensor.Shape[1])
-	fH   := int(featTensor.Shape[2])
-	fW   := int(featTensor.Shape[3])
+	fH := int(featTensor.Shape[2])
+	fW := int(featTensor.Shape[3])
 
 	k := topChannels
 	if k <= 0 || k > numC {
@@ -155,7 +155,7 @@ func ScoreCAMHeatmap(
 
 	result := make([]float32, origW*origH)
 	for i := 0; i < k; i++ {
-		c    := entries[i].idx
+		c := entries[i].idx
 		base := c * fH * fW
 
 		ch := make([]float32, fH*fW)

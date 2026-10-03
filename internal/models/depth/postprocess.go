@@ -12,7 +12,8 @@ import (
 //
 // ===================== OUTPUT FORMAT =====================
 // Both Depth Anything V2 and MiDaS emit a single output tensor of shape:
-//   [1, H, W]   — inverse-depth (disparity) values, unnormalized float32
+//
+//	[1, H, W]   — inverse-depth (disparity) values, unnormalized float32
 //
 // We min-max normalize to [0, 1] so the values are comparable across inputs and
 // models. The caller receives a row-major flat slice of length H*W.
