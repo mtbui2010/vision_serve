@@ -13,7 +13,10 @@ preprocessing library,
 Here is the same photo prepared for five different models — these are the real tensors, fetched
 from the server's `/api/preprocess` endpoint and turned back into pictures:
 
-<!-- FIGURE: preprocess-modes -->
+<figure markdown="span">
+  ![One photo, prepared for four different models — real tensors from /api/preprocess](../assets/img/preprocess-modes-177015.jpg){ loading=lazy }
+  <figcaption>One photo, prepared for four different models — real tensors from /api/preprocess<br/><code>rf-detr + rf-detr-nano + clip + mobile-sam</code> · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+</figure>
 
 | Mode (`resize:`) | What it does | Used by |
 |---|---|---|
@@ -61,7 +64,10 @@ input_y = original_y × ScaleY + PadY
 Postprocessing applies the inverse, so every `bbox` VisionServe returns is in your photo's
 pixels:
 
-<!-- FIGURE: bbox-mapping -->
+<figure markdown="span">
+  ![The same detection in the model's input space and in the original photo](../assets/img/bbox-mapping-177015.jpg){ loading=lazy }
+  <figcaption>The same detection in the model's input space and in the original photo<br/><code>rf-detr-nano</code> · 17 ms on gpu:0 · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+</figure>
 
 !!! code "Where in the code"
     - [`spec.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go) — the `Spec` (mode, size, mean/std…) and the `Meta` record.

@@ -12,7 +12,10 @@ objects, depth, faces, text, and more. It is free, open source (Apache-2.0), nee
 and sends nothing anywhere. If you know [Ollama](https://ollama.com) for language models, this is
 the same idea for images.
 
-<!-- FIGURE: hero -->
+<figure markdown="span">
+  ![Grounded-SAM: the words "dog. person. bench." in, boxes and outlines out](assets/img/grounded-sam-372819.jpg){ loading=lazy }
+  <figcaption>Grounded-SAM: the words "dog. person. bench." in, boxes and outlines out<br/><code>grounded-sam</code> · prompt='dog. person. bench.' · 225 ms on gpu:0 · Photo: COCO val2017 #372819 (<a href="http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+</figure>
 
 ## In one minute
 

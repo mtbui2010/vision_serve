@@ -88,7 +88,10 @@ func (n normalizer) value(c int, p float32) float32 {
 Only modes that a served architecture actually uses exist, and each reproduces its upstream
 recipe exactly (rounding included).
 
-<!-- FIGURE: preprocess-modes -->
+<figure markdown="span">
+  ![One photo, prepared for four different models — real tensors from /api/preprocess](../assets/img/preprocess-modes-177015.jpg){ loading=lazy }
+  <figcaption>One photo, prepared for four different models — real tensors from /api/preprocess<br/><code>rf-detr + rf-detr-nano + clip + mobile-sam</code> · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+</figure>
 
 | Mode | What it does | Tensor size | Default filter | Used by |
 |---|---|---|---|---|
@@ -258,7 +261,10 @@ func (m Meta) Affine() geom.Affine {
 A decoder inverts it with `geom.Affine.BoxToOrig` and then clips with `geom.Clamp`. The box
 format is `[x, y, w, h]`, top-left corner plus size, everywhere.
 
-<!-- FIGURE: bbox-mapping -->
+<figure markdown="span">
+  ![The same detection in the model's input space and in the original photo](../assets/img/bbox-mapping-177015.jpg){ loading=lazy }
+  <figcaption>The same detection in the model's input space and in the original photo<br/><code>rf-detr-nano</code> · 17 ms on gpu:0 · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+</figure>
 
 ```go title="internal/vision/geom/geom.go"
 func (a Affine) BoxToOrig(b [4]float64) [4]float64 {
