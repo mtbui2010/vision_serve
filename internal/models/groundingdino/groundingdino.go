@@ -62,6 +62,26 @@
 // equivalent — isin -> Equal/Or chain, cummax/cummin -> LxL compare + ReduceMax/ReduceMin,
 // torch.eye -> (i==j) — so the mask follows the dynamic sequence_length. Its logits match HF
 // PyTorch to ~1e-4 in sigmoid space and it is order-stable across prompt permutations.
+//
+// # Concurrency: one request at a time per loaded model, not per process
+//
+// GroundingDINO pipelines used to share one package-level mutex (PipelineMu, commit c74788c,
+// June 2026): under concurrent load the GroundingDINO graph plus the chained MobileSAM decoder
+// pool produced sporadic ORT errors and the Go-runtime fatal "non-Go code set up signal handler
+// without SA_ONSTACK". The causes were fixed underneath it since — the process re-execs with
+// GODEBUG=asyncpreemptoff=1 (cmd/visionserve), and every ORT session runs on its own
+// OS-thread-pinned worker (engine.Session, 4a0c74c), which ended the per-thread CUDA context leak
+// ("CUBLAS failure 3") that concurrent cgo calls from migrating goroutines caused. What the global
+// lock still did was serialise UNRELATED models (grounded-sam waited on grounding-dino, the
+// default router on both).
+//
+// The policy now lives in the runtime: grounding-dino, grounded-sam and grasp-gd implement
+// models.Exclusive, so lifecycle runs one Infer at a time on each loaded model and different
+// models run side by side; the rfdetr-gdino router locks only its GroundingDINO section, per
+// instance (internal/models/hybrid). A 32-way mixed GPU stress over grounding-dino, grounded-sam,
+// rfdetr-gdino-sam and gdino-siglip-sam returned no error and detections identical to sequential
+// runs; MobileSAM masks flip 1-5 boundary pixels in a few responses under concurrent GPU load,
+// exactly as they did under the old lock (see the commit that removed PipelineMu).
 package groundingdino
 
 import (
@@ -69,7 +89,6 @@ import (
 	"image"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
@@ -81,18 +100,6 @@ import (
 func init() {
 	models.Register("grounding-dino", New)
 }
-
-// PipelineMu serializes whole GroundingDINO-based pipelines end-to-end (grounding-dino,
-// grounded-sam, grasp-gd). The GroundingDINO graph plus the chained MobileSAM decoder pool
-// issue many concurrent cgo ONNX Runtime calls; under concurrent request load this manifests
-// as sporadic request errors and (without async-preemption disabled) the Go-runtime fatal
-// "non-Go code set up signal handler without SA_ONSTACK" from the ORT/CUDA native layer.
-// These pipelines are heavy and low-QPS, so we trade cross-request concurrency for correctness
-// by running one whole pipeline at a time. Pipelines that do NOT use GroundingDINO
-// (e.g. grasp-rfdetr) are unaffected and stay fully concurrent — and so are the requests of a
-// mixed pipeline that never reach GroundingDINO: the rfdetr-gdino router takes the lock just
-// before its GroundingDINO pass and holds it to the end, so closed-set requests stay concurrent.
-var PipelineMu sync.Mutex
 
 const roleModel = "model"
 
@@ -123,10 +130,12 @@ func (m *groundingDINO) Task() models.Task { return models.TaskOpenVocab }
 // Roles: a single session keyed "model".
 func (m *groundingDINO) Roles() []string { return []string{roleModel} }
 
+// Exclusive implements models.Exclusive: lifecycle runs one Infer at a time on this loaded model
+// (see "Concurrency" in the package doc).
+func (m *groundingDINO) Exclusive() bool { return true }
+
 // Infer runs the full open-vocab detection pipeline for the text prompt.
 func (m *groundingDINO) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
-	PipelineMu.Lock()
-	defer PipelineMu.Unlock()
 	if strings.TrimSpace(prompt.Text) == "" {
 		return models.Result{}, fmt.Errorf("grounding-dino requires a text prompt, e.g. --prompt \"cat. remote.\"")
 	}
@@ -143,8 +152,7 @@ func (m *groundingDINO) Infer(img image.Image, prompt models.Prompt, r models.Ru
 	return models.Result{Detections: dets}, nil
 }
 
-// Option tunes Detect. It is variadic so the existing call sites (grounded-sam, grasp,
-// hybrid) keep compiling unchanged.
+// Option tunes Detect (variadic: a caller that knows nothing gets the safe defaults).
 type Option func(*detectOpts)
 
 type detectOpts struct{ joint bool }

@@ -91,3 +91,15 @@ func TestManifestsValid(t *testing.T) {
 		t.Fatalf("grasp-gd architecture = %q, want grasp", gd.ArchOrName())
 	}
 }
+
+// grasp-gd (GroundingDINO detector) runs one request at a time per loaded model; grasp-rfdetr and
+// the class-agnostic grasp stay concurrent.
+func TestExclusiveOnlyWithGroundingDINO(t *testing.T) {
+	for _, serialize := range []bool{true, false} {
+		var b models.Base = &graspModel{serialize: serialize}
+		ex, ok := b.(models.Exclusive)
+		if !ok || ex.Exclusive() != serialize {
+			t.Errorf("serialize=%v: Exclusive() = %v", serialize, ok && ex.Exclusive())
+		}
+	}
+}

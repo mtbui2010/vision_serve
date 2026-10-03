@@ -28,10 +28,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
-	"visionserve/internal/models/groundingdino"
 	"visionserve/internal/pipeline"
 )
 
@@ -54,6 +54,9 @@ type hybrid struct {
 	rs      *pipeline.CropNamer // optional SigLIP crop+text towers; nil = no rescoring
 	fp      *fastPath           // optional distilled head; nil = unknown words go to GroundingDINO
 	rt      *pipeline.Router    // the stages above, composed
+
+	// open serialises THIS model's GroundingDINO section (the router's OpenLock).
+	open sync.Mutex
 }
 
 // New builds the router. The RF-DETR sub-model is created from the SAME cfg, so the
@@ -148,15 +151,16 @@ func (m *hybrid) wire(gdino pipeline.Detector) {
 		Name:  m.cfg.Name,
 		Vocab: pipeline.ClosedVocab(m.cfg.Labels),
 		Open:  gdino,
-		// groundingdino.PipelineMu serialises GroundingDINO pipelines end to end — the
-		// GroundingDINO pass AND the stages chained after it — because that combination under
-		// concurrent load produced sporadic ORT errors (see its comment). It is taken only when a
-		// request actually reaches GroundingDINO, just before the pass, and held to the end so
-		// the chained SAM stage stays covered. A request answered by RF-DETR alone (every word in
-		// its vocabulary, no prompt, or the distilled head) never runs GroundingDINO and is
-		// exactly the grasp-rfdetr shape the lock has always left concurrent; taking the lock
-		// for it made the recommended default model serialise every request on the server.
-		OpenLock: &groundingdino.PipelineMu,
+		// One GroundingDINO section at a time on THIS model — the GroundingDINO pass and the
+		// stages chained after it (rescoring, MobileSAM) — like every GroundingDINO pipeline (see
+		// the groundingdino package doc). It is per instance: other models, including other
+		// GroundingDINO pipelines, are not held up by it (the process-wide PipelineMu it
+		// replaced made them wait on each other). It is taken only when a request reaches
+		// GroundingDINO, just before the pass, and held to the end. A request answered by RF-DETR
+		// alone (every word in its vocabulary, no prompt, or the distilled head) never takes it:
+		// taking a lock for those made the recommended default model serialise every request.
+		// Not models.Exclusive for that reason.
+		OpenLock: &m.open,
 	}
 	if m.rf != nil {
 		rt.Closed = &pipeline.Closed{Role: roleRFDETR, Model: m.rf, DETR: true, Labels: len(m.cfg.Labels), Prefix: "hybrid"}

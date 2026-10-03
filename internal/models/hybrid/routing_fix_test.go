@@ -86,9 +86,10 @@ func (fakeRF) Postprocess([]engine.Tensor, models.PreprocessMeta) (models.Result
 	return models.Result{Detections: []models.Detection{{Class: "cup", Conf: 0.9, BBox: [4]float64{1, 1, 4, 4}}}}, nil
 }
 
-// lockProbeRunner answers the rfdetr role, and records whether groundingdino.PipelineMu was
-// held while the gdino role ran.
+// lockProbeRunner answers the rfdetr role, and records whether lock (the model's GroundingDINO
+// lock) was held while the gdino role ran.
 type lockProbeRunner struct {
+	lock        *sync.Mutex
 	mu          sync.Mutex
 	gdinoLocked []bool
 }
@@ -98,9 +99,9 @@ func (r *lockProbeRunner) Run(role string, in map[string]engine.Tensor) ([]engin
 	case roleRFDETR:
 		return []engine.Tensor{engine.F32(make([]float32, 4), 1, 1, 4), engine.F32(make([]float32, 1), 1, 1, 1)}, nil
 	case roleGDINO:
-		held := !groundingdino.PipelineMu.TryLock()
+		held := !r.lock.TryLock()
 		if !held {
-			groundingdino.PipelineMu.Unlock()
+			r.lock.Unlock()
 		}
 		r.mu.Lock()
 		r.gdinoLocked = append(r.gdinoLocked, held)
@@ -140,17 +141,17 @@ func gdinoTokenizer(t *testing.T) *groundingdino.Tokenizer {
 }
 
 // B5: a request GroundingDINO will not touch (every word in RF-DETR's vocabulary, or no prompt)
-// must not queue behind PipelineMu — the router is the recommended default, and serialising it
-// globally serialised every closed-set request on the server.
-func TestInferClosedSetDoesNotTakePipelineMu(t *testing.T) {
+// must not queue behind the GroundingDINO lock — the router is the recommended default, and
+// serialising it serialised every closed-set request on the server.
+func TestInferClosedSetDoesNotTakeTheGroundingDINOLock(t *testing.T) {
 	m := newLockTestHybrid(t)
-	groundingdino.PipelineMu.Lock() // another GroundingDINO pipeline is running
-	defer groundingdino.PipelineMu.Unlock()
+	m.open.Lock() // a GroundingDINO request is running on this very model
+	defer m.open.Unlock()
 
 	for _, prompt := range []string{"cup.", ""} {
 		done := make(chan error, 1)
 		go func() {
-			_, err := m.Infer(image.NewRGBA(image.Rect(0, 0, 8, 8)), models.Prompt{Text: prompt}, &lockProbeRunner{})
+			_, err := m.Infer(image.NewRGBA(image.Rect(0, 0, 8, 8)), models.Prompt{Text: prompt}, &lockProbeRunner{lock: &m.open})
 			done <- err
 		}()
 		select {
@@ -159,15 +160,15 @@ func TestInferClosedSetDoesNotTakePipelineMu(t *testing.T) {
 				t.Fatalf("prompt %q: %v", prompt, err)
 			}
 		case <-time.After(5 * time.Second):
-			t.Fatalf("prompt %q: Infer blocked on PipelineMu although GroundingDINO never runs", prompt)
+			t.Fatalf("prompt %q: Infer blocked on the GroundingDINO lock although GroundingDINO never runs", prompt)
 		}
 	}
 }
 
-// The guarantee PipelineMu exists for is kept: whenever the gdino role runs, the lock is held.
-func TestInferHoldsPipelineMuWhileGroundingDINORuns(t *testing.T) {
+// Whenever the gdino role runs, this model's lock is held — and released when Infer returns.
+func TestInferHoldsTheGroundingDINOLockWhileItRuns(t *testing.T) {
 	m := newLockTestHybrid(t)
-	r := &lockProbeRunner{}
+	r := &lockProbeRunner{lock: &m.open}
 	if _, err := m.Infer(image.NewRGBA(image.Rect(0, 0, 8, 8)), models.Prompt{Text: "cup. zebra."}, r); err != nil {
 		t.Fatal(err)
 	}
@@ -176,13 +177,44 @@ func TestInferHoldsPipelineMuWhileGroundingDINORuns(t *testing.T) {
 	}
 	for i, held := range r.gdinoLocked {
 		if !held {
-			t.Errorf("gdino pass %d ran without PipelineMu", i)
+			t.Errorf("gdino pass %d ran without the lock", i)
 		}
 	}
-	if !groundingdino.PipelineMu.TryLock() {
-		t.Fatal("PipelineMu still held after Infer returned")
+	if !m.open.TryLock() {
+		t.Fatal("the lock is still held after Infer returned")
 	}
-	groundingdino.PipelineMu.Unlock()
+	m.open.Unlock()
+}
+
+// The lock is per loaded MODEL: a GroundingDINO request on one router does not wait for another
+// router's (the process-wide groundingdino.PipelineMu made every GroundingDINO pipeline on the
+// server queue behind every other).
+func TestGroundingDINOLockIsPerModel(t *testing.T) {
+	a, b := newLockTestHybrid(t), newLockTestHybrid(t)
+	a.open.Lock() // model a is busy in its GroundingDINO section
+	defer a.open.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := b.Infer(image.NewRGBA(image.Rect(0, 0, 8, 8)), models.Prompt{Text: "zebra."}, &lockProbeRunner{lock: &b.open})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("model b's GroundingDINO request waited for model a")
+	}
+}
+
+// The router locks its GroundingDINO section itself, so it must NOT ask the runtime to serialise
+// whole requests: that would put closed-set requests back behind GroundingDINO ones.
+func TestRouterIsNotExclusive(t *testing.T) {
+	var m models.Base = &hybrid{}
+	if ex, ok := m.(models.Exclusive); ok && ex.Exclusive() {
+		t.Fatal("the router asks lifecycle for whole-request exclusivity")
+	}
 }
 
 // B8: when EVERY detection handed to the rescorer is degenerate (e.g. one sub-pixel box on the

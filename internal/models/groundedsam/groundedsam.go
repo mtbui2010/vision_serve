@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"visionserve/internal/models"
-	"visionserve/internal/models/groundingdino"
 	"visionserve/internal/pipeline"
 )
 
@@ -63,11 +62,13 @@ func (m *groundedSAM) Roles() []string { return []string{roleGDINO, roleEncoder,
 // segmented concurrently rather than sequentially.
 func (m *groundedSAM) PoolSizes() map[string]int { return map[string]int{roleDecoder: 4} }
 
+// Exclusive implements models.Exclusive: lifecycle runs one whole GroundingDINO → MobileSAM
+// pipeline at a time on this loaded model; other models are not held up by it (it replaced the
+// process-wide groundingdino.PipelineMu — see the groundingdino package doc).
+func (m *groundedSAM) Exclusive() bool { return true }
+
 // Infer runs detection then per-box segmentation; masks are index-aligned with detections.
 func (m *groundedSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
-	// Serialize the whole GroundingDINO pipeline (see groundingdino.PipelineMu).
-	groundingdino.PipelineMu.Lock()
-	defer groundingdino.PipelineMu.Unlock()
 	if strings.TrimSpace(prompt.Text) == "" {
 		return models.Result{}, fmt.Errorf("grounded-sam requires a text prompt, e.g. --prompt \"cat. remote.\"")
 	}

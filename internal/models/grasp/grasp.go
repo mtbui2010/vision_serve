@@ -26,7 +26,6 @@ import (
 	"strings"
 
 	"visionserve/internal/models"
-	"visionserve/internal/models/groundingdino"
 	"visionserve/internal/models/mobilesam"
 	"visionserve/internal/pipeline"
 )
@@ -65,9 +64,9 @@ type graspModel struct {
 	sam     segmenter              // MobileSAM: its roles, and the segmentation stage
 	planner pipeline.AnalyticGrasp // manifest gripper defaults; the request may override them
 	p       pipeline.Grasp
-	// serialize is true only for the GroundingDINO detector variant (grasp-gd), which must
-	// run one whole pipeline at a time (see groundingdino.PipelineMu). grasp-rfdetr and the
-	// class-agnostic automask path stay fully concurrent.
+	// serialize is true only for the GroundingDINO detector variant (grasp-gd), which runs one
+	// whole pipeline at a time per loaded model (Exclusive). grasp-rfdetr and the class-agnostic
+	// automask path stay fully concurrent.
 	serialize bool
 }
 
@@ -124,7 +123,7 @@ func (g *graspModel) setDetector(name string, cfg models.Config) error {
 			return fmt.Errorf("grasp: detector grounding-dino: %w", err)
 		}
 		g.p.Detector, g.p.Words = det, gdinoWords
-		g.serialize = true // GroundingDINO pipeline must be serialized (see PipelineMu)
+		g.serialize = true // one GroundingDINO pipeline at a time on this model (Exclusive)
 		return nil
 	}
 	base, err := models.New(name, cfg)
@@ -167,13 +166,14 @@ func (g *graspModel) PoolSizes() map[string]int {
 	return nil
 }
 
+// Exclusive implements models.Exclusive for grasp-gd: lifecycle runs one Infer at a time on it,
+// as on every GroundingDINO pipeline (see the groundingdino package doc); other models are not
+// held up by it.
+func (g *graspModel) Exclusive() bool { return g.serialize }
+
 // Infer runs the pipeline. With a detector: detect → size-filter → segment per box
 // → grasp per mask (class/conf inherited from the detection). Without a detector:
 // the request's boxes, or automask → size-filter → grasp per mask (class-agnostic).
 func (g *graspModel) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
-	if g.serialize {
-		groundingdino.PipelineMu.Lock()
-		defer groundingdino.PipelineMu.Unlock()
-	}
 	return g.p.Infer(pipeline.Call{Img: img, Prompt: prompt, Runner: r})
 }

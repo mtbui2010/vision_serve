@@ -79,3 +79,12 @@ func TestVocabPath(t *testing.T) {
 		t.Errorf("VocabPath without weights = %q", got)
 	}
 }
+
+// grounding-dino asks lifecycle for one request at a time on each loaded model (it replaced the
+// process-wide PipelineMu, which also serialised unrelated GroundingDINO pipelines).
+func TestExclusive(t *testing.T) {
+	var b models.Base = &groundingDINO{}
+	if ex, ok := b.(models.Exclusive); !ok || !ex.Exclusive() {
+		t.Fatal("grounding-dino is not Exclusive")
+	}
+}
