@@ -133,7 +133,21 @@ func pull(name string, opts PullOptions, visiting map[string]bool) error {
 			fmt.Fprintf(out, "  downloading %s <- %s\n", file.LocalFilename, file.HFFilename)
 			url = ResolveURL(entry.HFRepo, file.HFFilename)
 		}
-		if _, err := downloadURL(url, destPath, want, out); err != nil {
+		// A pinned file is downloaded resumably: an interrupted pull keeps .<file>.partial and the
+		// next pull continues it (HTTP Range) instead of starting a multi-hundred-MB file over. The
+		// pin is what makes that safe — the whole file, prefix included, is hashed before it is
+		// used. Unpinned files restart from zero. Safe under the per-model lock taken above.
+		fetch := downloadURL
+		if file.SHA256 != "" {
+			fetch = downloadResumable
+		}
+		if _, err := fetch(url, destPath, want, out); err != nil {
+			if file.SHA256 != "" {
+				if st, serr := os.Stat(partialPath(destPath)); serr == nil && st.Size() > 0 {
+					return fmt.Errorf("pull %s: %w\n  %s of %s kept; run the same pull again to resume",
+						entry.Name, err, humanBytes(st.Size()), file.LocalFilename)
+				}
+			}
 			return fmt.Errorf("pull %s: %w", entry.Name, err)
 		}
 	}

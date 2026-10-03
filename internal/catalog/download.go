@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -121,62 +124,257 @@ func (ir *idleReader) Read(p []byte) (int, error) {
 }
 
 // downloadURL is the shared streaming implementation used by DownloadFile, DownloadDirect,
-// DownloadGDrive and Pull. It streams url into a uniquely named temp file next to destPath,
-// hashing as it writes, and checks the result — size against Content-Length, the size floor, the
+// DownloadGDrive and Pull. It streams url into a temp file next to destPath, hashing as it
+// writes, and checks the result — size against what the server announced, the size floor, the
 // HTML-error-page sniff and, when pinned, the SHA-256 — BEFORE renaming it over destPath. A file
-// that fails any check never replaces what was there, and concurrent downloads of the same file
-// never share a temp file. Large files are never buffered in RAM.
+// that fails any check never replaces what was there. Large files are never buffered in RAM.
+//
+// The temp file is uniquely named, so concurrent downloads of the same file never share one, and
+// it is removed when the download fails. Pull, which holds the per-model lock, uses
+// downloadResumable instead.
 func downloadURL(url, destPath string, want expect, progressOut io.Writer) (int64, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return 0, fmt.Errorf("download %s: %w", url, err)
-	}
-	resp, err := newDownloadClient().Do(req)
-	if err != nil {
-		return 0, fmt.Errorf("download %s: %w", url, err)
-	}
-	defer resp.Body.Close()
+	return download(url, destPath, want, progressOut, false)
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("download %s: unexpected status %s", url, resp.Status)
-	}
+// downloadResumable is downloadURL with a temp file that survives an interrupted transfer: it has
+// a fixed name (partialPath), is KEPT when the connection drops, and the next call continues it
+// with an HTTP Range request when the server supports one (206); a server that ignores the Range
+// (200) or refuses it (416) gets a fresh download. The bytes already on disk are hashed before
+// the request, so the SHA-256 pin covers the whole file exactly as for a fresh download; a resumed
+// file that fails verification is discarded and fetched once more from zero.
+//
+// The caller must hold the per-model lock (a fixed temp name is only safe for one writer) and
+// should pass a pinned want.SHA256: without a pin nothing would notice a prefix that came from a
+// different upstream version than the rest. Pull resumes only pinned files.
+func downloadResumable(url, destPath string, want expect, progressOut io.Writer) (int64, error) {
+	return download(url, destPath, want, progressOut, true)
+}
 
+// partialPath is where downloadResumable keeps an unfinished download of destPath.
+func partialPath(destPath string) string {
+	return filepath.Join(filepath.Dir(destPath), "."+filepath.Base(destPath)+partialSuffix)
+}
+
+const partialSuffix = ".partial"
+
+// errRestart: the server would not continue the partial file (416, or a 206 for another range);
+// the caller discards it and downloads from zero.
+var errRestart = errors.New("server cannot resume this download")
+
+// tempFile is a download in progress: the file, the running hash of its whole content and its
+// first bytes (for the HTML sniff).
+type tempFile struct {
+	f      *os.File
+	path   string
+	h      hash.Hash
+	head   headBuffer
+	n      int64 // bytes in the file
+	resets int   // times reset() emptied it
+}
+
+func (t *tempFile) Write(p []byte) (int, error) {
+	n, err := t.f.Write(p)
+	t.h.Write(p[:n])
+	t.head.Write(p[:n])
+	t.n += int64(n)
+	return n, err
+}
+
+// reset empties the file (a fresh download from zero).
+func (t *tempFile) reset() error {
+	if err := t.f.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := t.f.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	t.h.Reset()
+	t.head = headBuffer{}
+	t.n = 0
+	t.resets++
+	return nil
+}
+
+// openPartial opens (or creates) the resumable temp file at path and hashes what it already
+// holds, leaving the offset at its end. A non-regular file at path (a symlink, a directory) is
+// never followed: it is removed (a symlink) or refused.
+func openPartial(path string) (*tempFile, error) {
+	if st, err := os.Lstat(path); err == nil && !st.Mode().IsRegular() {
+		if st.Mode()&os.ModeSymlink == 0 {
+			return nil, fmt.Errorf("%s exists and is not a regular file", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return nil, err
+		}
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o644)
+	if err != nil {
+		return nil, err
+	}
+	t := &tempFile{f: f, path: path, h: sha256.New()}
+	// Hash the prefix through the same writer path a download uses (minus the file itself).
+	n, err := io.Copy(io.MultiWriter(t.h, &t.head), f)
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("read partial download %s: %w", path, err)
+	}
+	t.n = n
+	return t, nil
+}
+
+func download(url, destPath string, want expect, progressOut io.Writer, resume bool) (int64, error) {
 	dir := filepath.Dir(destPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return 0, err
 	}
-	f, err := os.CreateTemp(dir, "."+filepath.Base(destPath)+".*.part")
-	if err != nil {
-		return 0, err
+	name := filepath.Base(destPath)
+
+	var tf *tempFile
+	if resume {
+		var err error
+		if tf, err = openPartial(partialPath(destPath)); err != nil {
+			return 0, err
+		}
+	} else {
+		f, err := os.CreateTemp(dir, "."+name+".*.part")
+		if err != nil {
+			return 0, err
+		}
+		tf = &tempFile{f: f, path: f.Name(), h: sha256.New()}
 	}
-	tmpPath := f.Name()
-	done := false
+	// keep: leave the temp file for the next attempt to resume (an interrupted transfer of a
+	// resumable download). Anything else that fails removes it.
+	done, keep := false, false
 	defer func() {
 		if !done {
-			f.Close()
-			_ = os.Remove(tmpPath)
+			tf.f.Close()
+			if !keep {
+				_ = os.Remove(tf.path)
+			}
 		}
 	}()
 
-	h := sha256.New()
-	head := &headBuffer{}
-	var dst io.Writer = io.MultiWriter(f, h, head)
-	var pw *progressWriter
-	if progressOut != nil {
-		pw = &progressWriter{
-			w:        dst,
-			name:     filepath.Base(destPath),
-			total:    resp.ContentLength,
-			out:      progressOut,
-			lastTick: time.Now(),
+	for attempt := 0; ; attempt++ {
+		resumedFrom, resets := tf.n, tf.resets
+		if resumedFrom > 0 && progressOut != nil {
+			fmt.Fprintf(progressOut, "  resuming %s from %s\n", name, humanBytes(resumedFrom))
 		}
-		dst = pw
+		total, err := fetchInto(url, tf, name, progressOut)
+		// The file still starts with bytes from an earlier run (the server honoured the Range).
+		prefixKept := resumedFrom > 0 && tf.resets == resets
+		if errors.Is(err, errRestart) && attempt == 0 {
+			if progressOut != nil {
+				fmt.Fprintf(progressOut, "  %s: the server cannot resume (%v) — downloading from zero\n", name, err)
+			}
+			if err := tf.reset(); err != nil {
+				return tf.n, err
+			}
+			continue
+		}
+		if err != nil {
+			keep = resume
+			return tf.n, fmt.Errorf("download %s: %w", url, err)
+		}
+		if total >= 0 && tf.n < total {
+			// The body ended early without a transport error: the rest can still be fetched.
+			keep = resume
+			return tf.n, fmt.Errorf("download %s: connection closed after %d of %d bytes", url, tf.n, total)
+		}
+		err = checkDownload(name, tf.n, total, tf.head.b, hex.EncodeToString(tf.h.Sum(nil)), want)
+		if err != nil && prefixKept && attempt == 0 {
+			// The prefix came from an earlier run (or an earlier upstream version): do not trust
+			// it, fetch the whole file once more before giving up.
+			if progressOut != nil {
+				fmt.Fprintf(progressOut, "  %s: resumed download failed verification (%v) — downloading from zero\n", name, err)
+			}
+			if err := tf.reset(); err != nil {
+				return tf.n, err
+			}
+			continue
+		}
+		if err != nil {
+			return tf.n, err
+		}
+		break
 	}
 
+	// Durable before visible: the rename must never expose bytes that are not on disk yet.
+	if err := tf.f.Chmod(0o644); err != nil {
+		return tf.n, err
+	}
+	if err := tf.f.Sync(); err != nil {
+		return tf.n, fmt.Errorf("download %s: %w", url, err)
+	}
+	if err := tf.f.Close(); err != nil {
+		return tf.n, fmt.Errorf("download %s: %w", url, err)
+	}
+	if err := os.Rename(tf.path, destPath); err != nil {
+		return tf.n, err
+	}
+	done = true
+	syncDir(dir)
+	return tf.n, nil
+}
+
+// fetchInto issues one GET for url and appends the body to tf. When tf already holds bytes it asks
+// for the rest with a Range header. It returns the size the server announced for the WHOLE file
+// (-1 when unknown).
+func fetchInto(url string, tf *tempFile, name string, progressOut io.Writer) (int64, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return -1, err
+	}
+	offset := tf.n
+	if offset > 0 {
+		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
+	}
+	resp, err := newDownloadClient().Do(req)
+	if err != nil {
+		return -1, err
+	}
+	defer resp.Body.Close()
+
+	total := resp.ContentLength
+	switch {
+	case resp.StatusCode == http.StatusPartialContent && offset > 0:
+		start, size, ok := parseContentRange(resp.Header.Get("Content-Range"))
+		if !ok || start != offset {
+			return -1, fmt.Errorf("%w: asked for bytes %d-, got Content-Range %q", errRestart, offset,
+				resp.Header.Get("Content-Range"))
+		}
+		switch {
+		case size >= 0:
+			total = size
+		case resp.ContentLength >= 0:
+			total = offset + resp.ContentLength
+		default:
+			total = -1
+		}
+	case resp.StatusCode == http.StatusRequestedRangeNotSatisfiable && offset > 0:
+		return -1, fmt.Errorf("%w: %s", errRestart, resp.Status)
+	case resp.StatusCode == http.StatusOK:
+		if offset > 0 { // the server ignored the Range: what follows is the whole file
+			if progressOut != nil {
+				fmt.Fprintf(progressOut, "  %s: the server does not support resuming — downloading from zero\n", name)
+			}
+			if err := tf.reset(); err != nil {
+				return -1, err
+			}
+		}
+	default:
+		return -1, fmt.Errorf("unexpected status %s", resp.Status)
+	}
+
+	var dst io.Writer = tf
+	var pw *progressWriter
+	if progressOut != nil {
+		pw = &progressWriter{w: tf, name: name, total: total, done: tf.n, out: progressOut, lastTick: time.Now()}
+		dst = pw
+	}
 	body := newIdleReader(resp.Body, idleReadTimeout, cancel)
-	n, err := io.Copy(dst, body)
+	_, err = io.Copy(dst, body)
 	body.timer.Stop()
 	if pw != nil {
 		pw.finish()
@@ -185,29 +383,40 @@ func downloadURL(url, destPath string, want expect, progressOut io.Writer) (int6
 		if body.fired.Load() {
 			err = fmt.Errorf("no data received for %s (connection stalled)", idleReadTimeout)
 		}
-		return n, fmt.Errorf("download %s: %w", url, err)
+		return total, err
 	}
-	name := filepath.Base(destPath)
-	if err := checkDownload(name, n, resp.ContentLength, head.b, hex.EncodeToString(h.Sum(nil)), want); err != nil {
-		return n, err
-	}
+	return total, nil
+}
 
-	// Durable before visible: the rename must never expose bytes that are not on disk yet.
-	if err := f.Chmod(0o644); err != nil {
-		return n, err
+// parseContentRange parses a 206 response's "bytes <start>-<end>/<size>" (size may be "*",
+// returned as -1). ok=false for anything else.
+func parseContentRange(v string) (start, size int64, ok bool) {
+	rest, found := strings.CutPrefix(strings.TrimSpace(v), "bytes ")
+	if !found {
+		return 0, 0, false
 	}
-	if err := f.Sync(); err != nil {
-		return n, fmt.Errorf("download %s: %w", url, err)
+	rng, sz, found := strings.Cut(rest, "/")
+	if !found {
+		return 0, 0, false
 	}
-	if err := f.Close(); err != nil {
-		return n, fmt.Errorf("download %s: %w", url, err)
+	s, e, found := strings.Cut(rng, "-")
+	if !found {
+		return 0, 0, false
 	}
-	if err := os.Rename(tmpPath, destPath); err != nil {
-		return n, err
+	start, err1 := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	end, err2 := strconv.ParseInt(strings.TrimSpace(e), 10, 64)
+	if err1 != nil || err2 != nil || start < 0 || end < start {
+		return 0, 0, false
 	}
-	done = true
-	syncDir(dir)
-	return n, nil
+	size = -1
+	if sz = strings.TrimSpace(sz); sz != "*" {
+		n, err := strconv.ParseInt(sz, 10, 64)
+		if err != nil || n <= end {
+			return 0, 0, false
+		}
+		size = n
+	}
+	return start, size, true
 }
 
 // checkDownload sanity-checks a completed download before it is put in place: non-empty, the
