@@ -89,8 +89,19 @@ func TestShippedManifestRoles(t *testing.T) {
 	if _, ok := files[man.Explain.Role]; !ok {
 		t.Errorf("explain.role %q is not a key of files: %v", man.Explain.Role, keys(files))
 	}
-	if !man.WeightsExist() {
-		t.Errorf("a file declared in files: does not exist on disk")
+	// Weights are not committed, so a checkout without them (CI) has none of the files; only a
+	// PARTIAL set — some present, some missing — points at a wrong path in the manifest.
+	var missing []string
+	for role, path := range files {
+		if _, err := os.Stat(path); err != nil {
+			missing = append(missing, role)
+		}
+	}
+	switch {
+	case len(missing) == len(files):
+		t.Log("no weight file of files: is on disk (weights are not committed); skipping the existence check")
+	case len(missing) > 0:
+		t.Errorf("files: roles %v point at files that do not exist, while the other roles' files do", missing)
 	}
 	// The detect role must not be the same graph as the explain role — that is the whole
 	// point of the 114 MB stripped copy (it saves a 59 MB device→host copy per request).
