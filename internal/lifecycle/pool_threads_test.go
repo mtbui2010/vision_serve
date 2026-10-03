@@ -34,7 +34,7 @@ func TestPoolIntraOpThreads(t *testing.T) {
 
 // A pool's sessions get the capped thread count; a lone session keeps ORT's default.
 func TestNewRunnableThreadsOnlyForPools(t *testing.T) {
-	t.Setenv("VS_POOL_THREADS", "5")
+	t.Setenv("VISIONSERVE_POOL_THREADS", "5")
 	stop := errors.New("captured")
 	var got []engine.SessionOptions
 	prev := newEngineSession

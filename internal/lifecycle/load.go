@@ -225,7 +225,7 @@ func newRunnable(path string, inputNames, outputNames []string, n int, providers
 		}
 		return s, nil
 	}
-	so := engine.SessionOptions{IntraOpThreads: poolIntraOpThreads(n, runtime.NumCPU(), os.Getenv("VS_POOL_THREADS"))}
+	so := engine.SessionOptions{IntraOpThreads: poolIntraOpThreads(n, runtime.NumCPU(), os.Getenv("VISIONSERVE_POOL_THREADS"))}
 	sessions := make([]*engine.Session, 0, n)
 	for i := 0; i < n; i++ {
 		s, err := newEngineSession(path, inputNames, outputNames, providers, so)
@@ -257,7 +257,7 @@ var newEngineSession = engine.NewSessionWith
 // with identical outputs. So the pool shares a quarter of the logical CPUs (half the physical
 // cores with 2-way SMT): runtime.NumCPU()/(4n) threads per session, at least 1.
 //
-// VS_POOL_THREADS (env) overrides it: an integer >= 1 is used as is, 0 restores ORT's default.
+// VISIONSERVE_POOL_THREADS (env) overrides it: an integer >= 1 is used as is, 0 restores ORT's default.
 func poolIntraOpThreads(n, ncpu int, env string) int {
 	if v, err := strconv.Atoi(strings.TrimSpace(env)); err == nil && v >= 0 {
 		return v

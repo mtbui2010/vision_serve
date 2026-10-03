@@ -134,12 +134,20 @@ resident — avoids the slow cold reload after an idle pause), and `N` overrides
 model to `N` seconds. The reaper still skips any model whose effective idle timeout is
 `0`.
 
-**Admission control.** `Manager.Admit(model)` reserves a slot before the server decodes an
-upload, so memory does not grow with the number of requests queued behind a busy model. Each
+**Admission control.** `Manager.Admit(ctx, model)` reserves a slot before the server reads a
+multipart image part (or decodes a JSON upload), so memory does not grow with the number of
+requests queued behind a busy model; a request whose client already left is not admitted. Each
 model admits at most `VISIONSERVE_MAX_QUEUE` requests (running + waiting); unset, the bound is
 `2 × the model's inference slots` (its largest session pool, 1 for a single session or an
 `Exclusive` pipeline) and never below 32. `VISIONSERVE_MAX_QUEUE=0` turns the bound off. A
 refused request fails at once with `lifecycle.ErrOverloaded` (HTTP 503); it never waits.
+
+**Intra-op threads.** ONNX Runtime gives every session its own spinning thread pool sized to the
+physical cores. A lone session keeps that default. Each session of an n-session pool (e.g.
+MobileSAM's decoder copies, which automask drives at once) gets `NumCPU / (4n)` threads, at
+least 1, so a pool does not put n × cores busy threads on the machine; outputs do not depend on
+the thread count. `VISIONSERVE_POOL_THREADS=k` sets k threads per pooled session, and `0`
+restores ORT's default.
 
 ## Hardware / execution providers
 
