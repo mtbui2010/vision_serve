@@ -9,6 +9,7 @@ import (
 	"visionserve/internal/models"
 
 	_ "visionserve/internal/models/rfdetr"
+	"visionserve/internal/vision/util"
 )
 
 // TestFoldPreservesArgmax is the algebraic claim gated.go rests on, exercised on random
@@ -28,7 +29,7 @@ func TestFoldPreservesArgmax(t *testing.T) {
 		for j := range v {
 			v[j] = float32(rng.NormFloat64())
 		}
-		rows[c] = l2Normalize(v)
+		rows[c] = util.L2NormalizeInPlace(v)
 	}
 	w, err := pr.Fold(rows)
 	if err != nil {

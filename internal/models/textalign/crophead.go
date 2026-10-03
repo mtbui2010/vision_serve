@@ -8,7 +8,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
-	"visionserve/internal/models/siglip"
+	"visionserve/internal/pipeline"
 )
 
 // roleCrop is an OPTIONAL SigLIP vision tower. Declaring files.crop switches `method: dual`'s
@@ -134,25 +134,13 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, clas
 	temp float64, r models.Runner) ([]models.Detection, error) {
 	idx := make([]int, 0, len(dets))
 	boxes := make([][4]float64, 0, len(dets))
-	var unusable []int // marked detections whose box has no pixels: nothing to name them from
 	for i, d := range dets {
-		if d.Class != openSentinel {
-			continue
+		if d.Class == openSentinel {
+			idx = append(idx, i)
+			boxes = append(boxes, d.BBox)
 		}
-		if len(classes) > 0 && !siglip.UsableBox(img, d.BBox) {
-			unusable = append(unusable, i)
-			continue
-		}
-		idx = append(idx, i)
-		boxes = append(boxes, d.BBox)
 	}
 	if len(idx) == 0 {
-		if len(unusable) > 0 {
-			// Every marked box is degenerate (e.g. one sub-pixel sliver on the frame edge): drop
-			// them and return the rest. Handing CropTensor nothing usable is an error by its
-			// contract, and it used to fail the whole request here.
-			return dropIndices(dets, unusable), nil
-		}
 		return dets, nil
 	}
 	if len(classes) == 0 {
@@ -161,55 +149,28 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, clas
 		return dropIndices(dets, idx), nil
 	}
 
-	// Degenerate boxes were filtered above, but `kept` is still honoured: it says which of
-	// `boxes` actually produced a row, and losing that mapping would rename detections with
-	// another box's embedding.
-	crops, kept, err := siglip.EmbedCrops(img, boxes,
-		func(in map[string]engine.Tensor) ([]engine.Tensor, error) { return r.Run(roleCrop, in) },
-		r.InputNames(roleCrop))
+	// The shared crop namer (pipeline.CropNamer, the router's rescorer is the same code): crop →
+	// one batched vision-tower call → cosine against every requested word (text rows cached per
+	// word: the tower is ~4.3 ms per word per request, and a 78-word vocabulary re-embedded on
+	// every image cost more than the crops it exists to name) → floor → softmax at `temp`.
+	// A marked box with no pixels (e.g. a sub-pixel sliver on the frame edge) is rejected without
+	// running any tower; when every marked box is like that the request still succeeds.
+	names, err := m.namer.Name(pipeline.Call{Img: img, Runner: r}, boxes, classes, temp)
 	if err != nil {
 		return nil, fmt.Errorf("textalign: crop namer: %w", err)
 	}
 
-	// Cached: the text tower is ~4.3 ms per word per request, and a 78-word vocabulary re-embedded
-	// on every image was costing more than the crops it exists to name.
-	text, err := m.openVocabEmbeddings(classes, r)
-	if err != nil {
-		return nil, err
-	}
-
-	scores, err := siglip.ScoreCrops(crops, text)
-	if err != nil {
-		return nil, err
-	}
-
-	n := len(classes)
-	// Every marked detection is dropped unless the loop below names it. A box that was skipped as
-	// degenerate never reaches the namer, and must not survive carrying the sentinel.
-	drop := make([]int, 0, len(idx)+len(unusable))
-	drop = append(drop, unusable...)
-	named := make(map[int]bool, len(kept))
-	for _, k := range kept {
-		named[idx[k]] = true
-	}
-	for _, di := range idx {
-		if !named[di] {
-			drop = append(drop, di)
-		}
-	}
-	for j, k := range kept {
-		di := idx[k]
-		best, bestK := float32(math.Inf(-1)), -1
-		for k := 0; k < n; k++ {
-			if s := scores[j*n+k]; s > best {
-				best, bestK = s, k
-			}
-		}
-		if bestK < 0 || best < cropNameFloor {
+	// Every marked detection is dropped unless the namer named it: a degenerate box, a crop the
+	// tower skipped, or one whose best word is below the floor must not survive carrying the
+	// sentinel.
+	var drop []int
+	for j, di := range idx {
+		nm := names[j]
+		if nm.Word < 0 {
 			drop = append(drop, di)
 			continue
 		}
-		dets[di].Class = classes[bestK]
+		dets[di].Class = classes[nm.Word]
 		// Conf becomes P(object) x P(this name | crop).
 		//
 		// It used to stay the detector's raw objectness, on the reasoning that the crop head
@@ -226,51 +187,12 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, clas
 		// has already happened by the time this line executes. What changes is the number
 		// REPORTED for a detection whose name came from elsewhere, and reporting the joint
 		// quantity is the honest answer to "how sure are you this is a hat".
-		dets[di].Conf *= float64(softmaxAt(scores[j*n:(j+1)*n], bestK, temp))
+		dets[di].Conf *= float64(nm.P)
 	}
 	if len(drop) > 0 {
 		dets = dropIndices(dets, drop)
 	}
 	return dets, nil
-}
-
-// openVocabEmbeddings is embedVocab with a cache, keyed the same way head B's is: by the prompt
-// templates plus the class list, so two requests asking for the same open words share one text
-// tower call.
-//
-// Without it the tower ran on EVERY request. Measured, latency scaled with the number of open
-// WORDS rather than the number of crops — about 4.3 ms per word, 12 templates each — so a 78-word
-// vocabulary cost ~306 ms per image, far more than the crops the head exists to name.
-func (m *textAlign) openVocabEmbeddings(classes []string, r models.Runner) ([][]float32, error) {
-	key := vocabKey(m.tmpl, classes)
-
-	m.mu.RLock()
-	rows := m.textCache[key]
-	m.mu.RUnlock()
-	if rows != nil {
-		return rows, nil
-	}
-
-	rows, err := m.embedVocab(classes, r) // already template-averaged and L2-normalised
-	if err != nil {
-		return nil, err
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if existing := m.textCache[key]; existing != nil {
-		return existing, nil // lost a race; both are identical, keep the published one
-	}
-	if m.textCache == nil {
-		m.textCache = map[string][][]float32{}
-	}
-	if len(m.textOrder) >= maxVocabCache {
-		delete(m.textCache, m.textOrder[0])
-		m.textOrder = m.textOrder[1:]
-	}
-	m.textCache[key] = rows
-	m.textOrder = append(m.textOrder, key)
-	return rows, nil
 }
 
 // cropNameFloor is the cosine below which no requested open word describes the crop well enough
@@ -312,32 +234,3 @@ func (m *textAlign) hasCropHead() bool { return strings.TrimSpace(m.cfg.Files[ro
 // SIZE: a different namer, or a domain whose cosines are distributed differently, would move this.
 // No temperature is "true" in any case, since this export drops SigLIP's learned scale and bias.
 const cropTemp = 0.02
-
-// softmaxAt returns the softmax probability of index k, computed in a numerically stable way. A
-// non-positive temperature would divide by zero or invert the ordering, so it falls back to the
-// package default rather than producing silent nonsense.
-func softmaxAt(row []float32, k int, temp float64) float32 {
-	if k < 0 || k >= len(row) || len(row) == 0 {
-		return 0
-	}
-	if len(row) == 1 {
-		return 1
-	}
-	if temp <= 0 {
-		temp = cropTemp
-	}
-	max := row[0]
-	for _, v := range row[1:] {
-		if v > max {
-			max = v
-		}
-	}
-	var sum float64
-	for _, v := range row {
-		sum += math.Exp(float64(v-max) / temp)
-	}
-	if sum == 0 {
-		return 0
-	}
-	return float32(math.Exp(float64(row[k]-max)/temp) / sum)
-}

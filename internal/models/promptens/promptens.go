@@ -97,19 +97,13 @@ func Average(embs [][]float32, nClasses, nTemplates int) ([][]float32, error) {
 	return out, nil
 }
 
-// Key hashes (templates, classes) into a cache key. The templates are part of the key because
-// they change the embeddings: the same words under a different ensemble are a different head.
-// Class names are lowercased (the routing sets already are) but NOT sorted — order is meaningful,
-// since the caller indexes score columns by it.
-func Key(templates, classes []string) string {
+// TemplateKey hashes a template set into the first half of a per-word cache key (the word is the
+// second). The templates belong in the key because they change the embedding: the same word under
+// a different ensemble is a different row.
+func TemplateKey(templates []string) string {
 	h := sha256.New()
 	for _, t := range templates {
 		_, _ = h.Write([]byte(t))
-		_, _ = h.Write([]byte{0})
-	}
-	_, _ = h.Write([]byte{1})
-	for _, c := range classes {
-		_, _ = h.Write([]byte(strings.ToLower(c)))
 		_, _ = h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))

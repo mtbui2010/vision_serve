@@ -61,13 +61,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/models/clip"
 	"visionserve/internal/models/detr"
 	"visionserve/internal/models/promptens"
+	"visionserve/internal/pipeline"
 	"visionserve/internal/vision/util"
 )
 
@@ -78,7 +78,7 @@ func init() {
 const (
 	// roleDetector is the frozen detector exposing `query_feats` (rfdetr-small-etri-qf).
 	roleDetector = "rfdetr"
-	// roleText is the CLIP text tower, consulted only when a vocabulary is not cached.
+	// roleText is the text tower (CLIP or SigLIP), consulted only for words not cached yet.
 	roleText = "text"
 
 	// projFile is the trained projection side-car, read from the model directory.
@@ -87,13 +87,8 @@ const (
 	// the class name). It is part of the head-B CONTRACT: T̂ must be built with the same
 	// templates the head was trained against, so it ships next to proj.bin.
 	templatesFile = "templates.txt"
-	// templatePlaceholder is what applyTemplates substitutes the class name for.
+	// templatePlaceholder is what the prompt ensemble substitutes the class name for.
 	templatePlaceholder = promptens.Placeholder
-
-	// maxVocabCache bounds the number of compiled vocabularies kept in memory
-	// (C×256 floats each — kilobytes; the bound exists to stop unbounded growth under
-	// adversarial per-request prompts, not to save memory).
-	maxVocabCache = 32
 )
 
 // defaultTemplates is the fallback prompt ensemble when templates.txt is absent.
@@ -102,22 +97,29 @@ var defaultTemplates = []string{"a photo of a {}."}
 type textAlign struct {
 	cfg  models.Config
 	proj *Projection
-	tok  textTokenizer
-	tmpl []string
+
+	// text embeds the requested words through the prompt ensemble and the text tower, with a
+	// bounded per-WORD cache: one text-tower call per NEW word, never per request. Head B and
+	// the crop head read the same rows.
+	text *pipeline.TextEmbedder
+	// folds caches each word's row of the deploy-time matrix W = a·T̂P, keyed like text's cache.
+	// Fold is row-separable, so a W assembled from cached rows is bit-identical to folding the
+	// whole vocabulary at once — and a request pays for the fold of its new words only.
+	folds *pipeline.LRU[foldedRow]
+	// namer is the crop head (files.crop): nil when the manifest wires none.
+	namer *pipeline.CropNamer
 
 	// base is the rf-detr sub-model built from the manifest labels; it also serves
 	// ExplainPreprocess and the no-prompt (fixed vocabulary) path.
 	base      models.Model
 	baseVocab []string
+}
 
-	mu    sync.RWMutex
-	cache map[string]*head
-	order []string // insertion order, for FIFO eviction of the vocabulary cache
-
-	// textCache holds RAW text embeddings, which the crop head needs and head B does not: head B
-	// consumes them folded into `cache`'s W matrix, so that cache cannot serve them.
-	textCache map[string][][]float32
-	textOrder []string
+// foldedRow is one word's row of W, with the embedding row it was folded from: a hit is only
+// used while the text cache still serves that very row, so W can never disagree with T̂.
+type foldedRow struct {
+	src *float32
+	w   []float32
 }
 
 // New builds the head. The manifest's input/postprocess/labels block MUST carry the
@@ -139,10 +141,11 @@ func New(cfg models.Config) (models.Base, error) {
 
 	// The tokenizer assets live next to the text weights (files.text is "../clip-text/model.onnx"
 	// or "../siglip-text/model.onnx"), exactly like hybrid resolves GroundingDINO's vocab.txt.
-	// WHICH tokenizer is decided by what that directory contains — see tokenizer.go.
-	tok, err := loadTextTokenizer(filepath.Dir(cfg.Files[roleText]))
+	// WHICH tokenizer is decided by what that directory contains (pipeline.LoadTextTokenizer):
+	// the head was distilled against one teacher and must be served with that teacher's.
+	tok, err := pipeline.LoadTextTokenizer(filepath.Dir(cfg.Files[roleText]))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("textalign: %w", err)
 	}
 
 	tmpl, err := loadTemplates(filepath.Join(cfg.Dir, templatesFile))
@@ -155,17 +158,26 @@ func New(cfg models.Config) (models.Base, error) {
 		return nil, err
 	}
 
-	m := &textAlign{
-		cfg:       cfg,
-		proj:      proj,
-		tok:       tok,
-		tmpl:      tmpl,
-		base:      base,
-		baseVocab: baseVocab(cfg.Labels),
-		cache:     map[string]*head{},
-	}
+	m := newTextAlign(cfg, proj, tok, tmpl)
+	m.base, m.baseVocab = base, baseVocab(cfg.Labels)
 	warnDeadOpenHead(cfg)
 	return m, nil
+}
+
+// newTextAlign wires the towers' stages around a loaded projection: the text embedder (checked
+// against the projection's d_text), the per-word fold cache, and the crop namer when files.crop
+// is declared.
+func newTextAlign(cfg models.Config, proj *Projection, tok pipeline.TextTokenizer, tmpl []string) *textAlign {
+	m := &textAlign{
+		cfg:   cfg,
+		proj:  proj,
+		text:  pipeline.NewTextEmbedder(roleText, tok, tmpl, proj.DText),
+		folds: pipeline.NewLRU[foldedRow](pipeline.MaxCachedWords),
+	}
+	if m.hasCropHead() {
+		m.namer = &pipeline.CropNamer{CropRole: roleCrop, Text: m.text, Temp: cropTemp, Floor: cropNameFloor}
+	}
+	return m
 }
 
 // warnDeadOpenHead catches a configuration whose open head can never fire.
@@ -373,23 +385,16 @@ func classHead(o detr.Outputs, nLabels int) (engine.Tensor, error) {
 	return cls, nil
 }
 
-// headFor returns the compiled head for a vocabulary, embedding the class names through
-// the CLIP text tower on a cache miss (see README: one clip-text call per NEW vocabulary,
-// never per request).
+// headFor compiles the head for a vocabulary: the words' text rows (embedded through the text
+// tower only for words not cached yet — see README: one text-tower call per NEW word, never per
+// request), W = a·T̂P assembled from per-word folded rows, and an rf-detr sub-model carrying the
+// words as its labels (pure pre/postprocess, no session: building one is free).
 func (m *textAlign) headFor(classes []string, r models.Runner) (*head, error) {
-	key := vocabKey(m.tmpl, classes)
-	m.mu.RLock()
-	h := m.cache[key]
-	m.mu.RUnlock()
-	if h != nil {
-		return h, nil
-	}
-
-	rows, err := m.embedVocab(classes, r)
+	rows, err := m.text.Embed(classes, r)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("textalign: %w", err)
 	}
-	w, err := m.proj.Fold(rows)
+	w, err := m.fold(classes, rows)
 	if err != nil {
 		return nil, err
 	}
@@ -397,75 +402,30 @@ func (m *textAlign) headFor(classes []string, r models.Runner) (*head, error) {
 	if err != nil {
 		return nil, err
 	}
-	h = &head{classes: classes, w: w, rf: rf}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if existing := m.cache[key]; existing != nil {
-		return existing, nil // lost a race; both are identical, keep the published one
-	}
-	m.put(key, h)
-	return h, nil
+	return &head{classes: classes, w: w, rf: rf}, nil
 }
 
-// put inserts a compiled head, evicting the oldest entry when the cache is full.
-// The caller must hold m.mu for writing.
-func (m *textAlign) put(key string, h *head) {
-	if len(m.order) >= maxVocabCache {
-		delete(m.cache, m.order[0])
-		m.order = m.order[1:]
-	}
-	m.cache[key] = h
-	m.order = append(m.order, key)
-}
-
-// embedVocab returns one L2-normalised CLIP text embedding per class: every class is
-// expanded through the prompt templates, all rows go through the text tower in ONE batched
-// call, and the per-class rows are averaged and re-normalised (prompt ensembling).
-//
-// It tokenizes with internal/models/clip's tokenizer rather than calling the clip-text
-// model's Infer, because that entrypoint splits its prompt on "." — which would strip the
-// trailing period of a template like "a photo of a {}.".
-func (m *textAlign) embedVocab(classes []string, r models.Runner) ([][]float32, error) {
-	texts := applyTemplates(m.tmpl, classes)
-	ids, err := m.tok.EncodeBatch(texts)
-	if err != nil {
-		return nil, err
-	}
-
-	name := "input_ids"
-	if in := r.InputNames(roleText); len(in) > 0 {
-		found := false
-		for _, n := range in {
-			if n == name {
-				found = true
-				break
+// fold assembles W [C, DFeat] row by row: Projection.Fold computes each row from its own text
+// row only, so folding the words one at a time (and caching the rows) is bit-identical to
+// folding the vocabulary at once.
+func (m *textAlign) fold(classes []string, rows [][]float32) ([]float32, error) {
+	d := m.proj.DFeat
+	w := make([]float32, len(rows)*d)
+	for c, row := range rows {
+		if len(row) == 0 {
+			return nil, fmt.Errorf("textalign: no text embedding for %q", classes[c])
+		}
+		key := m.text.Key(classes[c])
+		f, ok := m.folds.Get(key)
+		if !ok || f.src != &row[0] {
+			fr, err := m.proj.Fold([][]float32{row})
+			if err != nil {
+				return nil, err
 			}
+			f = foldedRow{src: &row[0], w: fr}
+			m.folds.Set(key, f) // new word, or re-embedded since this row was folded
 		}
-		if !found {
-			name = in[0]
-		}
+		copy(w[c*d:(c+1)*d], f.w)
 	}
-	outs, err := r.Run(roleText, map[string]engine.Tensor{
-		name: engine.I64(ids, int64(len(texts)), int64(m.tok.ContextLength())),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("textalign: text tower inference: %w", err)
-	}
-	if len(outs) == 0 || len(outs[0].Shape) != 2 {
-		return nil, fmt.Errorf("textalign: text tower returned an unexpected output (want [N,D])")
-	}
-	t := outs[0]
-	n, dim := int(t.Shape[0]), int(t.Shape[1])
-	if n != len(texts) || dim != m.proj.DText || len(t.Data) < n*dim {
-		return nil, fmt.Errorf("textalign: clip-text returned [%d,%d], expected [%d,%d] (projection d_text)",
-			n, dim, len(texts), m.proj.DText)
-	}
-	embs := make([][]float32, n)
-	for i := 0; i < n; i++ {
-		row := make([]float32, dim)
-		copy(row, t.Data[i*dim:(i+1)*dim])
-		embs[i] = l2Normalize(row)
-	}
-	return averageTemplates(embs, len(classes), len(m.tmpl))
+	return w, nil
 }

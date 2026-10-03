@@ -2,11 +2,9 @@ package textalign
 
 import (
 	"fmt"
-	"math"
 	"strings"
 
 	"visionserve/internal/models"
-	"visionserve/internal/models/promptens"
 )
 
 // head is one vocabulary, compiled for deployment: the class names, the folded class
@@ -72,10 +70,10 @@ func (h *head) logits(p *Projection, feats []float32, q int, normalize bool) ([]
 // normalizeVocab lowercases/trims the requested phrases and drops empties and duplicates
 // (a duplicate class would produce two identical columns and duplicate detections).
 //
-// The phrase itself is lowercased, not only its dedup key: the head cache is keyed on the
-// lowercased vocabulary (promptens.Key), so keeping the caller's case let the first request's
-// spelling ("Cup") become the label every later "cup" request received. Both text towers
-// lowercase before tokenizing, so the embeddings are unchanged.
+// The phrase itself is lowercased, not only its dedup key: the text cache is keyed per word, and
+// keeping the caller's case let the first request's spelling ("Cup") become the label later "cup"
+// requests received (the cache this replaced was keyed on the lowercased vocabulary). Both text
+// towers lowercase before tokenizing, so the embeddings are unchanged.
 func normalizeVocab(in []string) []string {
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))
@@ -88,39 +86,4 @@ func normalizeVocab(in []string) []string {
 		out = append(out, s)
 	}
 	return out
-}
-
-// vocabKey hashes (templates, classes) into the vocabulary-cache key. Templates are part
-// of the key because they change T̂ — the same words under a different prompt template are
-// a different head.
-func vocabKey(templates, classes []string) string { return promptens.Key(templates, classes) }
-
-// applyTemplates expands the vocabulary into the prompt strings to embed:
-// classes × templates, in class-major order (class 0's templates first). Row order is
-// what averageTemplates below relies on.
-func applyTemplates(templates, classes []string) []string {
-	return promptens.Apply(templates, classes)
-}
-
-// averageTemplates collapses the [C*K] embeddings produced by applyTemplates into one
-// L2-normalised row per class (prompt ensembling: mean of the per-template embeddings,
-// then re-normalise).
-func averageTemplates(embs [][]float32, nClasses, nTemplates int) ([][]float32, error) {
-	return promptens.Average(embs, nClasses, nTemplates)
-}
-
-// l2Normalize normalises v in place and returns it (a zero vector is left alone).
-func l2Normalize(v []float32) []float32 {
-	var sum float64
-	for _, x := range v {
-		sum += float64(x) * float64(x)
-	}
-	if sum == 0 {
-		return v
-	}
-	inv := float32(1 / math.Sqrt(sum))
-	for i := range v {
-		v[i] *= inv
-	}
-	return v
 }

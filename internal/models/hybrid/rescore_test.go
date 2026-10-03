@@ -12,6 +12,7 @@ import (
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/models/siglip"
+	"visionserve/internal/pipeline"
 )
 
 // siglipDir is where the text tower's tokenizer.json lives. Model directories are not part of
@@ -88,7 +89,7 @@ func newTestHybrid(t *testing.T) *hybrid {
 	if err != nil {
 		t.Skipf("no SigLIP tokenizer assets in %s: %v", siglipDir(), err)
 	}
-	return &hybrid{rs: &rescorer{tok: tok, tmpl: measuredTemplates}}
+	return &hybrid{rs: newNamer(pipeline.SigLIPTokenizer{T: tok}, measuredTemplates)}
 }
 
 // canvas is an image big enough for the test boxes; content is irrelevant because the stub
@@ -317,7 +318,7 @@ func TestRolesIncludeTowersOnlyWhenPresent(t *testing.T) {
 	if len(plain) != 2 {
 		t.Errorf("plain router roles = %v, want just the two detectors", plain)
 	}
-	with := (&hybrid{rs: &rescorer{}}).Roles()
+	with := (&hybrid{rs: &pipeline.CropNamer{}}).Roles()
 	if !contains(with, roleCrop) || !contains(with, roleText) {
 		t.Errorf("router with a rescorer has roles %v, want %q and %q", with, roleCrop, roleText)
 	}
@@ -334,8 +335,8 @@ func TestRescoreNoOp(t *testing.T) {
 		words []string
 	}{
 		{"no rescorer", &hybrid{}, dets, []string{"towel"}},
-		{"no detections", &hybrid{rs: &rescorer{}}, nil, []string{"towel"}},
-		{"no unknown words", &hybrid{rs: &rescorer{}}, dets, nil},
+		{"no detections", &hybrid{rs: &pipeline.CropNamer{}}, nil, []string{"towel"}},
+		{"no unknown words", &hybrid{rs: &pipeline.CropNamer{}}, dets, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := c.m.rescore(canvas(), c.dets, c.words, cropTemp, nil)
@@ -355,17 +356,17 @@ func TestSoftmaxAt(t *testing.T) {
 	for _, v := range row {
 		sum += math.Exp(float64(v) / cropTemp)
 	}
-	if got, want := float64(softmaxAt(row, 1, cropTemp)), math.Exp(0.4/cropTemp)/sum; math.Abs(got-want) > 1e-6 {
+	if got, want := float64(pipeline.SoftmaxAt(row, 1, cropTemp)), math.Exp(0.4/cropTemp)/sum; math.Abs(got-want) > 1e-6 {
 		t.Errorf("softmaxAt = %.9f, want %.9f", got, want)
 	}
-	if got := softmaxAt(row, 5, cropTemp); got != 0 {
+	if got := pipeline.SoftmaxAt(row, 5, cropTemp); got != 0 {
 		t.Errorf("out-of-range index gave %v, want 0", got)
 	}
-	if got := softmaxAt([]float32{0.3}, 0, cropTemp); got != 1 {
+	if got := pipeline.SoftmaxAt([]float32{0.3}, 0, cropTemp); got != 1 {
 		t.Errorf("single-word softmax gave %v, want 1", got)
 	}
 	// Large cosines under a small temperature must not overflow to NaN.
-	if got := softmaxAt([]float32{40, 1}, 0, 0.02); math.IsNaN(float64(got)) || got != 1 {
+	if got := pipeline.SoftmaxAt([]float32{40, 1}, 0, 0.02); math.IsNaN(float64(got)) || got != 1 {
 		t.Errorf("softmaxAt on a saturating row gave %v, want 1", got)
 	}
 }

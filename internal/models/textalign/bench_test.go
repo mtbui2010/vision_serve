@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"visionserve/internal/vision/util"
 )
 
 // benchSetup loads the SHIPPED projection and builds a C-class head, so the numbers below
@@ -24,7 +25,7 @@ func benchSetup(b *testing.B, classes int) (*Projection, *head, []float32) {
 		for i := range r {
 			r[i] = float32((i*7+c)%13) / 13
 		}
-		rows[c] = l2Normalize(r)
+		rows[c] = util.L2NormalizeInPlace(r)
 	}
 	w, err := pr.Fold(rows)
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/pipeline"
 )
 
 type noTowers struct{ t *testing.T }
@@ -19,15 +20,16 @@ func (n noTowers) Run(role string, _ map[string]engine.Tensor) ([]engine.Tensor,
 func (noTowers) InputNames(string) []string  { return []string{"pixel_values"} }
 func (noTowers) OutputNames(string) []string { return nil }
 
-// B6: the head cache is keyed on the LOWERCASED vocabulary (promptens.Key), so the vocabulary
-// itself must be lowercased too. Before, "Cup" compiled a head labelled "Cup" under the same key
-// as "cup", and whichever request came first decided the label every later request received.
+// B6: the vocabulary must be lowercased, not only its cache key. Before, "Cup" compiled a head
+// labelled "Cup" under the same (lowercased) key as "cup", and whichever request came first
+// decided the label every later request received.
 func TestNormalizeVocabLowercases(t *testing.T) {
 	got := normalizeVocab([]string{"Cup", " towel ", "CUP", "Cola Can"})
 	if want := []string{"cup", "towel", "cola can"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalizeVocab = %q, want %q", got, want)
 	}
-	if vocabKey(nil, normalizeVocab([]string{"Cup"})) != vocabKey(nil, normalizeVocab([]string{"cup"})) {
+	te := pipeline.NewTextEmbedder(roleText, nil, nil, 0)
+	if te.Key(normalizeVocab([]string{"Cup"})[0]) != te.Key(normalizeVocab([]string{"cup"})[0]) {
 		t.Fatal("same words, different cache keys")
 	}
 }

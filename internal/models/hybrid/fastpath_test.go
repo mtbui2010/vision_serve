@@ -12,6 +12,7 @@ import (
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/models/textalign"
+	"visionserve/internal/pipeline"
 )
 
 // writeHead builds a VSTXALN1 file with a known P, a and b, so the scoring arithmetic can be
@@ -62,8 +63,8 @@ func TestHasFastPathNeedsBoth(t *testing.T) {
 	}{
 		{"neither", &hybrid{}, false},
 		{"head only", &hybrid{fp: &fastPath{}}, false},
-		{"rescorer only", &hybrid{rs: &rescorer{}}, false},
-		{"both", &hybrid{fp: &fastPath{}, rs: &rescorer{}}, true},
+		{"rescorer only", &hybrid{rs: &pipeline.CropNamer{}}, false},
+		{"both", &hybrid{fp: &fastPath{}, rs: &pipeline.CropNamer{}}, true},
 	} {
 		if got := c.m.hasFastPath(); got != c.want {
 			t.Errorf("%s: hasFastPath = %v, want %v", c.name, got, c.want)
@@ -124,7 +125,7 @@ func TestFastDetectRejectsWrongFeatureWidth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &hybrid{fp: fp, rs: &rescorer{}}
+	m := &hybrid{fp: fp, rs: &pipeline.CropNamer{}}
 	boxes := engine.F32(make([]float32, 4), 1, 1, 4)
 	feats := engine.F32(make([]float32, 5), 1, 1, 5) // detector emits 5-wide
 	_, err = m.fastDetect(boxes, feats, []string{"hat"}, models.PreprocessMeta{}, nil)
@@ -400,11 +401,11 @@ func TestFastPathPrefersONNXRole(t *testing.T) {
 	if err != nil || fp == nil || !fp.onnx || fp.proj != nil {
 		t.Fatalf("newFastPath = %+v, %v; want the ONNX head and no head.bin", fp, err)
 	}
-	m := &hybrid{fp: fp, rs: &rescorer{}}
+	m := &hybrid{fp: fp, rs: &pipeline.CropNamer{}}
 	if !hasName(m.Roles(), roleHead) {
 		t.Errorf("Roles() = %v, want %q so lifecycle creates the session", m.Roles(), roleHead)
 	}
-	goOnly := &hybrid{fp: &fastPath{proj: &textalign.Projection{}}, rs: &rescorer{}}
+	goOnly := &hybrid{fp: &fastPath{proj: &textalign.Projection{}}, rs: &pipeline.CropNamer{}}
 	if hasName(goOnly.Roles(), roleHead) {
 		t.Errorf("head.bin-only model lists %q in Roles(); lifecycle would demand files.head", roleHead)
 	}

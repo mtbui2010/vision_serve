@@ -211,27 +211,3 @@ func TestDecodeFoldedKeepsBoxes(t *testing.T) {
 		t.Errorf("folded moved the box: %v vs %v", folded.Detections[0].BBox, exact.Detections[0].BBox)
 	}
 }
-
-// TestVocabCacheEviction checks the cache is bounded and hands back the same compiled
-// head for a repeated vocabulary (the "no clip-text call per request" claim).
-func TestVocabCacheEviction(t *testing.T) {
-	m := &textAlign{cache: map[string]*head{}}
-	first := vocabKey(defaultTemplates, []string{"class0"})
-	for i := 0; i < maxVocabCache+5; i++ {
-		m.put(vocabKey(defaultTemplates, []string{"class" + string(rune('0'+i))}), &head{})
-	}
-	if len(m.cache) != maxVocabCache || len(m.order) != maxVocabCache {
-		t.Errorf("cache=%d order=%d, want %d each", len(m.cache), len(m.order), maxVocabCache)
-	}
-	if _, ok := m.cache[first]; ok {
-		t.Errorf("the oldest vocabulary should have been evicted first (FIFO)")
-	}
-
-	// A repeated vocabulary must map to the same key, i.e. hit the cache and skip clip-text.
-	h := &head{classes: []string{"cup"}}
-	key := vocabKey(defaultTemplates, []string{"cup"})
-	m.put(key, h)
-	if m.cache[vocabKey(defaultTemplates, []string{"cup"})] != h {
-		t.Errorf("a repeated vocabulary missed the cache")
-	}
-}

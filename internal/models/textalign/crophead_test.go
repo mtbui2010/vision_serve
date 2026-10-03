@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"visionserve/internal/models"
+	"visionserve/internal/pipeline"
 )
 
 // The sentinel is what lets the crop namer exist at all: an unclaimed query has to survive
@@ -145,15 +146,16 @@ func TestNameOpenCropsDropsSkippedBoxes(t *testing.T) {
 	}
 }
 
-// The cache must key on the WORDS, not just their count, or two different vocabularies of the
-// same size would share embeddings — silently naming everything with the wrong words.
+// The cache must key on the WORDS, or two different vocabularies would share embeddings —
+// silently naming everything with the wrong words. Keys are per word and include the templates.
 func TestOpenVocabCacheKeyDependsOnWords(t *testing.T) {
-	tmpl := []string{"a photo of a {}."}
-	if vocabKey(tmpl, []string{"zebra", "ruler"}) == vocabKey(tmpl, []string{"stapler", "eraser"}) {
-		t.Error("two different vocabularies produced the same cache key")
+	a := pipeline.NewTextEmbedder(roleText, nil, []string{"a photo of a {}."}, 0)
+	b := pipeline.NewTextEmbedder(roleText, nil, []string{"itap of a {}."}, 0)
+	if a.Key("zebra") == a.Key("ruler") {
+		t.Error("two different words produced the same cache key")
 	}
-	if vocabKey(tmpl, []string{"zebra"}) != vocabKey(tmpl, []string{"ZEBRA"}) {
-		t.Error("case should not split the cache — normalizeVocab lowercases upstream")
+	if a.Key("zebra") == b.Key("zebra") {
+		t.Error("the same word under different templates produced the same cache key")
 	}
 }
 
@@ -200,21 +202,21 @@ func TestCropNamerScoresAgainstAllRequestedWords(t *testing.T) {
 func TestSoftmaxAt(t *testing.T) {
 	// A decisive row: one clear winner should approach 1.
 	row := []float32{0.9, 0.1, 0.05}
-	if p := softmaxAt(row, 0, 0.07); p < 0.99 {
+	if p := pipeline.SoftmaxAt(row, 0, 0.07); p < 0.99 {
 		t.Errorf("clear winner got p=%v, want ~1", p)
 	}
-	if p := softmaxAt(row, 1, 0.07); p > 0.01 {
+	if p := pipeline.SoftmaxAt(row, 1, 0.07); p > 0.01 {
 		t.Errorf("clear loser got p=%v, want ~0", p)
 	}
 	// A tie must split evenly, whatever the temperature.
 	tie := []float32{0.5, 0.5}
-	if p := softmaxAt(tie, 0, 0.07); math.Abs(float64(p)-0.5) > 1e-6 {
+	if p := pipeline.SoftmaxAt(tie, 0, 0.07); math.Abs(float64(p)-0.5) > 1e-6 {
 		t.Errorf("tie got p=%v, want 0.5", p)
 	}
 	// Probabilities over a row must sum to 1.
 	var sum float32
 	for k := range row {
-		sum += softmaxAt(row, k, 0.07)
+		sum += pipeline.SoftmaxAt(row, k, 0.07)
 	}
 	if math.Abs(float64(sum)-1) > 1e-5 {
 		t.Errorf("row sums to %v, want 1", sum)
@@ -224,26 +226,23 @@ func TestSoftmaxAt(t *testing.T) {
 // Temperature must be monotone in the intended direction, or the sweep cannot be read.
 func TestSoftmaxTemperatureIsMonotone(t *testing.T) {
 	row := []float32{0.6, 0.4}
-	decisive := softmaxAt(row, 0, 0.01)
-	soft := softmaxAt(row, 0, 1.0)
+	decisive := pipeline.SoftmaxAt(row, 0, 0.01)
+	soft := pipeline.SoftmaxAt(row, 0, 1.0)
 	if decisive <= soft {
 		t.Errorf("lower temperature must be MORE decisive: %v at T=0.01 vs %v at T=1.0", decisive, soft)
 	}
 }
 
-// A single candidate is certain by construction; a non-positive temperature would divide by zero
-// or invert the ordering, so it falls back to the default rather than producing silent nonsense.
+// A single candidate is certain by construction. (A non-positive temperature never reaches the
+// softmax: the crop namer replaces it with this head's default, cropTemp — pipeline's tests.)
 func TestSoftmaxAtEdgeCases(t *testing.T) {
-	if p := softmaxAt([]float32{0.3}, 0, 0.07); p != 1 {
+	if p := pipeline.SoftmaxAt([]float32{0.3}, 0, 0.07); p != 1 {
 		t.Errorf("single candidate got p=%v, want 1", p)
 	}
-	if p := softmaxAt([]float32{0.9, 0.1}, 0, 0); p != softmaxAt([]float32{0.9, 0.1}, 0, cropTemp) {
-		t.Error("a non-positive temperature must fall back to the package default")
-	}
-	if p := softmaxAt([]float32{0.9, 0.1}, 5, 0.07); p != 0 {
+	if p := pipeline.SoftmaxAt([]float32{0.9, 0.1}, 5, 0.07); p != 0 {
 		t.Errorf("out-of-range index got p=%v, want 0", p)
 	}
-	if p := softmaxAt(nil, 0, 0.07); p != 0 {
+	if p := pipeline.SoftmaxAt(nil, 0, 0.07); p != 0 {
 		t.Errorf("empty row got p=%v, want 0", p)
 	}
 }

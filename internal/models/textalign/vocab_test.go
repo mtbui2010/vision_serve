@@ -11,7 +11,9 @@ import (
 	"visionserve/internal/models"
 	"visionserve/internal/models/clip"
 
+	"reflect"
 	_ "visionserve/internal/models/rfdetr"
+	"visionserve/internal/pipeline"
 )
 
 // stubRunner stands in for lifecycle's Runner: it answers the "text" role with a
@@ -58,11 +60,11 @@ func newTestModel(t *testing.T, pr *Projection, templates []string) *textAlign {
 		t.Skipf("no CLIP tokenizer assets in %s: %v", dir, err)
 	}
 	cfg := models.Config{Name: "ta-test", Width: 512, Height: 512, BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300}
-	return &textAlign{cfg: cfg, proj: pr, tok: clipTokenizer{tok}, tmpl: templates, cache: map[string]*head{}}
+	return newTextAlign(cfg, pr, pipeline.CLIPTokenizer{T: tok}, templates)
 }
 
-// TestHeadForCachesVocabularies is the "one clip-text call per NEW vocabulary, never per
-// request" claim the latency budget rests on.
+// TestHeadForCachesVocabularies is the "one text-tower call per NEW word, never per request"
+// claim the latency budget rests on — and the head compiled from cached rows is the same head.
 func TestHeadForCachesVocabularies(t *testing.T) {
 	pr := testProjection(t) // dText 3
 	m := newTestModel(t, pr, []string{"a photo of a {}.", "itap of a {}."})
@@ -83,18 +85,26 @@ func TestHeadForCachesVocabularies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h2 != h1 {
-		t.Errorf("the same vocabulary rebuilt a head instead of hitting the cache")
+	if !reflect.DeepEqual(h2.w, h1.w) || !reflect.DeepEqual(h2.classes, h1.classes) {
+		t.Errorf("the same vocabulary compiled a different head from the cache")
 	}
 	if got := atomic.LoadInt64(&r.calls); got != 1 {
 		t.Errorf("clip-text was called %d times for one vocabulary, want 1", got)
 	}
 
-	if _, err := m.headFor([]string{"cup", "banana"}, r); err != nil {
+	// A NEW word costs a call for that word only: "cup" is served from the cache.
+	h3, err := m.headFor([]string{"cup", "banana"}, r)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got := atomic.LoadInt64(&r.calls); got != 2 {
-		t.Errorf("a NEW vocabulary must call clip-text (calls=%d, want 2)", got)
+		t.Errorf("a NEW word must call clip-text (calls=%d, want 2)", got)
+	}
+	if got := atomic.LoadInt64(&r.rows); got != 4+2 {
+		t.Errorf("embedded %d prompt rows in total, want 6 (only banana's 2 templates on the second miss)", got)
+	}
+	if !reflect.DeepEqual(h3.w[:pr.DFeat], h1.w[:pr.DFeat]) {
+		t.Errorf("cup's folded row changed when it was reused in another vocabulary")
 	}
 }
 
@@ -130,17 +140,17 @@ func TestHeadForConcurrent(t *testing.T) {
 	for err := range errs {
 		t.Error(err)
 	}
-	if n := len(m.cache); n != 6 { // {cup,hat} + class0..class4
-		t.Errorf("cache holds %d vocabularies, want 6", n)
+	if n := m.text.Cached(); n != 7 { // cup, hat, class0..class4
+		t.Errorf("cache holds %d words, want 7", n)
 	}
 }
 
-// TestEmbedVocabRejectsWrongTextDim: a text tower whose width does not match the
+// TestHeadForRejectsWrongTextDim: a text tower whose width does not match the
 // projection must fail loudly rather than fold a mis-shaped matrix.
-func TestEmbedVocabRejectsWrongTextDim(t *testing.T) {
+func TestHeadForRejectsWrongTextDim(t *testing.T) {
 	pr := testProjection(t)
 	m := newTestModel(t, pr, defaultTemplates)
-	if _, err := m.embedVocab([]string{"cup"}, &stubRunner{dText: pr.DText + 1}); err == nil {
+	if _, err := m.headFor([]string{"cup"}, &stubRunner{dText: pr.DText + 1}); err == nil {
 		t.Errorf("expected an error when clip-text's width != projection d_text")
 	}
 }

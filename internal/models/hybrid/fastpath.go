@@ -118,9 +118,9 @@ func (m *hybrid) fastDetect(boxes, feats engine.Tensor, words []string,
 		}
 	}
 
-	text, err := m.rs.vocab(words, r) // the same cached SigLIP text embeddings the rescorer uses
+	text, err := m.rs.Text.Embed(words, r) // the same cached SigLIP text embeddings the rescorer uses
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("hybrid: %w", err)
 	}
 	logits, err := m.fp.score(feats, text, q, r)
 	if err != nil {

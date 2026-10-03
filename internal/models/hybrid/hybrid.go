@@ -25,6 +25,7 @@ import (
 	"visionserve/internal/models/detr"
 	"visionserve/internal/models/groundingdino"
 	"visionserve/internal/models/mobilesam"
+	"visionserve/internal/pipeline"
 	"visionserve/internal/vision/util"
 )
 
@@ -48,7 +49,7 @@ type hybrid struct {
 	vocab   map[string]bool          // RF-DETR class names, lowercased (the routing set)
 	withSAM bool                     // encoder+decoder present → also emit one mask per box
 	joint   bool                     // gdino weights take the whole prompt in ONE pass
-	rs      *rescorer                // optional SigLIP crop+text towers; nil = today's behaviour
+	rs      *pipeline.CropNamer      // optional SigLIP crop+text towers; nil = no rescoring
 	fp      *fastPath                // optional distilled head; nil = unknown words go to GroundingDINO
 }
 

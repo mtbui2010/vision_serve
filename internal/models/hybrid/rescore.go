@@ -3,15 +3,13 @@ package hybrid
 import (
 	"fmt"
 	"image"
-	"math"
 	"path/filepath"
 	"strings"
-	"sync"
 
-	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/models/promptens"
 	"visionserve/internal/models/siglip"
+	"visionserve/internal/pipeline"
 )
 
 // roleCrop and roleText are an OPTIONAL pair of SigLIP towers. Declaring BOTH files.crop and
@@ -56,11 +54,6 @@ const cropTemp = 0.05
 // are small in absolute terms, so 0.0 keeps anything positively aligned and drops the rest.
 const cropNameFloor = 0.0
 
-// maxVocabCache bounds the number of embedded vocabularies held in memory. Each is
-// len(words)×D float32 — kilobytes; the bound exists to stop unbounded growth under
-// adversarial per-request prompts.
-const maxVocabCache = 32
-
 // measuredTemplates is the ten-template ensemble every number in FINDINGS §2 was measured with
 // (headb/targets.py::TEMPLATES, shipped as reg_final/map-ta-a/templates.txt). It is the fallback
 // rather than the single "a photo of a {}." textalign falls back to, because a manifest that
@@ -79,21 +72,12 @@ var measuredTemplates = []string{
 	"there is a {} in the scene.",
 }
 
-// rescorer holds the optional SigLIP state: the text tokenizer, the prompt ensemble, and the
-// embedded-vocabulary cache. Without the cache the text tower runs on EVERY request and latency
-// scales with the number of unknown WORDS rather than the number of crops — measured at ~4.3 ms
-// per word per request in the sibling head.
-type rescorer struct {
-	tok  *siglip.Tokenizer
-	tmpl []string
-
-	mu    sync.RWMutex
-	cache map[string][][]float32
-	order []string
-}
-
-// newRescorer builds the SigLIP state, or returns nil when the manifest declares neither tower.
-func newRescorer(cfg models.Config) (*rescorer, error) {
+// newRescorer builds the optional SigLIP crop namer — the crop tower, the text tower with its
+// tokenizer and prompt ensemble, and a per-word cache of the embedded words (without it the text
+// tower runs on EVERY request and latency scales with the number of unknown WORDS rather than the
+// number of crops, ~4.3 ms per word per request) — or returns nil when the manifest declares
+// neither tower.
+func newRescorer(cfg models.Config) (*pipeline.CropNamer, error) {
 	crop, text := strings.TrimSpace(cfg.Files[roleCrop]), strings.TrimSpace(cfg.Files[roleText])
 	if crop == "" && text == "" {
 		return nil, nil
@@ -105,13 +89,23 @@ func newRescorer(cfg models.Config) (*rescorer, error) {
 	}
 	tok, err := siglip.LoadTokenizer(filepath.Dir(text))
 	if err != nil {
-		return nil, fmt.Errorf("hybrid: SigLIP text tokenizer: %w", err)
+		return nil, fmt.Errorf("hybrid: SigLIP text tower tokenizer: %w", err)
 	}
 	tmpl, err := promptens.Load(filepath.Join(cfg.Dir, templatesFile), measuredTemplates)
 	if err != nil {
 		return nil, err
 	}
-	return &rescorer{tok: tok, tmpl: tmpl}, nil
+	return newNamer(pipeline.SigLIPTokenizer{T: tok}, tmpl), nil
+}
+
+// newNamer is the router's configuration of the shared crop namer: its own temperature and floor.
+func newNamer(tok pipeline.TextTokenizer, tmpl []string) *pipeline.CropNamer {
+	return &pipeline.CropNamer{
+		CropRole: roleCrop,
+		Text:     pipeline.NewTextEmbedder(roleText, tok, tmpl, 0),
+		Temp:     cropTemp,
+		Floor:    cropNameFloor,
+	}
 }
 
 // rescore renames and re-weights GroundingDINO's detections with SigLIP-crop, and is the whole
@@ -139,137 +133,19 @@ func newRescorer(cfg models.Config) (*rescorer, error) {
 // Detections whose box is degenerate are DROPPED: zero width or height after clamping to the
 // image, which a low threshold produces for real (zero-width queries, slivers on the frame edge).
 // They carry no pixels and so no embedding, and returning one with an unrescored confidence
-// would put an unranked box back into the flood this exists to drain. They are filtered HERE,
-// before the crop tower, so a request whose only detection is such a sliver comes back empty
-// instead of failing (siglip.CropTensor still errors when handed nothing usable — that contract
-// is for callers whose boxes should all be real). `idx` and `kept` keep the crop rows and the
-// detection list from drifting apart.
+// would put an unranked box back into the flood this exists to drain. The shared namer
+// (pipeline.CropNamer, textalign's crop head is the same code) filters them before the crop
+// tower, so a request whose only detection is such a sliver comes back empty instead of failing,
+// and keeps the crop rows and the detection list from drifting apart.
 func (m *hybrid) rescore(img image.Image, dets []models.Detection, words []string,
 	temp float64, r models.Runner) ([]models.Detection, error) {
 	if m.rs == nil || len(dets) == 0 || len(words) == 0 {
 		return dets, nil
 	}
-	if temp <= 0 {
-		temp = cropTemp
-	}
-
-	boxes := make([][4]float64, 0, len(dets))
-	idx := make([]int, 0, len(dets)) // boxes[j] is dets[idx[j]]
-	for i, d := range dets {
-		if siglip.UsableBox(img, d.BBox) {
-			boxes = append(boxes, d.BBox)
-			idx = append(idx, i)
-		}
-	}
-	if len(boxes) == 0 {
-		return nil, nil
-	}
-	// A failure here now means the crop session itself failed, and that fails the REQUEST rather
-	// than falling back to unrescored detections: returning plausible output on a broken tower is
-	// how this project has been wrong before (a silent CPU fallback invalidated a whole sweep).
-	// The sibling crop head in textalign makes the same choice.
-	crops, kept, err := siglip.EmbedCrops(img, boxes,
-		func(in map[string]engine.Tensor) ([]engine.Tensor, error) { return r.Run(roleCrop, in) },
-		r.InputNames(roleCrop))
-	if err != nil {
-		return nil, fmt.Errorf("hybrid: SigLIP crop tower: %w", err)
-	}
-	text, err := m.rs.vocab(words, r)
-	if err != nil {
-		return nil, err
-	}
-	scores, err := siglip.ScoreCrops(crops, text)
-	if err != nil {
-		return nil, err
-	}
-
-	n := len(words)
-	out := make([]models.Detection, 0, len(kept))
-	for j, k := range kept {
-		i := idx[k]
-		row := scores[j*n : (j+1)*n]
-		best, w := float32(math.Inf(-1)), -1
-		for c, s := range row {
-			if s > best {
-				best, w = s, c
-			}
-		}
-		if w < 0 || best < cropNameFloor {
-			continue
-		}
-		d := dets[i]
-		d.Class = words[w]
-		d.Conf *= float64(softmaxAt(row, w, temp))
-		out = append(out, d)
-	}
-	return out, nil
-}
-
-// vocab returns one L2-normalised row per word, cached. The cache is keyed by the ensemble AND
-// the word list, so two requests asking for the same unknown words share one text-tower call.
-func (rs *rescorer) vocab(words []string, r models.Runner) ([][]float32, error) {
-	key := promptens.Key(rs.tmpl, words)
-
-	rs.mu.RLock()
-	rows := rs.cache[key]
-	rs.mu.RUnlock()
-	if rows != nil {
-		return rows, nil
-	}
-
-	raw, err := siglip.EmbedTexts(promptens.Apply(rs.tmpl, words), rs.tok,
-		func(in map[string]engine.Tensor) ([]engine.Tensor, error) { return r.Run(roleText, in) },
-		r.InputNames(roleText))
+	out, err := pipeline.CropRescorer{Namer: m.rs}.Rescore(
+		pipeline.Call{Img: img, Prompt: models.Prompt{CropTemp: temp}, Runner: r}, dets, words)
 	if err != nil {
 		return nil, fmt.Errorf("hybrid: %w", err)
 	}
-	rows, err = promptens.Average(raw, len(words), len(rs.tmpl))
-	if err != nil {
-		return nil, err
-	}
-
-	rs.mu.Lock()
-	defer rs.mu.Unlock()
-	if existing := rs.cache[key]; existing != nil {
-		return existing, nil // lost a race; both are identical, keep the published one
-	}
-	if rs.cache == nil {
-		rs.cache = map[string][][]float32{}
-	}
-	if len(rs.order) >= maxVocabCache {
-		delete(rs.cache, rs.order[0])
-		rs.order = rs.order[1:]
-	}
-	rs.cache[key] = rows
-	rs.order = append(rs.order, key)
-	return rows, nil
-}
-
-// softmaxAt returns the softmax probability of index k, computed stably. A non-positive
-// temperature would divide by zero or invert the ordering, so it falls back to the package
-// default rather than producing silent nonsense.
-func softmaxAt(row []float32, k int, temp float64) float32 {
-	if k < 0 || k >= len(row) || len(row) == 0 {
-		return 0
-	}
-	if len(row) == 1 {
-		return 1
-	}
-	if temp <= 0 {
-		temp = cropTemp
-	}
-	max := row[0]
-	for _, v := range row[1:] {
-		if v > max {
-			max = v
-		}
-	}
-	var sum float64
-	for _, v := range row {
-		sum += math.Exp(float64(v-max) / temp)
-	}
-	if sum == 0 {
-		return 0
-	}
-	return float32(math.Exp(float64(row[k]-max)/temp) / sum)
+	return out, nil
 }
