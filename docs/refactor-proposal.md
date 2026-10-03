@@ -339,3 +339,8 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   manifest do catalog sinh ra không khai báo `files.head`.
 - Bộ nhớ automask ở 3200×2400 còn tăng khoảng +0.8 GB (bitmap `[]bool` toàn khung cho
   grasp/background; số worker ở lượt full-res).
+- `internal/vision/preprocess` import `internal/engine` chỉ để dùng kiểu `engine.Tensor`, nên kéo
+  theo cgo (binding `yalue/onnxruntime_go`). Vì vậy preprocess và mọi package model không build
+  hay test được khi `CGO_ENABLED=0` (ví dụ cross-build mà không có compiler aarch64). Chuyển
+  `Tensor` (và các helper như `engine.F32`) sang một package không dùng cgo, `engine` giữ alias,
+  thì preprocess và model build/test được mà không cần cgo. Chưa làm.
