@@ -280,9 +280,17 @@ func (m *Manager) buildModel(name string) (models.Base, *registry.Manifest, erro
 	if _, err := man.Providers(); err != nil { // validate the EP chain at the same point Load always did
 		return nil, nil, err
 	}
+	// The manifest's preprocessing, resolved once here for every model: the preprocess: block
+	// with the legacy input.* fields as aliases (registry.Manifest.PreprocessSpec). The legacy
+	// fields below stay filled — the registry keeps them consistent with the block.
+	spec, err := man.PreprocessSpec()
+	if err != nil {
+		return nil, nil, fmt.Errorf("lifecycle: %q: %w", name, err)
+	}
 
 	cfg := models.Config{
 		Name:       man.Name,
+		Preprocess: &spec,
 		Width:      man.Input.Width,
 		Height:     man.Input.Height,
 		Layout:     man.Input.Layout,

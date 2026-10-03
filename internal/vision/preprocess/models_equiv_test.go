@@ -57,10 +57,7 @@ func TestPlainModelsMatchFrozenCode(t *testing.T) {
 		{"scrfd", legacyCfg{Width: 640, Height: 480, Mean: scrfdNorm.Mean, Std: scrfdNorm.Std}, oldSCRFD},
 		{"scrfd", legacyCfg{Width: 320, Height: 320}, oldSCRFD},
 	}
-	ins := inputs(sizes)
-	if testing.Short() {
-		ins = inputs(typeSizes)
-	}
+	ins, _ := sweep()
 	for _, c := range cases {
 		c := c
 		t.Run(c.arch, func(t *testing.T) {
@@ -146,10 +143,7 @@ func TestPipelineEncodersMatchFrozenCode(t *testing.T) {
 		{"paddle-ocr", models.Config{Width: 320, Height: 320, Dir: paddleDir}, false,
 			func(img image.Image) engine.Tensor { t, _, _, _ := oldPaddleDet(img, 320); return t }},
 	}
-	small, big := inputs(sizes), inputs(bigOutSizes)
-	if testing.Short() {
-		small, big = inputs(typeSizes), inputs([][2]int{{3, 5}, {640, 480}})
-	}
+	small, big := sweep()
 	for _, c := range cases {
 		c := c
 		t.Run(c.arch, func(t *testing.T) {

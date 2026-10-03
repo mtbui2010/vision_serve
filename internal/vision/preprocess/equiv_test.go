@@ -119,10 +119,7 @@ func specCases() []specCase {
 // TestSpecMatchesFrozenCode: every Spec reproduces the code path it replaced, bit for bit, on
 // every test size and image type.
 func TestSpecMatchesFrozenCode(t *testing.T) {
-	small, big := inputs(sizes), inputs(bigOutSizes)
-	if testing.Short() {
-		small, big = inputs(typeSizes), inputs([][2]int{{3, 5}, {640, 480}})
-	}
+	small, big := sweep()
 	for _, c := range specCases() {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
@@ -154,7 +151,11 @@ func TestTensorMatchesImageToCHWFloat(t *testing.T) {
 		{"none", nil, nil}, {"imagenet", imagenetMean, imagenetStd}, {"half", []float32{0.5, 0.5, 0.5}, []float32{0.5, 0.5, 0.5}},
 		{"partial", []float32{0.3}, []float32{0.2, 0, 0.7, 9}},
 	}
-	for _, in := range inputs(typeSizes) {
+	ins := inputs(typeSizes)
+	if raceEnabled {
+		ins, _ = sweep()
+	}
+	for _, in := range ins {
 		for _, n := range norms {
 			got := preprocess.Spec{Mean: n.mean, Std: n.std}.Tensor(in.img)
 			sameTensor(t, in.name+"/"+n.name, got, oldImageToCHWFloat(in.img, n.mean, n.std))

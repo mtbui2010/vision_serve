@@ -170,6 +170,12 @@ type Manifest struct {
 		} `yaml:"normalize"`
 	} `yaml:"input"`
 
+	// Preprocess (OPTIONAL): the model's preprocessing as data (internal/vision/preprocess.Spec).
+	// The legacy input.* fields above are aliases of it: either may be used, both must agree
+	// where both speak (see PreprocessSpec and docs/manifest-spec.md). validate() writes what the
+	// block declares back into the input.* view, so code reading those fields sees the same.
+	Preprocess *PreprocessBlock `yaml:"preprocess,omitempty"`
+
 	Postprocess struct {
 		Type          string  `yaml:"type"`
 		BoxFormat     string  `yaml:"box_format"`
@@ -209,6 +215,11 @@ type Manifest struct {
 
 	// dir is the directory containing the manifest (filled at load time, not in the YAML).
 	dir string `yaml:"-"`
+
+	// inputKeys records which legacy input.* keys the YAML spelled out (LoadManifest), so an
+	// explicit `letterbox: false` can be told from an absent one. nil for a Manifest built in
+	// code: the non-zero fields count as declared.
+	inputKeys *legacyKeys `yaml:"-"`
 }
 
 // LoadManifest reads + parses + validates a manifest.yaml file.
@@ -221,6 +232,11 @@ func LoadManifest(path string) (*Manifest, error) {
 	if err := yaml.Unmarshal(raw, &m); err != nil {
 		return nil, fmt.Errorf("registry: failed to parse YAML %s: %w", path, err)
 	}
+	keys, err := declaredInputKeys(raw)
+	if err != nil {
+		return nil, fmt.Errorf("registry: failed to parse YAML %s: %w", path, err)
+	}
+	m.inputKeys = &keys
 	m.dir = filepath.Dir(path)
 	if err := m.validate(); err != nil {
 		return nil, fmt.Errorf("registry: invalid manifest %s: %w", path, err)
@@ -264,8 +280,17 @@ func (m *Manifest) validate() error {
 	// STRUCTURAL validity (license/task/dims/EP) so a model can still be LISTED even
 	// without downloaded weights (like Ollama: see the model before you pull). Weights are
 	// checked at Load time via WeightsExist() — see lifecycle.
+	if m.Preprocess != nil {
+		// The block and the legacy input.* aliases must agree; the resolved spec is then written
+		// back into the input.* view (width/height may come from the block alone).
+		spec, err := m.PreprocessSpec()
+		if err != nil {
+			return err
+		}
+		m.fillLegacyView(spec)
+	}
 	if m.Input.Width <= 0 || m.Input.Height <= 0 {
-		return fmt.Errorf("input.width/height must be > 0")
+		return fmt.Errorf("input.width/height (or preprocess.size) must be > 0")
 	}
 	switch m.Input.Crop {
 	case "", "center":

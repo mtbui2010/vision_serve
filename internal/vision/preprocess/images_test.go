@@ -157,6 +157,20 @@ func inputs(sz [][2]int) []testImage {
 	return out
 }
 
+// sweep returns the inputs of the equivalence sweeps: small for ordinary outputs, big for the
+// 1024×1024 encoders. The full sweep runs normally; -short and -race (which slows imaging ~25x,
+// and has nothing to find in this single-goroutine-per-call code beyond imaging's own
+// parallelism) run a few sizes, every image type still included.
+func sweep() (small, big []testImage) {
+	switch {
+	case raceEnabled:
+		return inputs([][2]int{{3, 5}, {17, 31}}), inputs([][2]int{{3, 5}})
+	case testing.Short():
+		return inputs(typeSizes), inputs([][2]int{{3, 5}, {640, 480}})
+	}
+	return inputs(sizes), inputs(bigOutSizes)
+}
+
 // sameTensor fails unless got and want have the same shape, dtype and BITS.
 func sameTensor(t *testing.T, what string, got, want engine.Tensor) {
 	t.Helper()

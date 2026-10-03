@@ -1,0 +1,262 @@
+{
+  "_doc": "How a manifest's preprocess: block and its legacy input.* aliases resolve to ONE preprocess.Spec. Run by internal/registry/preprocess_test.go (registry.Manifest.PreprocessSpec, through LoadManifest) and clients/python/tests/test_go_python_sync.py (convert.reference.spec_from_manifest). `spec` is the expected resolution (absent fields: zero / empty, rescale defaults to true); `error` lists substrings the error must contain — for a conflict, both field names.",
+  "cases": [
+    {
+      "name": "legacy only: squash (rf-detr)",
+      "input": {"width": 560, "height": 560, "layout": "NCHW", "letterbox": false,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "spec": {"resize": "squash", "width": 560, "height": 560, "layout": "NCHW",
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225], "legacy": true}
+    },
+    {
+      "name": "legacy only: letterbox (rt-detr)",
+      "input": {"width": 640, "height": 640, "letterbox": true,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "spec": {"resize": "letterbox", "width": 640, "height": 640,
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225], "legacy": true}
+    },
+    {
+      "name": "legacy only: center crop (clip)",
+      "input": {"width": 224, "height": 224, "layout": "nchw", "letterbox": false, "crop": "center",
+                "normalize": {"mean": [0.48145466, 0.4578275, 0.40821073], "std": [0.26862954, 0.26130258, 0.27577711]}},
+      "spec": {"resize": "center_crop", "width": 224, "height": 224, "layout": "NCHW",
+               "mean": [0.48145466, 0.4578275, 0.40821073], "std": [0.26862954, 0.26130258, 0.27577711], "legacy": true}
+    },
+    {
+      "name": "legacy only: keep_aspect + multiple_of (depth-anything-v2)",
+      "input": {"width": 518, "height": 518, "keep_aspect": true, "multiple_of": 14,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "spec": {"resize": "keep_aspect", "width": 518, "height": 518, "multiple_of": 14,
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225], "legacy": true}
+    },
+    {
+      "name": "legacy only: multiple_of without keep_aspect is not carried",
+      "input": {"width": 256, "height": 256, "multiple_of": 32},
+      "spec": {"resize": "squash", "width": 256, "height": 256, "legacy": true}
+    },
+    {
+      "name": "legacy only: scrfd (letterbox flag, normalize in 0..255 units, read by the architecture)",
+      "input": {"width": 640, "height": 640, "letterbox": true,
+                "normalize": {"mean": [127.5, 127.5, 127.5], "std": [128.0, 128.0, 128.0]}},
+      "spec": {"resize": "letterbox", "width": 640, "height": 640,
+               "mean": [127.5, 127.5, 127.5], "std": [128.0, 128.0, 128.0], "legacy": true}
+    },
+    {
+      "name": "legacy only: reference-only input block (SAM family)",
+      "input": {"width": 1024, "height": 1024, "layout": "NHWC", "letterbox": false},
+      "spec": {"resize": "squash", "width": 1024, "height": 1024, "layout": "NHWC", "legacy": true}
+    },
+    {
+      "name": "block only: letterbox (input block omitted, size from the block)",
+      "preprocess": {"resize": "letterbox", "size": 640, "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
+      "spec": {"resize": "letterbox", "width": 640, "height": 640,
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
+    },
+    {
+      "name": "block only: top_left_pad, 0..255 units (scrfd)",
+      "preprocess": {"resize": "top_left_pad", "width": 640, "height": 480, "rescale": false,
+                     "mean": [127.5, 127.5, 127.5], "std": [128.0, 128.0, 128.0]},
+      "spec": {"resize": "top_left_pad", "width": 640, "height": 480, "rescale": false,
+               "mean": [127.5, 127.5, 127.5], "std": [128.0, 128.0, 128.0]}
+    },
+    {
+      "name": "block only: long_side_pad to multiples, no upscale (paddle-ocr det)",
+      "preprocess": {"resize": "long_side_pad", "size": 960, "multiple_of": 32, "no_upscale": true,
+                     "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
+      "spec": {"resize": "long_side_pad", "width": 960, "height": 960, "multiple_of": 32, "no_upscale": true,
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
+    },
+    {
+      "name": "block only: long_side raw HWC (mobile-sam)",
+      "preprocess": {"resize": "long_side", "size": 1024, "rescale": false, "layout": "hwc"},
+      "spec": {"resize": "long_side", "width": 1024, "height": 1024, "rescale": false, "layout": "HWC"}
+    },
+    {
+      "name": "block only: keep_aspect, explicit resample, gray pad irrelevant",
+      "preprocess": {"resize": "Keep_Aspect", "size": 518, "multiple_of": 14, "resample": "BICUBIC",
+                     "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
+      "spec": {"resize": "keep_aspect", "width": 518, "height": 518, "multiple_of": 14, "resample": "bicubic",
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
+    },
+    {
+      "name": "block only: letterbox with a gray pad",
+      "preprocess": {"resize": "letterbox", "width": 512, "height": 384, "pad": 114},
+      "spec": {"resize": "letterbox", "width": 512, "height": 384, "pad": 114}
+    },
+    {
+      "name": "block without resize: the architecture's default",
+      "input": {"width": 224, "height": 224},
+      "preprocess": {"mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5]},
+      "spec": {"resize": "", "width": 224, "height": 224, "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5]}
+    },
+    {
+      "name": "both, consistent: rf-detr legacy fields + block",
+      "input": {"width": 560, "height": 560, "layout": "NCHW", "letterbox": false,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "preprocess": {"resize": "squash", "size": 560, "layout": "NCHW",
+                     "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
+      "spec": {"resize": "squash", "width": 560, "height": 560, "layout": "NCHW",
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
+    },
+    {
+      "name": "both, consistent: scrfd's legacy letterbox flag + top_left_pad",
+      "input": {"width": 640, "height": 640, "layout": "NCHW", "letterbox": true,
+                "normalize": {"mean": [127.5, 127.5, 127.5], "std": [128.0, 128.0, 128.0]}},
+      "preprocess": {"resize": "top_left_pad", "rescale": false},
+      "spec": {"resize": "top_left_pad", "width": 640, "height": 640, "layout": "NCHW", "rescale": false,
+               "mean": [127.5, 127.5, 127.5], "std": [128.0, 128.0, 128.0]}
+    },
+    {
+      "name": "both, consistent: letterbox flag + long_side_pad",
+      "input": {"width": 1024, "height": 1024, "letterbox": true},
+      "preprocess": {"resize": "long_side_pad", "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
+      "spec": {"resize": "long_side_pad", "width": 1024, "height": 1024,
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
+    },
+    {
+      "name": "both, consistent: block geometry, legacy normalize and multiple_of inherited",
+      "input": {"width": 518, "height": 518, "multiple_of": 14,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "preprocess": {"resize": "keep_aspect"},
+      "spec": {"resize": "keep_aspect", "width": 518, "height": 518, "multiple_of": 14,
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
+    },
+    {
+      "name": "both, consistent: legacy crop flag, block resample",
+      "input": {"width": 224, "height": 224, "crop": "center"},
+      "preprocess": {"resample": "bilinear"},
+      "spec": {"resize": "center_crop", "width": 224, "height": 224, "resample": "bilinear"}
+    },
+    {
+      "name": "conflict: letterbox false vs resize letterbox",
+      "input": {"width": 560, "height": 560, "letterbox": false},
+      "preprocess": {"resize": "letterbox"},
+      "error": ["input.letterbox: false", "preprocess.resize: letterbox"]
+    },
+    {
+      "name": "conflict: letterbox true vs resize squash",
+      "input": {"width": 560, "height": 560, "letterbox": true},
+      "preprocess": {"resize": "squash"},
+      "error": ["input.letterbox: true", "preprocess.resize: squash"]
+    },
+    {
+      "name": "conflict: crop center vs resize squash",
+      "input": {"width": 224, "height": 224, "crop": "center"},
+      "preprocess": {"resize": "squash"},
+      "error": ["input.crop: center", "preprocess.resize: squash"]
+    },
+    {
+      "name": "conflict: keep_aspect true vs resize long_side",
+      "input": {"width": 518, "height": 518, "keep_aspect": true},
+      "preprocess": {"resize": "long_side"},
+      "error": ["input.keep_aspect: true", "preprocess.resize: long_side"]
+    },
+    {
+      "name": "conflict: keep_aspect false vs resize keep_aspect",
+      "input": {"width": 518, "height": 518, "keep_aspect": false},
+      "preprocess": {"resize": "keep_aspect"},
+      "error": ["input.keep_aspect: false", "preprocess.resize: keep_aspect"]
+    },
+    {
+      "name": "conflict: input.width vs preprocess.size",
+      "input": {"width": 560, "height": 560},
+      "preprocess": {"size": 512},
+      "error": ["input.width: 560", "preprocess width 512"]
+    },
+    {
+      "name": "conflict: input.height vs preprocess.height",
+      "input": {"width": 640, "height": 640},
+      "preprocess": {"width": 640, "height": 480},
+      "error": ["input.height: 640", "preprocess height 480"]
+    },
+    {
+      "name": "conflict: normalize.mean vs preprocess.mean",
+      "input": {"width": 224, "height": 224, "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "preprocess": {"mean": [0.5, 0.5, 0.5], "std": [0.229, 0.224, 0.225]},
+      "error": ["input.normalize.mean", "preprocess.mean"]
+    },
+    {
+      "name": "conflict: normalize.std vs preprocess.std",
+      "input": {"width": 224, "height": 224, "normalize": {"mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5]}},
+      "preprocess": {"mean": [0.5, 0.5, 0.5], "std": [0.25, 0.5, 0.5]},
+      "error": ["input.normalize.std", "preprocess.std"]
+    },
+    {
+      "name": "conflict: layout",
+      "input": {"width": 224, "height": 224, "layout": "NHWC"},
+      "preprocess": {"layout": "NCHW"},
+      "error": ["input.layout: NHWC", "preprocess.layout: NCHW"]
+    },
+    {
+      "name": "conflict: multiple_of",
+      "input": {"width": 518, "height": 518, "keep_aspect": true, "multiple_of": 14},
+      "preprocess": {"resize": "keep_aspect", "multiple_of": 16},
+      "error": ["input.multiple_of: 14", "preprocess.multiple_of: 16"]
+    },
+    {
+      "name": "invalid block: unknown resize",
+      "input": {"width": 224, "height": 224},
+      "preprocess": {"resize": "stretch"},
+      "error": ["preprocess.resize", "stretch"]
+    },
+    {
+      "name": "invalid block: mean without std",
+      "input": {"width": 224, "height": 224},
+      "preprocess": {"resize": "squash", "mean": [0.5, 0.5, 0.5]},
+      "error": ["mean and std go together"]
+    },
+    {
+      "name": "invalid block: two mean values",
+      "input": {"width": 224, "height": 224},
+      "preprocess": {"resize": "squash", "mean": [0.5, 0.5], "std": [0.5, 0.5]},
+      "error": ["3 values"]
+    },
+    {
+      "name": "invalid block: multiple_of on squash",
+      "input": {"width": 224, "height": 224},
+      "preprocess": {"resize": "squash", "multiple_of": 32},
+      "error": ["multiple_of applies to keep_aspect and long_side_pad"]
+    },
+    {
+      "name": "invalid block: no_upscale on letterbox",
+      "input": {"width": 224, "height": 224},
+      "preprocess": {"resize": "letterbox", "no_upscale": true},
+      "error": ["no_upscale applies to long_side and long_side_pad"]
+    },
+    {
+      "name": "invalid block: size disagrees with width",
+      "preprocess": {"resize": "squash", "size": 640, "width": 512},
+      "error": ["preprocess.size: 640", "preprocess.width/height"]
+    },
+    {
+      "name": "invalid block: pixel pad out of range",
+      "input": {"width": 224, "height": 224},
+      "preprocess": {"resize": "top_left_pad", "pad": 300},
+      "error": ["pad 300"]
+    },
+    {
+      "name": "invalid block: pad on a mode without padding",
+      "input": {"width": 224, "height": 224},
+      "preprocess": {"resize": "squash", "pad": 1},
+      "error": ["pad applies to letterbox, top_left_pad and long_side_pad"]
+    },
+    {
+      "name": "invalid block: unknown resample",
+      "input": {"width": 224, "height": 224},
+      "preprocess": {"resize": "squash", "resample": "lanczos"},
+      "error": ["resample \"lanczos\""]
+    },
+    {
+      "name": "invalid block: unknown layout",
+      "input": {"width": 224, "height": 224},
+      "preprocess": {"resize": "squash", "layout": "CHW"},
+      "error": ["layout \"CHW\""]
+    },
+    {
+      "name": "invalid block: none resamples nothing",
+      "input": {"width": 1024, "height": 1024},
+      "preprocess": {"resize": "none", "resample": "bicubic"},
+      "error": ["resize none does not resample"]
+    }
+  ]
+}

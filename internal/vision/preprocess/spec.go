@@ -186,8 +186,11 @@ func (s Spec) Filter() imaging.ResampleFilter {
 // Validate checks the spec. A declared spec (Legacy = false) is checked strictly; a legacy one
 // only for what the code always needed (the old fields were never validated further, and a
 // manifest that loaded before must keep loading).
+//
+// Resize "" is valid — "the architecture's default", which Arch.Resolve fills in — but Apply
+// needs a concrete mode.
 func (s Spec) Validate() error {
-	if !s.Resize.known() {
+	if s.Resize != "" && !s.Resize.known() {
 		return fmt.Errorf("preprocess: resize %q is invalid (%s)", s.Resize, modeList())
 	}
 	if s.Resize != None && (s.Width <= 0 || s.Height <= 0) {
