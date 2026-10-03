@@ -19,7 +19,10 @@ changes the defaults and the labels. Graph contract (internal/models/textalign/h
              text_embeds  float32 [classes, d_text]          per request, so an INPUT, not weights
     output   logits       float32 [batch, queries, classes]  RAW (no sigmoid), Scale applied once
 
-The degenerate query (||P f|| = 0) gives exactly Bias in both the graph and the Go path.
+The degenerate query (f = 0) gives exactly Bias in both the graph and the Go path. Go's guard is
+"Gram-form ||P f||^2 <= 0", the graph's "sum of z^2 == 0"; they can only part when rounding makes
+a positive ||P f||^2 look <= 0, which real detector features never approach (see the comment on the
+contract in internal/models/textalign/headonnx.go for the measurement).
 
 Only method "exact" runs on the graph. "folded", "gated" and "dual" still read proj.bin in Go
 (they skip the norm, which is the expensive part), so proj.bin stays the source of truth and
