@@ -73,6 +73,7 @@ manifest for the sweep and for why the number is not transferable between method
 | `proj.bin` | `P` [512,256] + `(a, b)` = 524 320 bytes. The only trained tensor |
 | `labels.txt` | the detector's own labels, **in the detector's order** — `gated` indexes the class tensor by these positions to find the `N/A` background column |
 | `templates.txt` | prompt ensemble for the text tower |
+| `head.onnx` | `proj.bin` exported as an ONNX graph (`files.head`, with `runtime.threads: {head: 1}`): method `exact` on ONNX Runtime, same outputs as the Go head. **Generated locally, not committed, not on the HF catalog** — `python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py --proj models/rfdetr-textalign-dec1/proj.bin`; re-export whenever `proj.bin` changes. See [`../rfdetr-textalign-dec1-siglip/README.md`](../rfdetr-textalign-dec1-siglip/README.md#headonnx--method-exact-on-onnx-runtime) |
 
 `P`'s effective rank is 32.5 of 256 (top 64 singular directions carry 95.2% of the energy), so
 there is room to compress it for smaller edge targets; not attempted.

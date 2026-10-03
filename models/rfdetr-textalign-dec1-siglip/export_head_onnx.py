@@ -38,6 +38,10 @@ Usage (from the repo root, with any Python that has numpy + onnx + onnxruntime):
     python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py --check-only
 
 Then enable it in that directory's manifest.yaml:   files:  head: head.onnx
+                                       together with  runtime:  threads: {head: 1}
+The shipped rfdetr-textalign-* manifests already do; head.onnx itself is not committed and not on
+the HF catalog, so this script is how a checkout gets it. The export is deterministic (same proj.bin
+and same onnx package -> byte-identical head.onnx).
 """
 import argparse
 import importlib.util

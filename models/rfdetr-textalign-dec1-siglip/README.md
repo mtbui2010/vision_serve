@@ -83,12 +83,43 @@ documented closed-choice behaviour of the method, not a failure of this model.
 | `labels.txt` | **the detector's own 17 names + `N/A`** — see below |
 | `vocab-all22.txt` | all 22 names, for pasting into a prompt |
 | `templates.txt` | the prompt ensemble the head was trained against |
+| `head.onnx` | `proj.bin` exported as an ONNX graph (`files.head`): method `exact` on ONNX Runtime. **Generated locally, not committed** — see below |
+| `export_head_onnx.py` | writes and verifies `head.onnx` from any textalign `proj.bin` |
 
 `labels.txt` **must** be the detector's own file. `gated` indexes it to find the background
 column *and* matches its length against the class tensor's width to locate that tensor at all; a
 22-name file makes `classLogits` fail to find the head. That is how it was caught here. The
 consequence is that the no-prompt fallback vocabulary is the 17 base names — the other five are
 what a prompt is for.
+
+## `head.onnx` — method `exact` on ONNX Runtime
+
+The manifest enables `files.head: head.onnx` with `runtime.threads: {head: 1}`, so method `exact`
+(the default when a request names no method) runs its 300-query cosine head as an ONNX session
+instead of scalar Go. Outputs are the same (max |Δlogit| ~2e-6 on CPU, max |Δconf| < 1e-6 served
+end to end); served whole-request median went from ~134 to ~121 ms on CPU, and on GPU (CUDA EP)
+from ~62–73 to ~25–41 ms over two runs (`docs/refactor-proposal.md` §6). `folded`,
+`gated` and `dual` are unchanged and still read `proj.bin` in Go.
+
+`head.onnx` is **not committed** (`*.onnx` is gitignored) and is **not on the HF catalog** — none
+of the `rfdetr-textalign-*` models has an entry in `internal/catalog/catalog.go`, so
+`visionserve pull` never writes one of these directories. Generate it once per checkout, from the
+repo root, with any Python that has `numpy`, `onnx` and `onnxruntime`:
+
+```sh
+python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py                  # this directory
+python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py \
+    --proj models/<dir>/proj.bin                                                 # any other textalign dir
+python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py --check-only     # re-verify an existing one
+```
+
+The export is deterministic: the same `proj.bin` (and `onnx` package) gives a byte-identical
+`head.onnx`. **Re-export
+whenever `proj.bin` changes** (including swapping in `proj-openvocab.bin`): the server checks one
+query per request against `proj.bin` and refuses a `head.onnx` that disagrees. Without the file
+the model does not load; to serve without it, comment out `files.head` **and**
+`runtime.threads` in the manifest (the Go head gives the same outputs). The `-probe` directories
+link `head.onnx` to their sibling's, the same way they link `proj.bin`.
 
 ## Known gaps
 
