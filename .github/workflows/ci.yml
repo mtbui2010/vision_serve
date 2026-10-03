@@ -24,7 +24,9 @@ jobs:
 
       - name: gofmt (chặn file chưa format)
         run: |
-          unformatted="$(gofmt -l .)"
+          # Bỏ qua .claude/ (worktree cục bộ của agent); trên CI thư mục này không có .go nên
+          # tập file giống hệt `gofmt -l .`. Cùng tập file với `make fmt`.
+          unformatted="$(gofmt -l $(find . -path ./.claude -prune -o -name '*.go' -print))"
           if [ -n "$unformatted" ]; then
             echo "Các file chưa gofmt:"; echo "$unformatted"
             exit 1

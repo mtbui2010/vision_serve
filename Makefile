@@ -106,8 +106,12 @@ demo: build ## Demo on real COCO images (boxes/masks -> demo/out/) [GPU=0]
 test: ## Run unit tests (pre/postprocess, etc.)
 	go test $(GOFLAGS) ./...
 
-fmt: ## gofmt the whole tree
-	gofmt -w .
+# Every .go file in the repo except .claude/ (local agent worktrees are full checkouts
+# of other branches; `gofmt -w .` would rewrite them). Same file set as the CI gofmt step.
+GOFMT_FILES = $$(find . -path ./.claude -prune -o -name '*.go' -print)
+
+fmt: ## gofmt the whole tree (skips .claude/)
+	gofmt -w $(GOFMT_FILES)
 
 vet: ## go vet
 	go vet ./...
@@ -136,9 +140,15 @@ paper-clean: ## Remove paper LaTeX aux files (keeps main.pdf)
 
 ## --- Cross build / Docker ---
 
-build-linux-arm64: ## Build for Jetson/arm64
+# yalue/onnxruntime_go uses cgo, and Go disables cgo when cross-compiling, so the
+# arm64 build needs CGO_ENABLED=1 and an aarch64 C compiler (same as the CI
+# cross-build job). Debian/Ubuntu: apt install gcc-aarch64-linux-gnu.
+ARM64_CC ?= aarch64-linux-gnu-gcc
+
+build-linux-arm64: ## Build for Jetson/arm64 (needs aarch64-linux-gnu-gcc; override with ARM64_CC=…)
+	@command -v $(firstword $(ARM64_CC)) >/dev/null 2>&1 || { echo "ERROR: '$(ARM64_CC)' not found — install gcc-aarch64-linux-gnu or set ARM64_CC=…" >&2; exit 1; }
 	@mkdir -p $(BIN_DIR)
-	GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BINARY)-linux-arm64 $(PKG)
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=1 CC="$(ARM64_CC)" go build $(GOFLAGS) -ldflags '$(LDFLAGS)' -o $(BIN_DIR)/$(BINARY)-linux-arm64 $(PKG)
 
 docker: ## Build the server image (CPU; add ORT_VARIANT=gpu for a GPU image)
 	cp deploy/.dockerignore .dockerignore
