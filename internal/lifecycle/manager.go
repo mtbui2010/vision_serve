@@ -105,16 +105,25 @@ func (m *Manager) PredictPrompt(name string, img image.Image, prompt models.Prom
 		return api.Result{}, err
 	}
 	defer release()
-	// Resolve template images for instance_detection models.
-	if prompt.TemplateName != "" && m.tmpl != nil {
-		imgs := m.tmpl.Get(prompt.TemplateName)
-		if len(imgs) == 0 {
-			return api.Result{}, fmt.Errorf("lifecycle: %w: template %q not found — register via POST /api/templates",
-				ErrInvalidRequest, prompt.TemplateName)
-		}
-		prompt.TemplateImages = imgs
+	if err := m.resolveTemplates(&prompt); err != nil {
+		return api.Result{}, err
 	}
 	return s.Predict(img, prompt, time.Now())
+}
+
+// resolveTemplates fills prompt.TemplateImages from the registered set prompt.TemplateName
+// (instance_detection models), for predict and preprocess alike.
+func (m *Manager) resolveTemplates(prompt *models.Prompt) error {
+	if prompt.TemplateName == "" || m.tmpl == nil {
+		return nil
+	}
+	imgs := m.tmpl.Get(prompt.TemplateName)
+	if len(imgs) == 0 {
+		return fmt.Errorf("lifecycle: %w: template %q not found — register via POST /api/templates",
+			ErrInvalidRequest, prompt.TemplateName)
+	}
+	prompt.TemplateImages = imgs
+	return nil
 }
 
 // InferTensor ensures the model is loaded then runs the tensor-in path (no decode/preprocess).

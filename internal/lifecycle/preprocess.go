@@ -40,6 +40,9 @@ func (m *Manager) Preprocess(name string, img image.Image, prompt models.Prompt)
 	if err != nil {
 		return PreprocessResult{}, err
 	}
+	if err := m.resolveTemplates(&prompt); err != nil { // as PredictPrompt does (owlvit)
+		return PreprocessResult{}, err
+	}
 	switch mdl := base.(type) {
 	case models.Model:
 		if img == nil {

@@ -7,6 +7,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/templates"
 )
 
 // fakePipeline builds a token tensor and an image tensor, calls its session, and would go on to
@@ -64,5 +65,29 @@ func TestPreprocessModelRefusalIsInvalidRequest(t *testing.T) {
 	}
 	if _, err := m.Preprocess("no-such-model", nil, models.Prompt{}); !errors.Is(err, ErrModelNotFound) {
 		t.Fatalf("unknown model: %v, want ErrModelNotFound", err)
+	}
+}
+
+// /api/preprocess resolves template_name exactly as predict does: an unknown set is the
+// caller's error (400) — owlvit's preprocess used to fail with "no template images" (500).
+func TestPreprocessResolvesTemplateName(t *testing.T) {
+	root := t.TempDir()
+	writeTestModel(t, root, "inst", "test-pipe", "")
+	m, _ := newFakeManager(t, scanRegistry(t, root))
+	store := templates.New()
+	if err := store.Register("mug", []image.Image{image.NewRGBA(image.Rect(0, 0, 4, 4))}); err != nil {
+		t.Fatal(err)
+	}
+	m.SetTemplateStore(store)
+	testHooks.setInfer(t, "inst", func(r models.Runner) (models.Result, error) {
+		_, err := r.Run("x", map[string]engine.Tensor{"in": engine.F32([]float32{1}, 1)})
+		return models.Result{}, err
+	})
+	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
+	if _, err := m.Preprocess("inst", img, models.Prompt{TemplateName: "nope"}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("unknown template: %v, want ErrInvalidRequest", err)
+	}
+	if _, err := m.Preprocess("inst", img, models.Prompt{TemplateName: "mug"}); err != nil {
+		t.Fatalf("registered template: %v", err)
 	}
 }
