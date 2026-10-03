@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"runtime"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -213,17 +214,21 @@ func (m *Manager) load(name string) (*Session, error) {
 // a SessionPool of n identical sessions (n concurrent inferences instead of one at a time). If any
 // session fails, every session it already created is closed before the error is returned, so a
 // failed load never strands VRAM.
+//
+// Each pooled session gets a capped intra-op thread pool (poolIntraOpThreads); a lone session
+// keeps ORT's default.
 func newRunnable(path string, inputNames, outputNames []string, n int, providers []engine.Provider) (engine.Runnable, error) {
 	if n <= 1 {
-		s, err := engine.NewSession(path, inputNames, outputNames, providers)
+		s, err := newEngineSession(path, inputNames, outputNames, providers, engine.SessionOptions{})
 		if err != nil {
 			return nil, err
 		}
 		return s, nil
 	}
+	so := engine.SessionOptions{IntraOpThreads: poolIntraOpThreads(n, runtime.NumCPU(), os.Getenv("VS_POOL_THREADS"))}
 	sessions := make([]*engine.Session, 0, n)
 	for i := 0; i < n; i++ {
-		s, err := engine.NewSession(path, inputNames, outputNames, providers)
+		s, err := newEngineSession(path, inputNames, outputNames, providers, so)
 		if err != nil {
 			for _, c := range sessions {
 				_ = c.Close()
@@ -233,6 +238,34 @@ func newRunnable(path string, inputNames, outputNames []string, n int, providers
 		sessions = append(sessions, s)
 	}
 	return engine.NewSessionPool(sessions), nil
+}
+
+// newEngineSession creates one ONNX session; tests replace it.
+var newEngineSession = engine.NewSessionWith
+
+// poolIntraOpThreads sizes the intra-op thread pool of EACH session in an n-session pool.
+//
+// ORT's default gives every session one spinning thread per physical core, and a pool exists to
+// run its sessions at once: MobileSAM's automask drives its 4 decoder copies together, so the
+// default put 4×cores busy threads on the machine. Measured on CPU (2×12-core Xeon, 48 logical,
+// shared and busy; automask of a 640×480 image = 311 decoder calls), per request:
+//
+//	default (24 threads/session)  17–22 s, ~600–670 CPU-s
+//	6 threads/session              7–15 s, ~150–170 CPU-s
+//	3 threads/session              3.7–5.7 s, ~60–80 CPU-s
+//
+// with identical outputs. So the pool shares a quarter of the logical CPUs (half the physical
+// cores with 2-way SMT): runtime.NumCPU()/(4n) threads per session, at least 1.
+//
+// VS_POOL_THREADS (env) overrides it: an integer >= 1 is used as is, 0 restores ORT's default.
+func poolIntraOpThreads(n, ncpu int, env string) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(env)); err == nil && v >= 0 {
+		return v
+	}
+	if n < 1 {
+		n = 1
+	}
+	return max(1, ncpu/(4*n))
 }
 
 // closeEngines releases a partially-built set of sessions/pools on a load error.

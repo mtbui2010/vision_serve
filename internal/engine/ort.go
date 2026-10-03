@@ -163,11 +163,29 @@ type Session struct {
 // ActiveEP returns the execution provider that is actually running this session.
 func (s *Session) ActiveEP() Provider { return s.activeEP }
 
+// SessionOptions tunes one session beyond its EP chain. The zero value keeps ONNX Runtime's
+// defaults.
+type SessionOptions struct {
+	// IntraOpThreads sizes the session's intra-op thread pool (0 = ORT's default, one thread per
+	// physical core). Every session owns its own pool and its idle threads spin, so N pooled
+	// copies of a graph running at once at the default would put N×cores busy threads on the
+	// machine. The thread count does not change the outputs.
+	IntraOpThreads int
+}
+
 // NewSession creates a session from the ONNX file with an EP fallback chain (TensorRT→CUDA→CPU).
 // If inputNames/outputNames are empty, they are auto-probed from the ONNX file (Inspect: a header
 // read, so the graph is loaded once — by the session itself, not again by the probe).
 // A failure to append an EP (e.g. TensorRT missing on the host) is NOT fatal — it falls back to the next EP.
 func NewSession(modelPath string, inputNames, outputNames []string, providers []Provider) (*Session, error) {
+	return NewSessionWith(modelPath, inputNames, outputNames, providers, SessionOptions{})
+}
+
+// NewSessionWith is NewSession with explicit SessionOptions.
+func NewSessionWith(modelPath string, inputNames, outputNames []string, providers []Provider, so SessionOptions) (*Session, error) {
+	if so.IntraOpThreads < 0 {
+		return nil, fmt.Errorf("engine: IntraOpThreads must be >= 0, got %d", so.IntraOpThreads)
+	}
 	if err := ensureORT(); err != nil {
 		return nil, err
 	}
@@ -200,7 +218,7 @@ func NewSession(modelPath string, inputNames, outputNames []string, providers []
 	// so the session's CUDA per-thread context is bound to the same thread that will Run and
 	// Destroy it — exactly one context for the session's lifetime (see Session doc).
 	ready := make(chan error, 1)
-	go s.worker(modelPath, providers, ready)
+	go s.worker(modelPath, providers, so, ready)
 	if err := <-ready; err != nil {
 		return nil, err
 	}
@@ -210,7 +228,7 @@ func NewSession(modelPath string, inputNames, outputNames []string, providers []
 // worker owns the session's single OS thread for its entire lifetime: it creates the ORT
 // session, runs every job serially, and destroys the session — all on the same locked thread.
 // This is what keeps ORT's CUDA EP to one per-thread context per session (see Session doc).
-func (s *Session) worker(modelPath string, providers []Provider, ready chan<- error) {
+func (s *Session) worker(modelPath string, providers []Provider, so SessionOptions, ready chan<- error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
@@ -220,7 +238,7 @@ func (s *Session) worker(modelPath string, providers []Provider, ready chan<- er
 				sess, err = nil, recoverJob(p)
 			}
 		}()
-		return createORTSession(modelPath, s.inputNames, s.outputNames, providers)
+		return createORTSession(modelPath, s.inputNames, s.outputNames, providers, so)
 	}()
 	if err != nil {
 		ready <- err
@@ -248,7 +266,7 @@ var createORTSession = createSession
 // ORT prints RED errors to stderr while an EP fails over. On eventual success we swallow that
 // noise (it is normal fallback); if ALL EPs are exhausted we reprint the last error. Only ORT's
 // own log lines are held back — see stderr.go for the capture and why it is still an fd swap.
-func createSession(modelPath string, inputNames, outputNames []string, providers []Provider) (*ort.DynamicAdvancedSession, Provider, error) {
+func createSession(modelPath string, inputNames, outputNames []string, providers []Provider, so SessionOptions) (*ort.DynamicAdvancedSession, Provider, error) {
 	candidates := availableProviders(providers)
 	if Trace {
 		fmt.Fprintf(os.Stderr, "engine: [trace] creating session for %s — EP chain: %s\n",
@@ -263,6 +281,12 @@ func createSession(modelPath string, inputNames, outputNames []string, providers
 		opts, err := ort.NewSessionOptions()
 		if err != nil {
 			return nil, activeEP, fmt.Errorf("engine: failed to create SessionOptions: %w", err)
+		}
+		if so.IntraOpThreads > 0 {
+			if err := opts.SetIntraOpNumThreads(so.IntraOpThreads); err != nil {
+				opts.Destroy()
+				return nil, activeEP, fmt.Errorf("engine: set %d intra-op threads: %w", so.IntraOpThreads, err)
+			}
 		}
 		var s *ort.DynamicAdvancedSession
 		// An EP this ORT build does not ship (CUDA on the CPU-only wheel or the CPU Docker image)
