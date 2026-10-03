@@ -31,6 +31,8 @@ func New(root string) *Registry {
 
 // Scan scans root/*/manifest.yaml and validates each one. A broken manifest (e.g. missing
 // ONNX file, forbidden license) is SKIPPED + collected into the returned error list, without aborting the scan.
+// A manifest with keys no field reads (Manifest.UnknownKeys) is loaded, and also gets a warning
+// in that list.
 // The root directory is created automatically if it does not yet exist.
 func (r *Registry) Scan() ([]error, error) {
 	if err := os.MkdirAll(r.root, 0o755); err != nil {
@@ -60,6 +62,12 @@ func (r *Registry) Scan() ([]error, error) {
 		if mErr != nil {
 			warns = append(warns, mErr)
 			continue
+		}
+		if unknown := m.UnknownKeys(); len(unknown) > 0 {
+			// Loaded anyway (a third-party manifest may carry extra keys), but a typo of a real
+			// key would silently keep its default, so say which keys were ignored.
+			warns = append(warns, fmt.Errorf("registry: manifest %s: unknown key(s) ignored, check for a typo: %s",
+				mpath, strings.Join(unknown, ", ")))
 		}
 		found[m.Name] = &Entry{Manifest: m, Dir: filepath.Join(r.root, e.Name())}
 	}

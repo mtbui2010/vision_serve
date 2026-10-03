@@ -140,6 +140,13 @@ runtime:
 A manifest that is invalid in **structure** is **skipped** during scan (collected into a
 warning) and does not crash the server.
 
+A key that no field above reads (e.g. the typo `runtime.idle_unload_second`) is **not** an
+error — third-party manifests may carry extra keys — but the parser ignores it, so the intended
+setting keeps its default. The scan therefore loads the manifest and logs a warning naming each
+such key with its line: `registry: manifest …/manifest.yaml: unknown key(s) ignored, check for a
+typo: runtime.idle_unload_second (line 14)`. Keys *inside* maps (`files:` roles, `sha256:` roles,
+`sha256_files:` paths, `explain.outputs`, `runtime.threads`) are data and never reported.
+
 ## Preprocessing
 
 How an image becomes the model's input is **data, not code**: one implementation
