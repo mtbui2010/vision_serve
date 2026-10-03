@@ -4,6 +4,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"image"
 	"log"
 	"net"
@@ -92,14 +93,22 @@ func (s *Server) routes() http.Handler {
 
 // ListenAndServe starts the server (blocking).
 func (s *Server) ListenAndServe() error {
-	scope := ""
-	if host, _, err := net.SplitHostPort(s.http.Addr); err == nil {
-		if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
-			scope = " (this machine only; --addr :11435 accepts other hosts)"
-		}
-	}
-	log.Printf("VisionServe listening on %s%s", s.http.Addr, scope)
+	log.Printf("VisionServe listening on %s%s", s.http.Addr, listenScope(s.http.Addr))
 	return s.http.ListenAndServe()
+}
+
+// listenScope is the note logged after a loopback listen address: it is reachable from this
+// machine only, and the same port on every interface (--addr :<port>) would accept other hosts.
+// Empty for any other address.
+func listenScope(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	if ip := net.ParseIP(host); host == "localhost" || (ip != nil && ip.IsLoopback()) {
+		return fmt.Sprintf(" (this machine only; --addr :%s accepts other hosts)", port)
+	}
+	return ""
 }
 
 // Shutdown gracefully stops the server, THEN releases the models: in-flight requests are drained
