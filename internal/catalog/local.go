@@ -150,6 +150,11 @@ func InstallLocal(srcDir string, opts PullOptions) error {
 			_ = os.RemoveAll(stage)
 		}
 	}()
+	// MkdirTemp creates 0700, and the rename keeps it: the installed model would be unreadable to
+	// a server running as another user (a catalog pull creates 0755, like the rest of the tree).
+	if err := os.Chmod(stage, 0o755); err != nil {
+		return fmt.Errorf("staging dir permissions: %w", err)
+	}
 
 	n, err := copyTree(realSrc, stage)
 	if err != nil {

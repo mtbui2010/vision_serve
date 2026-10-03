@@ -68,6 +68,10 @@ func TestInstallLocal_CopiesValidFolder(t *testing.T) {
 	if !strings.Contains(out.String(), "installed my-detector") {
 		t.Errorf("missing success message, got: %q", out.String())
 	}
+	// Readable by a server running as another user, like a catalog pull (not MkdirTemp's 0700).
+	if st, err := os.Stat(dst); err != nil || st.Mode().Perm() != 0o755 {
+		t.Errorf("installed model dir mode = %v (%v), want drwxr-xr-x", st.Mode(), err)
+	}
 }
 
 func TestInstallLocal_RejectsUnknownArchitecture(t *testing.T) {
