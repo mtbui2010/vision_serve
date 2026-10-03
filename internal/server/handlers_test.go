@@ -247,7 +247,8 @@ func TestAdmitWrapsInference(t *testing.T) {
 // Cancellation
 // ---------------------------------------------------------------------------------------------
 
-// A request whose client has already gone does not run inference.
+// A request whose client has already gone is not admitted (Admit sees its context) and does not
+// run inference.
 func TestCanceledRequestSkipsInference(t *testing.T) {
 	png := pngBytes(t, 8, 8)
 	for _, mk := range []func() *http.Request{
@@ -271,8 +272,8 @@ func TestCanceledRequestSkipsInference(t *testing.T) {
 		if rec.Code != statusClientClosedRequest {
 			t.Errorf("%s: status %d, want 499", req.URL, rec.Code)
 		}
-		if got := strings.Join(f.Events(), " "); got != "admit:m release" {
-			t.Errorf("%s: events %q: inference ran for a client that was gone", req.URL, got)
+		if got := strings.Join(f.Events(), " "); got != "admit:m" {
+			t.Errorf("%s: events %q, want only the refused admit:m", req.URL, got)
 		}
 	}
 }
@@ -292,12 +293,17 @@ func TestPredictChecksContextBeforeInference(t *testing.T) {
 
 // End to end over a real connection: the client disconnects while its request waits for an
 // admission slot; once the slot frees up, the server must notice and not run the model.
+//
+// This holds for bodies read whole before admission: JSON, and a multipart form whose image comes
+// before its model field. A form with the model first is admitted before its image is read, so
+// net/http cannot see the disconnect while it is queued — TestClientDisconnectMidUpload covers it.
 func TestClientDisconnectWhileQueued(t *testing.T) {
 	png := pngBytes(t, 8, 8)
 	for name, mk := range map[string]func(url string) *http.Request{
-		"multipart": func(url string) *http.Request {
-			req := multipartRequest(t, url, map[string]string{"model": "m"}, part{"image", "i.png", png})
-			req.RequestURI = ""
+		"multipart, image before model": func(url string) *http.Request {
+			body, ct := orderedMultipart(t, formPart{"image", "i.png", png}, formPart{"model", "", []byte("m")})
+			req, _ := http.NewRequest("POST", url, bytes.NewReader(body))
+			req.Header.Set("Content-Type", ct)
 			return req
 		},
 		"chunked JSON": func(url string) *http.Request {

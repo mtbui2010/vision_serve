@@ -56,18 +56,17 @@ func (s *Server) handlePreprocess(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) preprocess(w http.ResponseWriter, r *http.Request) (lifecycle.PreprocessResult, string, error) {
-	q, err := decodeRequest(w, r)
+	q, err := decodeRequest(w, r, s.admitter(r))
 	if err != nil {
 		return lifecycle.PreprocessResult{}, "", err
 	}
+	defer q.Close()
 	if err := q.validate(false); err != nil {
 		return lifecycle.PreprocessResult{}, "", err
 	}
-	release, err := s.admit(r, q.Model)
-	if err != nil {
+	if err := q.admit(); err != nil {
 		return lifecycle.PreprocessResult{}, "", err
 	}
-	defer release()
 
 	var img image.Image
 	var imgW, imgH int

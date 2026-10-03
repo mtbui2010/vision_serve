@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -88,20 +89,40 @@ func (s *Server) handleUnload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"model": model, "state": "unloaded"})
 }
 
-// admit takes an admission slot for model and checks that the client is still there. Every
-// inference handler calls it after reading the request envelope and BEFORE decoding the image,
-// so the memory a queued request holds stays bounded by its (compressed) upload. The caller
-// must defer release when err is nil.
-func (s *Server) admit(r *http.Request, model string) (release func(), err error) {
-	release, err = s.mgr.Admit(model)
+// admit takes an admission slot for model on behalf of a request with context ctx, and checks
+// that the client is still there. Every inference handler calls it BEFORE decoding the image (a
+// multipart request before its image part is even read), so the memory a queued request holds
+// stays bounded by its (compressed) upload. The caller must call release when err is nil.
+func (s *Server) admit(ctx context.Context, model string) (release func(), err error) {
+	release, err = s.mgr.Admit(ctx, model)
 	if err != nil {
+		if ctx.Err() != nil { // refused because the client had already left
+			return nil, errClientGone
+		}
 		return nil, err
 	}
-	if r.Context().Err() != nil { // the client left while the request was queued
+	if ctx.Err() != nil { // the client left while the request was being admitted
 		release()
 		return nil, errClientGone
 	}
 	return release, nil
+}
+
+// closeUnreadBody is for a request refused before its body was read (admission comes first): it
+// asks net/http to close the connection after the answer. Otherwise net/http reads up to 256 KiB
+// more of the upload before sending the 503 — a client that pauses its upload never sees it — and
+// past that size it closes the connection anyway. A body known to be smaller is left to net/http,
+// which discards it and keeps the connection alive.
+func closeUnreadBody(w http.ResponseWriter, r *http.Request) {
+	const maxPostHandlerReadBytes = 256 << 10 // net/http's discard limit
+	if r.ContentLength < 0 || r.ContentLength > maxPostHandlerReadBytes {
+		w.Header().Set("Connection", "close")
+	}
+}
+
+// admitter is s.admit for request r, the form decodeFields takes.
+func (s *Server) admitter(r *http.Request) func(model string) (func(), error) {
+	return func(model string) (func(), error) { return s.admit(r.Context(), model) }
 }
 
 // POST /api/predict
@@ -119,18 +140,17 @@ func (s *Server) handlePredict(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) predict(w http.ResponseWriter, r *http.Request) (api.Result, string, error) {
-	q, err := decodeRequest(w, r)
+	q, err := decodeRequest(w, r, s.admitter(r))
 	if err != nil {
 		return api.Result{}, "", err
 	}
+	defer q.Close()
 	if err := q.validate(true); err != nil {
 		return api.Result{}, "", err
 	}
-	release, err := s.admit(r, q.Model)
-	if err != nil {
+	if err := q.admit(); err != nil {
 		return api.Result{}, "", err
 	}
-	defer release()
 
 	img, err := q.decodeImage()
 	if err != nil {
@@ -233,7 +253,7 @@ func resizeDepthNearestF(src []float32, sw, sh, dw, dh int) []float32 {
 // pixel/feature tensor in memory (no JPEG/PNG round-trip) and for benchmarking the serving +
 // inference layer head-to-head with tensor-in servers (e.g. Triton). Simple models only.
 func (s *Server) handleInferTensor(w http.ResponseWriter, r *http.Request) {
-	res, enc, err := s.inferTensor(r)
+	res, enc, err := s.inferTensor(w, r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -241,7 +261,7 @@ func (s *Server) handleInferTensor(w http.ResponseWriter, r *http.Request) {
 	writeResult(w, res, enc)
 }
 
-func (s *Server) inferTensor(r *http.Request) (api.Result, string, error) {
+func (s *Server) inferTensor(w http.ResponseWriter, r *http.Request) (api.Result, string, error) {
 	query := r.URL.Query()
 	model := query.Get("model")
 	if model == "" {
@@ -256,8 +276,9 @@ func (s *Server) inferTensor(r *http.Request) (api.Result, string, error) {
 		return api.Result{}, "", badRequest(err)
 	}
 	// Everything the slot depends on is in the URL, so admission comes before the body is read.
-	release, err := s.admit(r, model)
+	release, err := s.admit(r.Context(), model)
 	if err != nil {
+		closeUnreadBody(w, r)
 		return api.Result{}, "", err
 	}
 	defer release()

@@ -28,6 +28,9 @@ type explainRequest struct {
 	Class        string   `json:"class"`
 }
 
+// explainFiles: /api/explain reads only the image part (see requestFiles).
+var explainFiles = map[string]int64{"image": maxImageBytes + 1}
+
 // POST /api/explain
 //
 // Multipart form fields (or the same names as a JSON body, with image_base64):
@@ -46,32 +49,29 @@ type explainRequest struct {
 //     with headers X-Heatmap-Shape (H,W) and X-Heatmap-Dtype (float32).
 func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	var q explainRequest
-	form, err := decodeFields(w, r, &q)
+	data, err := decodeFields(w, r, &q, explainFiles, s.admitter(r))
 	if err != nil {
 		writeError(w, err)
 		return
 	}
+	defer data.Close()
 	switch {
 	case q.Model == "":
 		err = badRequest(fmt.Errorf(`"model" field is required`))
-	case form == nil && q.ImageBase64 == "":
+	case !data.multipart && q.ImageBase64 == "":
 		err = badRequest(fmt.Errorf(`"image_base64" is required`))
-	case filePart(form, "image") == nil && q.ImageBase64 == "":
+	case data.file("image") == nil && q.ImageBase64 == "":
 		err = badRequest(fmt.Errorf(`"image" file is required: %w`, http.ErrMissingFile))
 	}
+	if err == nil {
+		err = data.admit(q.Model) // a no-op when the multipart body was admitted while read
+	}
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	release, err := s.admit(r, q.Model)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	defer release()
-
-	img, err := decodeUpload(form, q.ImageBase64)
+	img, err := decodeUpload(data, q.ImageBase64)
 	if err != nil {
 		writeError(w, err)
 		return

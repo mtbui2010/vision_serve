@@ -49,9 +49,10 @@ func decodeImage(r io.Reader) (image.Image, error) {
 	return img, nil
 }
 
-// limitBody caps the whole request body. ParseMultipartForm's argument only bounds the part kept
-// in memory — the rest spills to temp files with no limit — so without this a client could fill
-// the disk with one request.
+// limitBody caps the whole request body. A form's memory budget only bounds what is kept in
+// memory — the rest spills to temp files (ParseMultipartForm, and readMultipart for a part read
+// before admission) — and every byte of a body is read, so without this one request could fill
+// the disk or hold a connection reading forever.
 func limitBody(n int64, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, n)
