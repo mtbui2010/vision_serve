@@ -41,8 +41,9 @@ var requestFiles = map[string]int64{"image": maxImageBytes + 1, "depth": maxTens
 //
 // decodeRequest reads only the envelope: the image and the depth map stay encoded (a form file
 // part, or a base64 string) until the handler holds an admission slot, because decoding is where
-// a request's memory grows (40 MP of pixels is 160 MB). A multipart request may already hold its
-// slot when decodeRequest returns (see readMultipart); the handler calls admit either way.
+// a request's memory grows (40 MP of pixels is 160 MB). decodeRequest holds no slot when it
+// returns (a multipart body only has admission probed while it is read, see readMultipart); the
+// handler calls admit.
 type Request struct {
 	api.PredictJSONRequest
 
@@ -71,8 +72,7 @@ func decodeRequest(w http.ResponseWriter, r *http.Request, admit func(model stri
 	return q, nil
 }
 
-// admit takes the request's admission slot on its model; a no-op when the multipart body was
-// already admitted while it was read. Call it after validate.
+// admit takes the request's admission slot on its model. Call it after validate.
 func (q *Request) admit() error { return q.data.admit(q.Model) }
 
 // Close releases the admission slot and the uploaded parts' temp files.
@@ -205,11 +205,10 @@ func isJSONRequest(r *http.Request) bool {
 // parts (keep, see readMultipart) and its admission slot, taken through admit. Both paths read
 // the body under a size cap; an oversized body is a 413.
 //
-// A JSON request is read whole and is not admitted here. A multipart request is admitted while it
-// is read, before its first kept file part, when the model is known by then; otherwise (no kept
-// file part, or one before the model field) it is not admitted yet. Either way the caller
-// validates the fields, then calls admit on the formData (a no-op if it already holds the slot),
-// and must defer Close on success. On error nothing is held.
+// Neither path admits the request. A multipart request whose model is known before its first kept
+// file part has admission probed there (readMultipart), so a request the queue would refuse is
+// answered without its upload being read. The caller validates the fields, then calls admit on
+// the formData to take the slot, and must defer Close on success. On error nothing is held.
 func decodeFields(w http.ResponseWriter, r *http.Request, dst any, keep map[string]int64,
 	admit func(model string) (func(), error)) (*formData, error) {
 	d := &formData{files: map[string]*upload{}, admitFn: admit}

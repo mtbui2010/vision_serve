@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"visionserve/internal/lifecycle"
 )
@@ -133,10 +134,10 @@ func TestMultipartImageBeforeModel(t *testing.T) {
 	if !reflect.DeepEqual(wantF.prompt, gotF.prompt) || wantF.img.Bounds() != gotF.img.Bounds() || wantBody != gotBody {
 		t.Fatalf("model-last differs from model-first:\n first: %+v\n last:  %+v", wantF.prompt, gotF.prompt)
 	}
-	for _, ev := range []string{ev1, ev2} {
-		if ev != "admit:m predict:m release" {
-			t.Fatalf("events %q", ev)
-		}
+	// Model first: admission is probed before the image is read (a slot taken and given back),
+	// then taken for real after the body. Model last: nothing to probe.
+	if ev1 != "admit:m release admit:m predict:m release" || ev2 != "admit:m predict:m release" {
+		t.Fatalf("events: model first %q, model last %q", ev1, ev2)
 	}
 
 	// /api/explain too.
@@ -191,6 +192,52 @@ func TestClientDisconnectMidUpload(t *testing.T) {
 	}
 }
 
+// A client that sends its model and then trickles its image holds no admission slot while it
+// uploads: the probe before the image gives its slot straight back, and the request is admitted
+// for real only after the body is read. (Holding the slot during the upload let a few dozen slow
+// uploads fill a model's bound and get every other request 503 for up to the ReadTimeout.)
+func TestSlowUploadHoldsNoSlot(t *testing.T) {
+	fr := &fakeRuntime{}
+	ts := httptest.NewServer(newTestHandler(fr))
+	defer ts.Close()
+
+	body, ct := orderedMultipart(t, formPart{"model", "", []byte("m")}, formPart{"image", "i.png", pngBytes(t, 8, 8)})
+	cut := bytes.Index(body, []byte("\x89PNG")) + 4 // the model field, the image part header, 4 bytes
+	pr, pw := io.Pipe()
+	req, _ := http.NewRequest("POST", ts.URL+"/api/predict", pr)
+	req.Header.Set("Content-Type", ct)
+	status := make(chan int, 1)
+	go func() {
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			status <- 0
+			return
+		}
+		resp.Body.Close()
+		status <- resp.StatusCode
+	}()
+	if _, err := pw.Write(body[:cut]); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for eventsOf(fr) != "admit:m release" { // probed, and the slot already given back
+		if time.Now().After(deadline) {
+			t.Fatalf("mid-upload events %q, want the probe only", eventsOf(fr))
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if _, err := pw.Write(body[cut:]); err != nil {
+		t.Fatal(err)
+	}
+	pw.Close()
+	if code := <-status; code != http.StatusOK {
+		t.Fatalf("status %d", code)
+	}
+	if got := eventsOf(fr); got != "admit:m release admit:m predict:m release" {
+		t.Fatalf("events %q", got)
+	}
+}
+
 // The admission slot and the parse keep http.Request.FormValue's precedence, which these handlers
 // used before: a URL query value comes before the form's.
 func TestMultipartQueryPrecedence(t *testing.T) {
@@ -198,7 +245,7 @@ func TestMultipartQueryPrecedence(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/predict?model=query", bytes.NewReader(body))
 	req.Header.Set("Content-Type", ct)
 	fr := &fakeRuntime{}
-	if rec := do(newTestHandler(fr), req); rec.Code != http.StatusOK || eventsOf(fr) != "admit:query predict:query release" {
+	if rec := do(newTestHandler(fr), req); rec.Code != http.StatusOK || eventsOf(fr) != "admit:query release admit:query predict:query release" {
 		t.Fatalf("%d %s (events %q)", rec.Code, rec.Body, eventsOf(fr))
 	}
 }

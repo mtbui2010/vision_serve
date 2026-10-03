@@ -64,7 +64,7 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		err = badRequest(fmt.Errorf(`"image" file is required: %w`, http.ErrMissingFile))
 	}
 	if err == nil {
-		err = data.admit(q.Model) // a no-op when the multipart body was admitted while read
+		err = data.admit(q.Model)
 	}
 	if err != nil {
 		writeError(w, err)

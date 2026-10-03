@@ -13,14 +13,21 @@ import (
 	"strings"
 )
 
-// A multipart body is read part by part, so that the request takes its admission slot before
-// the first large part (an image or a depth map) is read: a request the model's queue refuses is
-// answered 503 without its upload being read or stored. http.Request.ParseMultipartForm, used
-// before, buffered the whole form first.
+// A multipart body is read part by part, so that admission is checked before the first large
+// part (an image or a depth map) is read: a request the model's queue refuses is answered 503
+// without its upload being read or stored. http.Request.ParseMultipartForm, used before, buffered
+// the whole form first.
+//
+// That check is a probe: it takes a slot and gives it straight back (formData.probe). The slot the
+// request keeps is taken only once the whole body has been read, as before, so a client that
+// trickles its upload holds no slot meanwhile — otherwise a few dozen slow uploads would fill a
+// model's admission bound (32 by default) and every other request for it would get 503 for as long
+// as the server's ReadTimeout. The cost is a race: a slot that frees during the upload may be taken
+// by the time it ends, and that request is then refused after its upload, as before.
 //
 // Field order is up to the client. When a kept file part arrives before the model name is known,
 // it is stored as ParseMultipartForm stored it — in memory up to the form's memory budget, the
-// rest in a temporary file — and the request is admitted once the form has been read. The bounds
+// rest in a temporary file — and nothing is probed. The bounds
 // are the ones ParseMultipartForm(maxFormMemory) applied: maxFormMemory bytes of file data in
 // memory, maxFormMemory + 10 MiB for everything kept in memory (an oversized text field is
 // multipart.ErrMessageTooLarge), at most maxFormParts parts; and limitBody caps the whole body.
@@ -40,6 +47,7 @@ type formData struct {
 
 	admitFn func(model string) (release func(), err error)
 	release func() // the admission slot; nil until admitted
+	probed  bool   // admission was probed while the body was read (see probe)
 	refused bool   // admission was refused
 }
 
@@ -51,8 +59,8 @@ func (d *formData) file(name string) *upload {
 	return d.files[name]
 }
 
-// admit takes the request's admission slot on model, unless it already holds one (a multipart
-// request is admitted while its body is read, before its first large part).
+// admit takes the request's admission slot on model, unless it already holds one. It runs after
+// the body is read; a multipart body only had admission probed while it was read (see probe).
 func (d *formData) admit(model string) error {
 	if d.release != nil {
 		return nil
@@ -63,6 +71,23 @@ func (d *formData) admit(model string) error {
 		return err
 	}
 	d.release = release
+	return nil
+}
+
+// probe checks, once per request, that model would admit it now: it takes a slot and gives it
+// straight back. A refusal is returned (and recorded in refused) so the caller stops reading the
+// body; a success holds nothing — admit takes the real slot after the body is read.
+func (d *formData) probe(model string) error {
+	if d.probed || d.release != nil {
+		return nil
+	}
+	d.probed = true
+	release, err := d.admitFn(model)
+	if err != nil {
+		d.refused = true
+		return err
+	}
+	release()
 	return nil
 }
 
@@ -116,9 +141,9 @@ func formParseError(err error) error {
 // keep maps each file part the endpoint uses to the most bytes of it that matter (the rest of
 // the part is skipped); other file parts are skipped unread into memory.
 //
-// Before the first byte of a kept file part is read, the request is admitted if the model name is
-// known by then (d.admit); an admission error is returned as is, and nothing more of the body is
-// read. Parse errors keep the wording ParseMultipartForm's callers used.
+// Before the first byte of a kept file part is read, admission is probed if the model name is
+// known by then (d.probe); a refusal is returned as is, and nothing more of the body is read. The
+// request is not admitted here: the caller takes its slot after the body is read (formData.admit). Parse errors keep the wording ParseMultipartForm's callers used.
 //
 // The lookup gives a name's first value from the URL query, else from the form — the precedence
 // of http.Request.FormValue after ParseMultipartForm, which these endpoints used to call.
@@ -180,7 +205,7 @@ func readMultipart(r *http.Request, d *formData, keep map[string]int64) (func(na
 			continue // a file part the endpoint does not read, or a second one of a kept name
 		}
 		if model := value("model"); model != "" {
-			if err := d.admit(model); err != nil {
+			if err := d.probe(model); err != nil {
 				return nil, err
 			}
 		}

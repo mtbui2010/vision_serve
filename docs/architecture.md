@@ -134,9 +134,12 @@ resident — avoids the slow cold reload after an idle pause), and `N` overrides
 model to `N` seconds. The reaper still skips any model whose effective idle timeout is
 `0`.
 
-**Admission control.** `Manager.Admit(ctx, model)` reserves a slot before the server reads a
-multipart image part (or decodes a JSON upload), so memory does not grow with the number of
-requests queued behind a busy model; a request whose client already left is not admitted. Each
+**Admission control.** `Manager.Admit(ctx, model)` reserves a slot before the server decodes an
+upload, so memory does not grow with the number of requests queued behind a busy model; a request
+whose client already left is not admitted. A multipart request that names its model before its
+image also has admission probed (a slot taken and given back) before the image part is read, so a
+request the queue would refuse is answered without reading its upload, while a slow upload holds
+no slot. Each
 model admits at most `VISIONSERVE_MAX_QUEUE` requests (running + waiting); unset, the bound is
 `2 × the model's inference slots` (its largest session pool, 1 for a single session or an
 `Exclusive` pipeline) and never below 32. `VISIONSERVE_MAX_QUEUE=0` turns the bound off. A

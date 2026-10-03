@@ -219,7 +219,7 @@ func TestAdmitWrapsInference(t *testing.T) {
 	}{
 		{func() *http.Request {
 			return multipartRequest(t, "/api/predict", map[string]string{"model": "m"}, part{"image", "i.png", png})
-		}, []string{"admit:m", "predict:m", "release"}},
+		}, []string{"admit:m", "release", "admit:m", "predict:m", "release"}}, // probed before the image, then admitted
 		{func() *http.Request {
 			return jsonRequest("/api/explain", []byte(`{"model":"m","image_base64":"`+b64(png)+`","format":"numpy"}`))
 		}, []string{"admit:m", "explain:m", "release"}},

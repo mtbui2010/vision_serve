@@ -280,9 +280,12 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   - Test opt-in `TestEncoderBitwiseRepeatableOnGPU` tái hiện lỗi khi tắt và chứng minh đã sửa.
 - ~~**`Admit`** chưa nhận ctx, và multipart vẫn được parse trước `Admit`.~~ Đã xong:
   `Admit(ctx, name)` từ chối request mà client đã bỏ đi (499). Multipart nay được đọc từng
-  part: request được admit ngay trước khi đọc part file đầu tiên (`image`/`depth`), nên một
-  request bị từ chối (503) không đọc cũng không lưu upload của nó, và trả về ngay
-  (`Connection: close` khi phần body chưa đọc có thể lớn). Nếu ảnh đến trước field `model`, ảnh
+  part: ngay trước khi đọc part file đầu tiên (`image`/`depth`), server *thử* admit (lấy slot rồi
+  trả lại ngay), nên một request bị từ chối (503) không đọc cũng không lưu upload của nó, và trả
+  về ngay. Slot thật chỉ được lấy sau khi đọc hết body: bản đầu giữ slot suốt lúc upload, nên
+  khoảng 32 client upload chậm đủ làm mọi request khác của model đó nhận 503 tới 2 phút (review
+  phát hiện, đã sửa). Khi từ chối giữa chừng, server gửi `Connection: close` nếu phần body chưa
+  đọc có thể lớn. Nếu ảnh đến trước field `model`, ảnh
   được giữ với đúng giới hạn cũ (32 MiB trong RAM, phần còn lại ra file tạm) và request được admit
   sau khi đọc hết form. JSON vẫn đọc trọn trước `Admit` (model nằm trong JSON, body đã bị chặn ở
   32 MiB). Còn lại: khi quá tải, một request sai định dạng có thể nhận 503 thay vì 400; và
