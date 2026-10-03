@@ -12,6 +12,7 @@ package engine
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -67,13 +68,48 @@ func recoverJob(p any) error {
 
 // IOInfo describes the name + shape of an I/O tensor of the model (probed from the ONNX file).
 type IOInfo struct {
-	Name  string
+	Name string
+	// Shape has one entry per dimension: its size, or -1 when symbolic or unknown. It is nil for
+	// a scalar, a tensor of unknown rank and a non-tensor value (sequence, map, optional).
+	//
+	// It is the shape the file DECLARES (bar Inspect's ORT fallback). For an output, a live ORT
+	// session can know more: its load-time shape inference resolves some declared-symbolic dims
+	// (GroundingDINO's pred_boxes is declared [-1, -1, 4]; ORT reports [-1, 900, 4]). Read real
+	// output shapes from Run.
 	Shape []int64
+	// ElemType is the ONNX element type (TensorProto.DataType: 1 float32, 7 int64, 9 bool,
+	// 10 float16, ...); 0 for a non-tensor value.
+	ElemType int32
 }
 
 // Inspect probes the list of inputs/outputs (name + shape) from the ONNX file without creating a session.
 // Used so the engine can auto-bind I/O names when the model does not declare them explicitly.
+//
+// It reads the ONNX header in pure Go (onnxheader.go) — milliseconds, weights untouched, no ORT
+// needed. Only a file that reader cannot parse goes to ORT's GetInputOutputInfo, which builds a
+// full temporary session (seconds for a large graph); that fallback is logged once per file.
 func Inspect(modelPath string) (inputs, outputs []IOInfo, err error) {
+	in, out, herr := readONNXHeader(modelPath)
+	if herr == nil {
+		return in, out, nil
+	}
+	if errors.Is(herr, fs.ErrNotExist) || errors.Is(herr, fs.ErrPermission) {
+		return nil, nil, fmt.Errorf("engine: failed to read I/O info from %s: %w", modelPath, herr)
+	}
+	if _, logged := inspectFallbackLogged.LoadOrStore(modelPath, true); !logged {
+		fmt.Fprintf(os.Stderr, "engine: could not read the ONNX header of %s (%v) — "+
+			"asking ONNX Runtime instead, which loads the whole graph\n", modelPath, herr)
+	}
+	return inspectORT(modelPath)
+}
+
+// inspectFallbackLogged holds the paths whose header-parse failure has been logged, so a file
+// probed on every request (lifecycle's preprocess runner) does not log on every request.
+var inspectFallbackLogged sync.Map
+
+// inspectORT is the ORT-based probe: correct for anything ORT can load, but it builds a full
+// session just to read the I/O list.
+func inspectORT(modelPath string) (inputs, outputs []IOInfo, err error) {
 	if err = ensureORT(); err != nil {
 		return nil, nil, err
 	}
@@ -84,7 +120,11 @@ func Inspect(modelPath string) (inputs, outputs []IOInfo, err error) {
 	conv := func(src []ort.InputOutputInfo) []IOInfo {
 		dst := make([]IOInfo, 0, len(src))
 		for _, s := range src {
-			dst = append(dst, IOInfo{Name: s.Name, Shape: append([]int64(nil), s.Dimensions...)})
+			dst = append(dst, IOInfo{
+				Name:     s.Name,
+				Shape:    append([]int64(nil), s.Dimensions...),
+				ElemType: int32(s.DataType),
+			})
 		}
 		return dst
 	}
@@ -124,7 +164,8 @@ type Session struct {
 func (s *Session) ActiveEP() Provider { return s.activeEP }
 
 // NewSession creates a session from the ONNX file with an EP fallback chain (TensorRT→CUDA→CPU).
-// If inputNames/outputNames are empty, they are auto-probed from the ONNX file.
+// If inputNames/outputNames are empty, they are auto-probed from the ONNX file (Inspect: a header
+// read, so the graph is loaded once — by the session itself, not again by the probe).
 // A failure to append an EP (e.g. TensorRT missing on the host) is NOT fatal — it falls back to the next EP.
 func NewSession(modelPath string, inputNames, outputNames []string, providers []Provider) (*Session, error) {
 	if err := ensureORT(); err != nil {
