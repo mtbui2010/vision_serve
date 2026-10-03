@@ -96,9 +96,11 @@ premature optimization) until it's actually needed.
 - Needs an **ONNX Runtime** shared library at runtime (`libonnxruntime.so`) for the
   `yalue/onnxruntime_go` binding — point to it via the **`ORT_DYLIB_PATH`** environment
   variable. On NVIDIA use an ORT build with the CUDA execution provider: every shipped manifest
-  prefers `[cuda, cpu]`. TensorRT is opt-in per manifest only — it measured ~1.5x faster but
-  6.8 mAP lower on GroundingDINO and rebuilds its engine per prompt length (BUGS_TO_FIX.md #3),
-  so do not put it back in a manifest without re-measuring accuracy under it.
+  prefers `[cuda, cpu]`. TensorRT is opt-in: per process with `--tensorrt` /
+  `VISIONSERVE_TENSORRT=1` (inserts it before `cuda` in every chain), or per manifest — it
+  measured ~1.5x faster but 6.8 mAP lower on GroundingDINO and rebuilds its engine per prompt
+  length (BUGS_TO_FIX.md #3), so do not make it a default or put it back in a manifest without
+  re-measuring accuracy under it.
 - **Supported execution providers** (EP allowlist in `internal/engine/provider.go`):
   `tensorrt`, `cuda` (NVIDIA), `coreml` (Apple Silicon), `directml` (Windows GPU),
   `openvino` (Intel), and `cpu` (always appended last). Each EP only works if the ORT build
