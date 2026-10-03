@@ -225,17 +225,13 @@ def test_client_default_keeps_plain_lists():
     assert Client(base64_arrays=True).base64_arrays is True
 
 
-def test_cli_prints_to_json_and_asks_for_numbers(capsys):
+def test_cli_prints_to_json_and_asks_for_numbers(capsys, tmp_path):
     wire = {"task": "embed", "model": "clip", "embeddings": [[0.1, 0.2]], "duration_ms": 2}
     srv = _Server(wire)
     try:
-        img = os.path.join(os.path.dirname(__file__), "_cli_input.png")
-        with open(img, "wb") as f:
-            f.write(b"\x89PNG fake")
-        try:
-            assert vs_cli.main(["--host", srv.url, "predict", "clip", img, "--compact", "--quiet"]) == 0
-        finally:
-            os.remove(img)
+        img = tmp_path / "input.png"  # not next to the test: the source tree may be read-only
+        img.write_bytes(b"\x89PNG fake")
+        assert vs_cli.main(["--host", srv.url, "predict", "clip", str(img), "--compact", "--quiet"]) == 0
         assert json.loads(capsys.readouterr().out) == wire
         assert b'name="encoding"' not in srv.bodies[-1]
     finally:
