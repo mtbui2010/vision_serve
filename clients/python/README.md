@@ -65,7 +65,7 @@ make serve IDLE=0     # ...and never auto-unload models (keep them resident)
 > idle (`idle_unload_seconds: 300`), so the next request pays a full reload (ONNX session
 > re-create + CUDA init). Keep models resident with the `serve` flag
 > `--idle-unload-seconds 0` — via `make serve IDLE=0`, the binary
-> (`visionserve serve --addr :11435 --idle-unload-seconds 0`), or Docker (append it to the
+> (`visionserve serve --idle-unload-seconds 0`), or Docker (append it to the
 > container command). `-1` = use each manifest's value (default); `N` = override all to N s.
 
 ## Quickstart
