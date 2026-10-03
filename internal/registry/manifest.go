@@ -57,6 +57,16 @@ var validTasks = map[api.Task]bool{
 	api.TaskInstanceDetection: true,
 }
 
+// validTaskNames lists validTasks sorted, for error messages ("classification/depth/...").
+func validTaskNames() string {
+	names := make([]string, 0, len(validTasks))
+	for t := range validTasks {
+		names = append(names, string(t))
+	}
+	sort.Strings(names)
+	return strings.Join(names, "/")
+}
+
 // InstanceConfig is optional — when present, the model supports one-shot / template-based
 // detection via /api/predict with a TemplateName prompt field.
 type InstanceConfig struct {
@@ -268,7 +278,7 @@ func (m *Manifest) validate() error {
 	}
 	m.License = canonLicense
 	if !validTasks[api.Task(m.Task)] {
-		return fmt.Errorf("task %q is invalid (detection/segmentation/open_vocab)", m.Task)
+		return fmt.Errorf("task %q is invalid (%s)", m.Task, validTaskNames())
 	}
 	if m.ModelFile == "" && len(m.Files) == 0 {
 		return fmt.Errorf("missing 'model_file' (or a 'files' map for multi-session models)")
