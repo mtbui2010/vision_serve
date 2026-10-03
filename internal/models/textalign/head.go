@@ -15,6 +15,10 @@ type head struct {
 	classes []string
 	w       []float32    // [C * DFeat], row-major — the deploy-time class matrix
 	rf      models.Model // rf-detr sub-model whose cfg.Labels == classes
+	// text holds the L2-normalised, UNSCALED text rows W was folded from, one per class: the
+	// ONNX exact head (files.head) takes them as its text_embeds input. Shared with the text
+	// embedder's cache — read only.
+	text [][]float32
 }
 
 // logits computes per-query class logits from the detector's query_feats.

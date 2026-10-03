@@ -33,6 +33,8 @@
 //     ORIGINAL image coordinates, [x,y,w,h].
 //   - role "text" → models/clip-text/model.onnx (CLIP ViT-B/32 text tower) + the pure-Go BPE
 //     tokenizer from internal/models/clip. Used ONLY for words not embedded yet (per-word cache).
+//   - role "head" (OPTIONAL) → head.onnx, proj.bin exported as an ONNX graph whose text rows are
+//     an input. When declared, method "exact" runs on it instead of in Go; see headonnx.go.
 //   - P itself is a 512 KB side-car (proj.bin) next to the manifest — see proj.go. Weights
 //     that are not an ONNX graph do not belong in the `files:` map (lifecycle would try to
 //     open them as a session), and the manifest parser needs no new field for them.
@@ -247,11 +249,17 @@ func loadTemplates(path string) ([]string, error) {
 func (m *textAlign) Name() string      { return m.cfg.Name }
 func (m *textAlign) Task() models.Task { return models.TaskOpenVocab }
 
-// Roles: the frozen detector + the CLIP text tower.
+// Roles: the frozen detector + the CLIP text tower, plus the crop tower and the ONNX exact head
+// when the manifest declares them.
 func (m *textAlign) Roles() []string {
 	roles := []string{roleDetector, roleText}
 	if m.hasCropHead() {
 		roles = append(roles, roleCrop)
+	}
+	if m.hasHeadONNX() {
+		// Its own session: lifecycle creates it with the manifest's provider chain, the same one
+		// the detector gets (BUGS_TO_FIX #4). See headonnx.go.
+		roles = append(roles, roleHead)
 	}
 	return roles
 }
@@ -316,7 +324,7 @@ func (m *textAlign) Infer(img image.Image, prompt models.Prompt, r models.Runner
 		}
 		return m.decodeGated(h, boxes, cls, feats, meta)
 	}
-	return m.decode(h, boxes, feats, meta, mode.normalize())
+	return m.decode(h, boxes, feats, meta, mode.normalize(), r)
 }
 
 // decode scores every object query against the compiled vocabulary and turns the result
@@ -326,9 +334,18 @@ func (m *textAlign) Infer(img image.Image, prompt models.Prompt, r models.Runner
 // logits are handed to RF-DETR's postprocess, which maps boxes back to ORIGINAL image
 // coordinates ([x,y,w,h] via PreprocessMeta), thresholds sigmoid(logit), sorts and cuts to
 // max_detections — NMS-free. That is why boxes are bit-identical to the bare detector's.
-func (m *textAlign) decode(h *head, boxes, feats engine.Tensor, meta models.PreprocessMeta, normalize bool) (models.Result, error) {
+//
+// The exact head (normalize) runs on ONNX Runtime when the manifest declares files.head, and in
+// Go otherwise; r is only consulted in the first case.
+func (m *textAlign) decode(h *head, boxes, feats engine.Tensor, meta models.PreprocessMeta, normalize bool, r models.Runner) (models.Result, error) {
 	q := int(boxes.Dim(1))
-	logits, err := h.logits(m.proj, feats.Data, q, normalize)
+	var logits []float32
+	var err error
+	if normalize && m.hasHeadONNX() {
+		logits, err = m.exactLogitsONNX(h, feats, q, r)
+	} else {
+		logits, err = h.logits(m.proj, feats.Data, q, normalize)
+	}
 	if err != nil {
 		return models.Result{}, err
 	}
@@ -403,7 +420,7 @@ func (m *textAlign) headFor(classes []string, r models.Runner) (*head, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &head{classes: classes, w: w, rf: rf}, nil
+	return &head{classes: classes, w: w, rf: rf, text: rows}, nil
 }
 
 // fold assembles W [C, DFeat] row by row: Projection.Fold computes each row from its own text
