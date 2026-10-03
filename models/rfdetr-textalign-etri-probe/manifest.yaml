@@ -45,11 +45,25 @@ files:
   rfdetr:  detector-noattn.onnx
   text:    ../clip-text/model.onnx
   explain: ../rfdetr-small-etri-qf/model.onnx
+  # method "exact" (the default when a request names no method) on ONNX Runtime instead of
+  # scalar Go: proj.bin exported as a graph. ENABLED. head.onnx is NOT committed (*.onnx is
+  # gitignored) and NOT on the HF catalog, so generate it once per checkout, from the repo root:
+  #
+  #   python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py --proj models/rfdetr-textalign-etri-probe/proj.bin
+  #
+  # proj.bin here is a symlink to ../rfdetr-textalign-etri/'s; head.onnx can be one too
+  # (ln -s ../rfdetr-textalign-etri/head.onnx head.onnx), or exported with the command above.
+  # Same outputs as the Go head (max |dlogit| ~2e-6 on CPU); measured on
+  # ../rfdetr-textalign-dec1-siglip, see the comment there. Re-export whenever proj.bin
+  # changes: a stale head.onnx is refused per request. Without head.onnx on disk the model does
+  # not load: to fall back to the Go head, comment out this line AND runtime.threads below.
+  head:    head.onnx
 
 # Binds the license claim above to these exact bytes (same digests the sibling manifests
 # pin; `rfdetr` is the stripped re-export of `explain`). proj.bin is NOT covered — it is
 # this repo's own trained artifact, not third-party weights, and carries no license
-# question.
+# question. Neither is `head` (head.onnx): it is proj.bin re-encoded as a graph, generated
+# locally, and checked against proj.bin on every request instead.
 sha256:
   rfdetr:  efcf3af08d5e0512095946b69866425645fca81dc5e05aaea775eff9abc11b4c
   text:    a104b96e1a9ce466e24dac4e32f406ffc412eb1a459049b4040eab97b196b580
@@ -104,3 +118,7 @@ explain:
 runtime:
   prefer: [cuda, cpu]
   idle_unload_seconds: 300
+  # Goes together with files.head (above): the head is ~1 ms on one thread, and ORT's default
+  # spinning pool for it slows the detector ~3x on CPU. No effect on outputs.
+  threads:
+    head: 1

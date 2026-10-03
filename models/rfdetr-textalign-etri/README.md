@@ -108,6 +108,19 @@ relative path and pins their SHA-256.
 | `text` | `../clip-text/model.onnx` (+ `vocab.json`, `merges.txt`) | that directory's README |
 | `explain` | `../rfdetr-small-etri-qf/model.onnx` | lazy, only for `/api/explain` |
 | — | `proj.bin` (512 KB, here) | the trained projection |
+| `head` | `head.onnx` (~0.5 MB, here) | `proj.bin` exported as an ONNX graph: method `exact` on ONNX Runtime, same outputs as the Go head (enabled with `runtime.threads: {head: 1}`) |
+
+`head.onnx` is **generated locally, not committed, and not on the HF catalog** (no
+`rfdetr-textalign-*` model has a catalog entry). Generate it once per checkout and again whenever
+`proj.bin` changes — a stale one is refused per request:
+
+```sh
+python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py --proj models/rfdetr-textalign-etri/proj.bin
+```
+
+Without it the model does not load; comment out `files.head` and `runtime.threads` to serve the
+Go head instead. Details and measurements:
+[`../rfdetr-textalign-dec1-siglip/README.md`](../rfdetr-textalign-dec1-siglip/README.md#headonnx--method-exact-on-onnx-runtime).
 
 ### Why a local 114 MB copy of the detector
 
