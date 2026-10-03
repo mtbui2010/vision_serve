@@ -63,9 +63,7 @@ var Modes = []Mode{Squash, Letterbox, CenterCrop, KeepAspect, LongSide, LongSide
 func (m Mode) Pads() bool { return m == Letterbox || m == TopLeftPad || m == LongSidePad }
 
 // Known reports whether m is one of Modes.
-func (m Mode) Known() bool { return m.known() }
-
-func (m Mode) known() bool {
+func (m Mode) Known() bool {
 	for _, k := range Modes {
 		if m == k {
 			return true
@@ -106,6 +104,7 @@ const (
 // A missing Mean entry counts as 0 and a missing or zero Std entry as 1 (in the units the
 // formula divides by), which is what the hand-written loops this package replaced did.
 type Spec struct {
+	// Resize: the geometry; "" = the architecture's default (Arch.Resolve fills it in).
 	Resize Mode
 	// Width, Height: the target size (unused by None). LongSide/LongSidePad scale by
 	// min(Width/w, Height/h).
@@ -190,7 +189,7 @@ func (s Spec) Filter() imaging.ResampleFilter {
 // Resize "" is valid — "the architecture's default", which Arch.Resolve fills in — but Apply
 // needs a concrete mode.
 func (s Spec) Validate() error {
-	if s.Resize != "" && !s.Resize.known() {
+	if s.Resize != "" && !s.Resize.Known() {
 		return fmt.Errorf("preprocess: resize %q is invalid (%s)", s.Resize, modeList())
 	}
 	if s.Resize != None && (s.Width <= 0 || s.Height <= 0) {
