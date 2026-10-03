@@ -71,8 +71,51 @@ In scope, all free:
 - Follow the standard Go project layout (`cmd/`, `internal/`, `pkg/`).
 - Every function returns a clear `error`; **no panics** in normal code paths.
 - Concurrency: the server handles many requests in parallel; access to a model session must
-  be **thread-safe** (mutex or pool). This is an easy place to get wrong.
+  be **thread-safe**. Sessions run on their own OS-locked worker goroutine (`internal/engine`);
+  never call one from an arbitrary goroutine under a mutex.
 - Write **tests for the pre/postprocess of EVERY model** (the most error-prone part).
+
+## Rules from bugs we already hit
+
+Each of these caused a real bug; the "why" and the guarding tests are in
+[`docs/engineering-rules.md`](docs/engineering-rules.md). Read it before touching
+server/lifecycle/engine/preprocess code.
+
+- **Bound every external input before spending memory on it** — bytes, decoded pixels (check
+  the image header first), parts, tokens, cache entries. Bounds-check every length read from
+  untrusted bytes; reject `NaN`/`Inf` in any float from config or requests.
+- **Caller mistakes are typed errors that map to 4xx in `server/errors.go`**, never a 500. Wrap
+  with `%w`; never match error strings.
+- **Never hold a scarce slot (admission, session, lock) while waiting on the client or on I/O.**
+  Every wait honours the request `ctx`; never *start* work for a client that has left; release
+  on every path.
+- **A shared in-flight operation is cancelled only by its owner**, never by one waiter.
+- **Map results back with the true per-axis scale and pad**, and test extreme aspect ratios.
+- **Carry an object's identity, not its index**, across filtering and sorting.
+- **A setting a model cannot honour is a load error**, never silently ignored.
+- **A rule implemented in Go and Python has one shared fixture set and a sync test.** One code
+  path per concern across endpoints.
+- **Destructive operations validate their input first and never remove the last good copy.**
+- **Tests encode correct behaviour against a reference**, never "whatever it outputs today", and
+  pass under `-race -count=5` (no process-global state).
+- **Tracked config uses relative paths.** Env vars are `VISIONSERVE_*`, warn once on bad values.
+
+## Principles for the next development steps
+
+1. **Equivalence before and after.** A refactor keeps CPU golden outputs bit-identical; a change
+   that moves outputs says so and quantifies it. Anything that can move accuracy (EP, precision,
+   preprocessing, thresholds) re-runs the held-out protocol and updates the quoted numbers.
+2. **Measure end to end first.** Whole-request latency and peak RSS, on the target device;
+   find the real cause before optimising (it was thread oversubscription, not the algorithm).
+3. **Output-changing behaviour is opt-in** until the numbers are re-measured (`--tensorrt`,
+   `VISIONSERVE_DETERMINISTIC`, SDK `base64_arrays`). Breaking API/SDK changes need a note.
+4. **Size ORT thread pools explicitly** for pooled and small sessions (`runtime.threads`).
+5. **Docs change in the same commit as behaviour**; numbers say where they were measured.
+   The website lives in `website/` (MkDocs); keep its code excerpts in sync with the code.
+6. **Keep the layering**: models never create sessions; adding a model never touches core.
+7. **Before merging**: gofmt, vet, staticcheck, `go test -race ./...`, golden harness, and the
+   Python/JS/converter tests for any side you touched. Open items go to
+   `docs/refactor-proposal.md` §6.
 
 ## When unsure
 
