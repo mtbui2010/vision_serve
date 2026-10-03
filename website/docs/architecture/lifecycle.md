@@ -23,7 +23,7 @@ sequenceDiagram
     H->>M: Admit(ctx, model)
     M-->>H: release func, or ErrOverloaded
     H->>H: decode image
-    H->>M: PredictPrompt(model, img, prompt)
+    H->>M: PredictPrompt(ctx, model, img, prompt)
     alt not loaded yet
         M->>R: manifest, verify sha256, labels
         M->>E: open session or pool per role
@@ -64,16 +64,13 @@ type Manager struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L30-L59)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L31-L60)
 
 The request entry point is `PredictPrompt`: load if needed, take a lease, run, give the lease back.
 
 ```go title="internal/lifecycle/manager.go"
-func (m *Manager) PredictPrompt(name string, img image.Image, prompt models.Prompt) (api.Result, error) {
-	if err := m.Load(name); err != nil {
-		return api.Result{}, err
-	}
-	s, release, err := m.acquire(name)
+func (m *Manager) PredictPrompt(ctx context.Context, name string, img image.Image, prompt models.Prompt) (api.Result, error) {
+	s, release, err := m.loadAndAcquire(ctx, name)
 	if err != nil {
 		return api.Result{}, err
 	}
@@ -81,11 +78,24 @@ func (m *Manager) PredictPrompt(name string, img image.Image, prompt models.Prom
 	if err := m.resolveTemplates(&prompt); err != nil {
 		return api.Result{}, err
 	}
-	return s.Predict(img, prompt, time.Now())
+	return s.Predict(ctx, img, prompt, time.Now())
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L100-L113)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L106-L116)
+
+`loadAndAcquire` calls `Load` and then `acquire`, and checks `ctx` in between, so a request whose
+client left during the load takes no lease.
+
+### Cancellation
+
+`ctx` is the request's context, which the HTTP server cancels when the client disconnects. Every
+*wait* on the way to inference follows it: waiting for the model's load, for an Exclusive model's
+lock, for the session's worker, or for a free copy in a pool. A request whose `ctx` ends while it
+waits returns an error wrapping `ctx.Err()` and nothing is run for it. An inference already inside
+ONNX Runtime is not interrupted (ORT cannot stop a run half way), but a pipeline model does not
+start its next stage for a request that is gone, because each `Runner` call waits under the same
+`ctx`.
 
 ### Lazy loading, one load at a time
 
@@ -97,6 +107,9 @@ the GPU memory, and nine copies would be thrown away.
 
 ```go title="internal/lifecycle/load.go"
 	for {
+		if err := ctx.Err(); err != nil {
+			return gaveUp(name, err)
+		}
 		m.mu.Lock()
 		// ...
 		if _, ok := m.live[name]; ok {
@@ -109,17 +122,31 @@ the GPU memory, and nine copies would be thrown away.
 			// ...
 			m.loading[name] = call
 			m.mu.Unlock()
-			return m.lead(name, call)
+			go func() { _ = m.lead(name, call) }() // lead publishes its result in call.err
+			if err := m.waitLoad(ctx, name, call); err != nil {
+				return err
+			}
+			return call.err // this caller started the load: its result, success or failure
 		}
 		// ...
 		call.waiters++
 		m.mu.Unlock()
-		<-call.done
+		if err := m.waitLoad(ctx, name, call); err != nil {
+			m.mu.Lock()
+			call.waiters--
+			m.mu.Unlock()
+			return err
+		}
 		// ...
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L38-L71)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L45-L90)
+
+The load runs on its own goroutine, owned by no request. `ctx` bounds only each caller's *wait*:
+if one waiter's client leaves, even the one that started the load, that waiter returns and the
+load carries on for the others. The model then goes live for the requests still waiting and for
+the next one (the idle reaper unloads it if nobody comes). Only `Unload` and `Close` cancel a load.
 
 Building a model (`buildModel`) runs the load-time checks in order: the name is in the registry
 (rescanning the models directory at most once per second, so a model pulled while the server runs
@@ -233,7 +260,7 @@ func newRunnable(path string, inputNames, outputNames []string, n, threads int, 
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L227-L262)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L257-L292)
 
 `VS_POOL_OVERRIDE=n` forces every role (and plain models too) to a pool of `n`. It exists for
 benchmark sweeps, not for normal use.
@@ -247,6 +274,7 @@ session.
 
 ```go title="internal/lifecycle/session.go"
 type runner struct {
+	ctx     context.Context
 	engines map[string]engine.Runnable
 }
 
@@ -255,11 +283,16 @@ func (r runner) Run(role string, inputs map[string]engine.Tensor) ([]engine.Tens
 	if !ok {
 		return nil, fmt.Errorf("lifecycle: no ONNX session for role %q", role)
 	}
-	return s.RunNamed(inputs)
+	return s.RunNamed(r.ctx, inputs)
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L229-L239)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L250-L261)
+
+The runner carries the request's `ctx`, so the model's `Infer` keeps its `(img, prompt, Runner)`
+signature while every session call still waits under the request's context. The runner also
+implements `RunInto`, which passes caller-owned output buffers through to the engine's
+`RunNamedInto` (see [Engine](engine.md)).
 
 ### Exclusive models
 
@@ -267,19 +300,27 @@ Some pipelines must not run two requests at once on the same loaded model. Groun
 Grounded-SAM and the GroundingDINO variant of grasp implement `models.Exclusive`; lifecycle then
 holds a per-model lock around the whole `Infer` call. The lock belongs to the loaded model, so two
 *different* models still run side by side. (This replaced an older process-wide mutex inside the
-GroundingDINO package that made unrelated models wait for each other.)
+GroundingDINO package that made unrelated models wait for each other.) The lock is a channel with
+room for one token rather than a mutex, so that waiting for it can also follow the request's `ctx`.
 
 ```go title="internal/lifecycle/session.go"
-func (s *Session) inferPipeline(img image.Image, prompt models.Prompt) (api.Result, error) {
+func (s *Session) inferPipeline(ctx context.Context, img image.Image, prompt models.Prompt) (api.Result, error) {
 	if s.exclusive {
-		s.inferMu.Lock()
-		defer s.inferMu.Unlock()
+		if err := ctx.Err(); err != nil { // a free lock must not win over a ctx already done
+			return api.Result{}, gaveUp(s.name, err)
+		}
+		select {
+		case s.inferLock <- struct{}{}:
+			defer func() { <-s.inferLock }()
+		case <-ctx.Done():
+			return api.Result{}, gaveUp(s.name, ctx.Err())
+		}
 	}
-	return s.pipeline.Infer(img, prompt, runner{s.engines})
+	return s.pipeline.Infer(img, prompt, runner{ctx: ctx, engines: s.engines})
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L118-L124)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L123-L136)
 
 ### Admission control
 
@@ -343,7 +384,7 @@ func poolIntraOpThreads(n, ncpu int, env string) (threads int, warn string) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L284-L300)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L314-L330)
 
 The rules, in order of precedence:
 
@@ -404,7 +445,7 @@ func (r *recordingRunner) Run(role string, inputs map[string]engine.Tensor) ([]e
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/preprocess.go#L104-L109)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/preprocess.go#L111-L116)
 
 ### Explain (heatmaps)
 
@@ -486,6 +527,7 @@ var (
     model is loaded, explain and other per-session logic keep using the old values until the model
     is unloaded and loaded again.
 
-!!! warning "A waiting request does not follow its context"
-    `Admit` rejects a request whose client has already left, but once admitted, a request waiting
-    for a free session in a pool does not watch its context. This is a known open item.
+!!! note "A cancelled request stops waiting, not running"
+    `Admit` rejects a request whose client has already left, and an admitted request stops at its
+    next wait (load, Exclusive lock, session or pool slot) once its context ends. A run already
+    inside ONNX Runtime finishes; its result is dropped.

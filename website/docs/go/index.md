@@ -143,11 +143,11 @@ sequenceDiagram
     H->>M: Admit(ctx, model) - take a queue slot
     H->>H: decode image, parse prompt
     H->>P: Predict(ctx, mgr, model, img, prompt)
-    P->>M: PredictPrompt(model, img, prompt)
-    M->>M: Load(model) if needed, acquire a lease
-    M->>S: Predict(img, prompt)
+    P->>M: PredictPrompt(ctx, model, img, prompt)
+    M->>M: Load(ctx, model) if needed, acquire a lease
+    M->>S: Predict(ctx, img, prompt)
     S->>Mo: Preprocess(img) gives tensor + meta
-    S->>E: Run(tensor)
+    S->>E: Run(ctx, tensor)
     E-->>S: output tensors
     S->>Mo: Postprocess(outs, meta) gives Result
     S-->>H: Result
@@ -156,24 +156,24 @@ sequenceDiagram
 
 | Step | Function | File |
 |---|---|---|
-| 1. Route | `routes()` maps `POST /api/predict` to `handlePredict` | [server/server.go#L70-L87](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L70-L87) |
-| 2. Parse | `handlePredict` / `predict`: admit, decode the image, build the prompt | [server/handlers.go#L133-L165](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L133-L165) |
-| 3. Wrap | `Predict`: region-of-interest crop, client-gone check, size filter | [server/predict.go#L23-L42](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L23-L42) |
-| 4. Load | `Manager.PredictPrompt`: load once, lease the session | [lifecycle/manager.go#L100-L113](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L100-L113) |
-| 5. Run | `Session.predictSimple`: pre → infer → post | [lifecycle/session.go#L191-L201](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L191-L201) |
-| 6. Model | `Preprocess` / `Postprocess` of one architecture, e.g. classification | [models/classification/classification.go#L49-L55](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/classification.go#L49-L55) |
-| 7. ORT | `engine.Session.Run` hands the job to the session's own OS thread | [engine/ort.go#L451-L548](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L451-L548) |
+| 1. Route | `routes()` maps `POST /api/predict` to `handlePredict` | [server/server.go#L75-L92](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L75-L92) |
+| 2. Parse | `handlePredict` / `predict`: admit, decode the image, build the prompt | [server/handlers.go#L134-L166](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L134-L166) |
+| 3. Wrap | `Predict`: region-of-interest crop, client-gone check, size filter | [server/predict.go#L24-L43](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L24-L43) |
+| 4. Load | `Manager.PredictPrompt`: load once, lease the session | [lifecycle/manager.go#L106-L116](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L106-L116) |
+| 5. Run | `Session.predictSimple`: pre → infer → post | [lifecycle/session.go#L213-L223](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L213-L223) |
+| 6. Model | `Preprocess` / `Postprocess` of one architecture, e.g. classification | [models/classification/classification.go#L53-L59](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/classification.go#L53-L59) |
+| 7. ORT | `engine.Session.Run` hands the job to the session's own OS thread | [engine/ort.go#L472-L643](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L472-L643) |
 
 The core of step 5 is only a few lines. It is worth reading now, even before you know Go:
 
-```go title="internal/lifecycle/session.go (lines 190-201)"
+```go title="internal/lifecycle/session.go (lines 212-223)"
 // predictSimple is the classic single-session pre→infer→post path.
-func (s *Session) predictSimple(img image.Image) (api.Result, error) {
+func (s *Session) predictSimple(ctx context.Context, img image.Image) (api.Result, error) {
 	in, meta, err := s.model.Preprocess(img)
 	if err != nil {
 		return api.Result{}, err
 	}
-	outs, err := s.engine.Run([]engine.Tensor{in})
+	outs, err := s.engine.Run(ctx, []engine.Tensor{in})
 	if err != nil {
 		return api.Result{}, err
 	}
@@ -181,7 +181,7 @@ func (s *Session) predictSimple(img image.Image) (api.Result, error) {
 }
 ```
 
-[session.go#L190-L201 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L190-L201)
+[session.go#L212-L223 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L212-L223)
 
 In Python you would write `inp, meta = model.preprocess(img); outs = sess.run(inp); return
 model.postprocess(outs, meta)` and let exceptions fly. Go returns the error next to the

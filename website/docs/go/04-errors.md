@@ -28,7 +28,7 @@ The caller checks it right away. You saw this in every snippet so far:
     if err != nil {
     	return api.Result{}, err
     }
-    outs, err := s.engine.Run([]engine.Tensor{in})
+    outs, err := s.engine.Run(ctx, []engine.Tensor{in})
     if err != nil {
     	return api.Result{}, err
     }
@@ -42,7 +42,7 @@ The caller checks it right away. You saw this in every snippet so far:
     outs = self.engine.run([inp])
     ```
 
-([session.go#L191-L201](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L191-L201))
+([session.go#L214-L221](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L214-L221))
 
 Yes, Go is more verbose here. The benefit: every place that can fail is visible in the
 code, and you decide at each step what to do. There is also a hard reason in a server: in
@@ -55,7 +55,7 @@ A bare `"file not found"` is useless in a log. Each layer adds what it knows, wi
 `fmt.Errorf`. The `%w` verb **wraps** the original error: the message gets longer, and the
 original stays reachable for code that wants to inspect it.
 
-```go title="internal/lifecycle/load.go (lines 349-357)"
+```go title="internal/lifecycle/load.go (lines 379-387)"
 	if !ok {
 		return nil, nil, fmt.Errorf("lifecycle: %w: %q is not in the registry", ErrModelNotFound, name)
 	}
@@ -67,7 +67,7 @@ original stays reachable for code that wants to inspect it.
 	}
 ```
 
-[load.go#L349-L357 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L349-L357)
+[load.go#L379-L387 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L379-L387)
 
 A client asking for a model that does not exist then receives:
 
@@ -113,7 +113,7 @@ var (
 `errors.Is(err, ErrModelNotFound)` walks down the chain of `%w` wraps and reports whether
 any link *is* that sentinel. The server does all of its status mapping in one function:
 
-```go title="internal/server/errors.go (lines 48-75)"
+```go title="internal/server/errors.go (lines 60-87)"
 // statusOf maps an error to its HTTP status. It is the ONLY place a failure's status is chosen:
 //
 //	oversized body / upload            413
@@ -144,7 +144,7 @@ func statusOf(err error) int {
 }
 ```
 
-[server/errors.go#L48-L75 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/errors.go#L48-L75)
+[server/errors.go#L60-L87 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/errors.go#L60-L87)
 
 ```mermaid
 flowchart LR
@@ -203,7 +203,7 @@ func (badPrompt) Is(target error) bool { return target == ErrBadPrompt }
 `Error()` method for free: the message stays exactly what the model wrote. GroundingDINO
 uses it when the text prompt is missing:
 
-```go title="internal/models/groundingdino/groundingdino.go (lines 137-141)"
+```go title="internal/models/groundingdino/groundingdino.go (lines 144-148)"
 // Infer runs the full open-vocab detection pipeline for the text prompt.
 func (m *groundingDINO) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
 	if strings.TrimSpace(prompt.Text) == "" {
@@ -211,11 +211,11 @@ func (m *groundingDINO) Infer(img image.Image, prompt models.Prompt, r models.Ru
 	}
 ```
 
-[groundingdino.go#L137-L141 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/groundingdino/groundingdino.go#L137-L141)
+[groundingdino.go#L144-L148 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/groundingdino/groundingdino.go#L144-L148)
 
 The server's `requestError` does the same for malformed HTTP requests and answers
 `true` for `lifecycle.ErrInvalidRequest`
-([server/errors.go#L23-L40](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/errors.go#L23-L40)).
+([server/errors.go#L35-L52](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/errors.go#L35-L52)).
 
 !!! note "When you write a model"
     Return plain `fmt.Errorf` errors for real failures (a tensor with the wrong shape is a
@@ -231,8 +231,8 @@ Several defers run in reverse order (last in, first out).
 The engine must free every ONNX Runtime tensor it creates, on success and on every error
 path. Defer makes that hard to get wrong:
 
-```go title="internal/engine/ort.go (lines 509-534, trimmed)"
-func (s *Session) runOnThread(inputs []Tensor) ([]Tensor, error) {
+```go title="internal/engine/ort.go (lines 588-624, trimmed)"
+func (s *Session) runOnThread(inputs, into []Tensor) ([]Tensor, error) {
 	inVals := make([]ort.Value, 0, len(inputs))
 	for i, t := range inputs {
 		// ... create the ORT tensor for input i
@@ -244,16 +244,18 @@ func (s *Session) runOnThread(inputs []Tensor) ([]Tensor, error) {
 	}
 	defer destroyValues(inVals)
 
-	// nil outputs -> ORT allocates; we read them back after Run.
+	// nil outputs -> ORT allocates; we read them back after Run. A caller buffer is wrapped
+	// as-is, so ORT writes that output straight into Go memory.
 	outVals := make([]ort.Value, len(s.outputNames))
+	defer destroyValues(outVals)
+	// ... wrap the caller's output buffers, if any
 	if err := s.sess.Run(inVals, outVals); err != nil {
 		return nil, fmt.Errorf("engine: Run failed: %w", err)
 	}
-	defer destroyValues(outVals)
 	// ... copy the outputs into Go slices and return them
 ```
 
-[ort.go#L509-L548 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L509-L548)
+[ort.go#L588-L624 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L588-L624)
 
 === "Go"
 
@@ -272,7 +274,7 @@ func (s *Session) runOnThread(inputs []Tensor) ([]Tensor, error) {
 
 The two most common defers in this repository are `defer mu.Unlock()` right after
 `mu.Lock()` and `defer release()` right after taking a resource
-([manager.go#L104-L108](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L104-L108)).
+([manager.go#L107-L111](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L107-L111)).
 
 ## Panics: only for "impossible", recovered at the edges
 
@@ -284,9 +286,9 @@ Panics can still come from bugs (an index out of range) or from third-party code
 project puts `recover()` at the two places where a panic would otherwise take the whole
 server down, and turns it into an error:
 
-```go title="internal/lifecycle/load.go (lines 74-84, trimmed)"
-// lead runs the load for the request that started it and publishes the result: the session goes
-// live, unless an Unload or Close arrived meanwhile — then it is closed and the load fails.
+```go title="internal/lifecycle/load.go (lines 104-114, trimmed)"
+// lead runs a load, on its own goroutine (see Load), and publishes the result in call: the session
+// goes live, unless an Unload or Close arrived meanwhile — then it is closed and the load fails.
 // A panic while building (a model factory, a binding) becomes an error: it used to leave the
 // name in m.loading forever, so every later request for that model hung.
 func (m *Manager) lead(name string, call *loadCall) (err error) {
@@ -299,12 +301,12 @@ func (m *Manager) lead(name string, call *loadCall) (err error) {
 		// ...
 ```
 
-[load.go#L74-L107 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L74-L107)
+[load.go#L104-L114 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L104-L114)
 
 `recover()` only works inside a deferred function. Because `lead` has a *named* result
 `(err error)`, the deferred function can overwrite what the function returns. The other
 safety net is on each ONNX session's worker thread
-([ort.go#L487-L500](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L487-L500)),
+([ort.go#L557-L570](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L557-L570)),
 which chapter 5 explains.
 
 ## Try it
@@ -315,12 +317,12 @@ which chapter 5 explains.
    go test ./internal/lifecycle -run TestTypedErrors -v
    go test ./internal/models -run TestBadPrompt -v
    ```
-2. See `%w` matter. In `internal/lifecycle/load.go` line 350, change `lifecycle: %w:` to
+2. See `%w` matter. In `internal/lifecycle/load.go` line 380, change `lifecycle: %w:` to
    `lifecycle: %v:` and rerun `TestTypedErrors`:
    ```console
    $ go test ./internal/lifecycle -run TestTypedErrors
    --- FAIL: TestTypedErrors (0.00s)
-       errors_test.go:89: load: not in the registry: err = lifecycle: model not found: "nope" is not in the registry, want it to wrap model not found
+       errors_test.go:90: load: not in the registry: err = lifecycle: model not found: "nope" is not in the registry, want it to wrap model not found
        ...
    ```
    The message is identical, but the chain is gone, so the server would answer 500 instead

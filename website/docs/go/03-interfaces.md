@@ -48,8 +48,20 @@ type Model interface {
 [model.go#L40-L65 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L40-L65)
 
 The classification package has a private struct with exactly these six methods
-([classification.go#L42-L55](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/classification.go#L42-L55)).
+([classification.go#L46-L59](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/classification.go#L46-L59)).
 That is all it takes for `*classificationModel` to be a `models.Model`.
+
+Because nothing is declared, nothing would complain if a method were misspelled: the type
+would simply stop being a `models.Model`. Every model package therefore adds one line that
+asks the compiler to check it (more on this trick in "Try it" below):
+
+```go title="internal/models/classification/classification.go (lines 21-23)"
+// Compile-time checks of the interfaces lifecycle type-asserts at load: a signature drift
+// fails the build instead of silently changing how the model is run.
+var _ models.Model = (*classificationModel)(nil)
+```
+
+[classification.go#L21-L23 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/classification.go#L21-L23)
 
 === "Go"
 
@@ -83,7 +95,7 @@ That is all it takes for `*classificationModel` to be a `models.Model`.
 `Model` is one of a few small interfaces. They build on each other by **embedding**
 (an interface can list another interface, which adds all its methods):
 
-```go title="internal/models/model.go (lines 121-127, 263-276, trimmed)"
+```go title="internal/models/model.go (lines 124-127, 283-289, trimmed)"
 type Base interface {
 	Name() string
 	Task() Task
@@ -99,8 +111,8 @@ type PipelineModel interface {
 }
 ```
 
-[model.go#L121-L127](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L121-L127),
-[#L263-L276](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L263-L276)
+[model.go#L124-L127](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L124-L127),
+[#L283-L289](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L283-L289)
 
 ```mermaid
 classDiagram
@@ -144,7 +156,7 @@ has no method that could do anything else.
 How does the server find the Go code for `architecture: mobilenet-v3` in a manifest?
 Through a map from names to **factory functions**:
 
-```go title="internal/models/model.go (lines 278-308, trimmed)"
+```go title="internal/models/model.go (lines 291-321, trimmed)"
 // Factory builds a model (Model or PipelineModel) from Config (parsed manifest).
 type Factory func(cfg Config) (Base, error)
 
@@ -176,19 +188,19 @@ func New(name string, cfg Config) (Base, error) {
 }
 ```
 
-[model.go#L278-L308 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L278-L308)
+[model.go#L291-L321 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L291-L321)
 
 `Factory` is a *function type*: functions are values in Go, like in Python. Each model
 package registers its factory in a function called `init`:
 
-```go title="internal/models/classification/classification.go (lines 19-22)"
+```go title="internal/models/classification/classification.go (lines 25-28)"
 func init() {
 	models.Register("efficientnet", New)
 	models.Register("mobilenet-v3", New)
 }
 ```
 
-[classification.go#L19-L22 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/classification.go#L19-L22)
+[classification.go#L25-L28 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/classification.go#L25-L28)
 
 `init` is special: Go runs it automatically when the package is loaded, before `main()`.
 But a package is only loaded if something imports it. Nothing calls the classification
@@ -221,7 +233,7 @@ model package that is not imported somewhere is simply not in the binary.
 `models.New` returns a `Base`. Lifecycle then asks which richer interface the value has,
 with a **type switch**:
 
-```go title="internal/lifecycle/load.go (lines 135-137, 182, 212-214, trimmed)"
+```go title="internal/lifecycle/load.go (lines 165-167, 212, 242-244, trimmed)"
 	var sess *Session
 	switch mdl := base.(type) {
 	case models.PipelineModel:
@@ -233,7 +245,7 @@ with a **type switch**:
 	}
 ```
 
-[load.go#L135-L214 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L135-L214)
+[load.go#L165-L244 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L165-L244)
 
 Inside each `case`, `mdl` has the concrete interface type, so `mdl.Roles()` compiles in the
 first branch and `mdl.Preprocess(...)` in the second.
@@ -242,7 +254,7 @@ To ask about *one* interface, use a **type assertion** with comma-ok. This is ho
 features work: a pipeline that wants its `Infer` serialised also implements
 `models.Exclusive`, and lifecycle checks for it:
 
-```go title="internal/lifecycle/session.go (lines 73-85)"
+```go title="internal/lifecycle/session.go (lines 77-90)"
 func newPipelineSession(name string, task api.Task, p models.PipelineModel, engs map[string]engine.Runnable, idle time.Duration, now time.Time) *Session {
 	ex, ok := p.(models.Exclusive)
 	return &Session{
@@ -252,32 +264,38 @@ func newPipelineSession(name string, task api.Task, p models.PipelineModel, engs
 		pipeline:    p,
 		engines:     engs,
 		exclusive:   ok && ex.Exclusive(),
+		inferLock:   make(chan struct{}, 1),
 		idleTimeout: idle,
 		lastUsed:    now,
 	}
 }
 ```
 
-[session.go#L73-L85 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L73-L85)
+[session.go#L77-L90 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L77-L90)
 
 In Python you would write `isinstance(p, Exclusive) and p.exclusive()` or
 `getattr(p, "exclusive", None)`. `models.PoolSizer` works the same way
-([load.go#L145-L150](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L145-L150)).
+([load.go#L175-L180](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L175-L180)).
 You can even assert to an interface written on the spot:
 `r.(interface{ Size() int })` in
-[session.go#L218-L223](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L218-L223).
+[session.go#L240-L245](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L240-L245).
 
 ## Two implementations behind one interface
 
 `engine.Runnable` is what lifecycle stores for each ONNX graph. Both a single session and
 a pool of identical sessions satisfy it, so lifecycle does not care which one it holds:
 
-```go title="internal/engine/pool.go (lines 5-14)"
+```go title="internal/engine/pool.go (lines 8-22)"
 // Runnable is satisfied by both *Session and *SessionPool, so lifecycle can hold
 // either behind the same interface without knowing which is which.
+//
+// ctx bounds the WAIT for the session, not the inference: a call whose ctx is done before it gets
+// the session (the worker thread of a single session, a free member of a pool) returns an error
+// wrapping ctx.Err() and runs nothing. Once ONNX Runtime has the job it runs to the end (a Run
+// cannot be interrupted) and the call returns its result.
 type Runnable interface {
-	Run(inputs []Tensor) ([]Tensor, error)
-	RunNamed(inputs map[string]Tensor) ([]Tensor, error)
+	Run(ctx context.Context, inputs []Tensor) ([]Tensor, error)
+	RunNamed(ctx context.Context, inputs map[string]Tensor) ([]Tensor, error)
 	InputNames() []string
 	OutputNames() []string
 	ActiveEP() Provider
@@ -285,14 +303,20 @@ type Runnable interface {
 }
 ```
 
-[pool.go#L5-L14 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/pool.go#L5-L14)
+[pool.go#L8-L22 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/pool.go#L8-L22)
 
-And the `models.Runner` a pipeline receives is a tiny adapter over a map of those:
+The first argument, `ctx context.Context`, is Go's standard way to say "this call belongs to a
+request, and the request may be cancelled"; chapter 5 shows it in use.
 
-```go title="internal/lifecycle/session.go (lines 225-237)"
+And the `models.Runner` a pipeline receives is a tiny adapter over a map of those. It also
+carries the request's `ctx`, so a model's `Infer` does not need a `ctx` parameter of its own:
+
+```go title="internal/lifecycle/session.go (lines 247-261)"
 // runner is the lifecycle-backed implementation of models.Runner: it exposes the
-// loaded sessions to a PipelineModel by role, without giving away ownership.
+// loaded sessions to a PipelineModel by role, without giving away ownership. ctx is the request's:
+// each call waits for its session only while the request is still wanted.
 type runner struct {
+	ctx     context.Context
 	engines map[string]engine.Runnable
 }
 
@@ -301,42 +325,47 @@ func (r runner) Run(role string, inputs map[string]engine.Tensor) ([]engine.Tens
 	if !ok {
 		return nil, fmt.Errorf("lifecycle: no ONNX session for role %q", role)
 	}
-	return s.RunNamed(inputs)
+	return s.RunNamed(r.ctx, inputs)
 }
 ```
 
-[session.go#L225-L237 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L225-L237)
+[session.go#L247-L261 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L247-L261)
 
 ## Small interfaces make testing easy
 
 The HTTP server does not depend on `*lifecycle.Manager` directly. It declares the few
 methods it needs as an interface, in its own package:
 
-```go title="internal/server/server.go (lines 26-38)"
+```go title="internal/server/server.go (lines 27-43)"
 // modelRuntime is what the HTTP layer needs from lifecycle.Manager. It is an interface so the
 // handler tests can drive a fake (admission order, cancellation, status mapping) without ONNX.
+//
+// Every call that can wait takes the request's context: when the client leaves, the runtime stops
+// waiting (for the model to load, a session, a model's lock) and returns an error wrapping
+// ctx.Err(), which the handlers answer as errClientGone (499).
 type modelRuntime interface {
 	Admit(ctx context.Context, name string) (release func(), err error)
-	Load(name string) error
+	Load(ctx context.Context, name string) error
 	Unload(name string) error
 	IsLoaded(name string) bool
-	PredictPrompt(name string, img image.Image, prompt models.Prompt) (api.Result, error)
-	InferTensor(name string, in engine.Tensor) (api.Result, error)
-	Explain(name string, img image.Image, req lifecycle.ExplainRequest) (lifecycle.ExplainResult, error)
-	Preprocess(name string, img image.Image, prompt models.Prompt) (lifecycle.PreprocessResult, error)
+	PredictPrompt(ctx context.Context, name string, img image.Image, prompt models.Prompt) (api.Result, error)
+	InferTensor(ctx context.Context, name string, in engine.Tensor) (api.Result, error)
+	Explain(ctx context.Context, name string, img image.Image, req lifecycle.ExplainRequest) (lifecycle.ExplainResult, error)
+	Preprocess(ctx context.Context, name string, img image.Image, prompt models.Prompt) (lifecycle.PreprocessResult, error)
 	Close()
 }
 ```
 
-[server.go#L26-L38 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L26-L38)
+[server.go#L27-L43 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L27-L43)
 
 `*lifecycle.Manager` has all these methods, so production code passes the real manager
-([server.go#L49-L51](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L49-L51)).
+([server.go#L54-L56](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L54-L56)).
 The tests pass a `fakeRuntime` that records calls and returns canned answers:
 
-```go title="internal/server/fake_test.go (lines 23-39, 72-86, trimmed)"
+```go title="internal/server/fake_test.go (lines 23-43, 105-117, trimmed)"
 // fakeRuntime stands in for lifecycle.Manager: it records the order of calls and what each
-// inference call received, and returns canned answers.
+// inference call received, and returns canned answers. mu guards events and every field an
+// inference call records (prompt, img, explain, tensor).
 type fakeRuntime struct {
 	mu     sync.Mutex
 	events []string
@@ -348,11 +377,13 @@ type fakeRuntime struct {
 	// ...
 }
 
-func (f *fakeRuntime) Load(name string) error   { f.event("load:" + name); return f.runErr }
 // ...
-func (f *fakeRuntime) PredictPrompt(name string, img image.Image, p models.Prompt) (api.Result, error) {
+func (f *fakeRuntime) PredictPrompt(ctx context.Context, name string, img image.Image, p models.Prompt) (api.Result, error) {
 	f.event("predict:" + name)
 	// ...
+	if err := f.wait(ctx); err != nil {
+		return api.Result{}, err
+	}
 	if f.runErr != nil {
 		return api.Result{}, f.runErr
 	}
@@ -360,7 +391,10 @@ func (f *fakeRuntime) PredictPrompt(name string, img image.Image, p models.Promp
 }
 ```
 
-[fake_test.go#L23-L115 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/fake_test.go#L23-L115)
+[fake_test.go#L23-L117 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/fake_test.go#L23-L117)
+
+`wait` lets a test hold a call "waiting for the model" and then cancel the request's
+context, to check that the handler answers 499 and releases its admission slot.
 
 The same idea, even smaller: `server.Predict` takes a one-method `Predictor`
 ([predict.go#L13-L16](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L13-L16)),
@@ -378,27 +412,26 @@ which is why both the HTTP handler and the `visionserve run` command can share i
    go doc ./internal/models PipelineModel
    go doc ./internal/models Runner
    ```
-2. Let the compiler prove that a type satisfies an interface. Create a throwaway file
-   `internal/models/classification/check_tmp.go`:
+2. Watch the compiler prove that a type satisfies an interface. `classification.go`
+   already contains the check:
    ```go
-   package classification
-
-   import "visionserve/internal/models"
-
    var _ models.Model = (*classificationModel)(nil)
    ```
+   It declares a variable named `_` (thrown away) of type `models.Model` and assigns it a
+   nil `*classificationModel`; the assignment only compiles if the type has every method.
    `go build ./internal/models/classification/` succeeds. Now rename the method
    `Postprocess` to `PostProcess` in `classification.go` and build again:
    ```console
    $ go build ./internal/models/classification/
    # visionserve/internal/models/classification
-   internal/models/classification/check_tmp.go:5:22: cannot use (*classificationModel)(nil) (value of type *classificationModel) as models.Model value in variable declaration: *classificationModel does not implement models.Model (missing method Postprocess)
+   internal/models/classification/classification.go:23:22: cannot use (*classificationModel)(nil) (value of type *classificationModel) as models.Model value in variable declaration: *classificationModel does not implement models.Model (missing method Postprocess)
    		have PostProcess([]engine.Tensor, preprocess.Meta) (api.Result, error)
    		want Postprocess([]engine.Tensor, preprocess.Meta) (api.Result, error)
    ```
-   Without `check_tmp.go` the typo would compile, and you would only find out when a
-   request loads the model: `lifecycle: model "mobilenet-v3" implements neither Model nor
-   PipelineModel`. Undo the rename and delete the file.
+   Without that line the typo would compile, and you would only find out when a request
+   loads the model: `lifecycle: model "mobilenet-v3" implements neither Model nor
+   PipelineModel`. That is why every model package now has one (`models.Model` or
+   `models.PipelineModel`). Undo the rename.
 3. Run the HTTP tests that use the fake runtime:
    ```bash
    go test ./internal/server -run 'TestHandlersMapErrorsToStatus|TestAdmitBeforeDecode' -v

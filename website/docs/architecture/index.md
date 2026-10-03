@@ -118,25 +118,25 @@ steps itself; for a prompted or multi-stage model it calls the model's `Infer` a
 `Runner`. Either way, the ONNX sessions belong to the manager, which creates and frees them.
 
 ```go title="internal/lifecycle/session.go"
-func (s *Session) Predict(img image.Image, prompt models.Prompt, now time.Time) (api.Result, error) {
+func (s *Session) Predict(ctx context.Context, img image.Image, prompt models.Prompt, now time.Time) (api.Result, error) {
 	start := now
 	// ...
 	if s.pipeline != nil {
-		res, err = s.inferPipeline(img, prompt)
+		res, err = s.inferPipeline(ctx, img, prompt)
 	} else {
-		res, err = s.predictSimple(img)
+		res, err = s.predictSimple(ctx, img)
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L128-L139)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L148-L159)
 
 ```go title="internal/lifecycle/session.go"
-func (s *Session) predictSimple(img image.Image) (api.Result, error) {
+func (s *Session) predictSimple(ctx context.Context, img image.Image) (api.Result, error) {
 	in, meta, err := s.model.Preprocess(img)
 	if err != nil {
 		return api.Result{}, err
 	}
-	outs, err := s.engine.Run([]engine.Tensor{in})
+	outs, err := s.engine.Run(ctx, []engine.Tensor{in})
 	if err != nil {
 		return api.Result{}, err
 	}
@@ -144,7 +144,10 @@ func (s *Session) predictSimple(img image.Image) (api.Result, error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L193-L203)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L213-L223)
+
+The request's `ctx` travels with the call, so a request whose client has gone away stops waiting
+for a session instead of running inference nobody will read.
 
 `meta` (a `PreprocessMeta`) records how the image was resized and padded, so `Postprocess` can
 map every box back from the network's input frame to the original photo.

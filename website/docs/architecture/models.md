@@ -59,12 +59,12 @@ type Model interface {
 The lifecycle manager glues those two calls around the engine. This is the whole "simple" path:
 
 ```go title="internal/lifecycle/session.go"
-func (s *Session) predictSimple(img image.Image) (api.Result, error) {
+func (s *Session) predictSimple(ctx context.Context, img image.Image) (api.Result, error) {
 	in, meta, err := s.model.Preprocess(img)
 	if err != nil {
 		return api.Result{}, err
 	}
-	outs, err := s.engine.Run([]engine.Tensor{in})
+	outs, err := s.engine.Run(ctx, []engine.Tensor{in})
 	if err != nil {
 		return api.Result{}, err
 	}
@@ -72,7 +72,7 @@ func (s *Session) predictSimple(img image.Image) (api.Result, error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L193-L203)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L213-L223)
 
 A **`PipelineModel`** is for anything that needs a *prompt* (a box, a point or a text phrase)
 and/or chains several ONNX graphs. MobileSAM, for example, runs an image encoder once and then a
@@ -102,7 +102,7 @@ type PipelineModel interface {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L227-L277)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L227-L289)
 
 Two optional interfaces let a pipeline ask the runtime for a concurrency policy instead of
 implementing one itself:
@@ -117,7 +117,7 @@ type PoolSizer interface {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L249-L262)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L261-L274)
 
 - `Exclusive() == true` makes the lifecycle hold a per-loaded-model lock around `Infer`
   (GroundingDINO and Grounded-SAM use it; grasp only in its GroundingDINO-detector variant).
@@ -166,13 +166,22 @@ under an **architecture name** in its `init()` function. Go runs `init()` automa
 package is imported.
 
 ```go title="internal/models/detr/detr.go"
+// Compile-time checks of the interfaces lifecycle type-asserts at load: a signature drift
+// fails the build instead of silently changing how the model is run.
+var _ models.Model = (*detr)(nil)
+
 func init() {
 	models.Register("rf-detr", NewRFDETR)
 	models.Register("rt-detr", NewRTDETR)
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/detr/detr.go#L24-L27)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/detr/detr.go#L24-L31)
+
+The `var _ models.Model = (*detr)(nil)` line is a compile-time check. Lifecycle only finds out
+which interface a model implements by a type assertion at load time, so without it a misspelled
+method would compile and fail when the model is first loaded. Every package that registers a
+model has such a line (`models.Model` or `models.PipelineModel`).
 
 The only line outside the package that changes is a *blank import* in the binary's entry point,
 which pulls the package in so its `init()` runs:
@@ -280,7 +289,7 @@ reported as a warning; it never crashes the server. Folders whose name starts wi
 		}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/registry.go#L59-L63)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/registry.go#L61-L65)
 
 The license check is the first rule that matters. The allowlist is keyed by the lowercased SPDX
 id, so `apache-2.0` copied from a HuggingFace model card is accepted and stored back as
@@ -305,7 +314,7 @@ var licenseAllowlist = map[string]string{
 	m.License = canonLicense
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L275-L279)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L287-L291)
 
 The rest of `validate()` rejects:
 
@@ -320,6 +329,11 @@ The rest of `validate()` rejects:
 - `runtime.threads` keys that are not roles of `files:`, or values that are negative or not
   whole numbers (`1.5` is an error, not a guess);
 - a malformed `explain:` block.
+
+A key that no field reads is not an error, since a third-party manifest may carry extra keys,
+but a misspelled key (`idle_unload_second`) would silently leave the real setting at its
+default. The registry scan therefore warns, naming each unknown key as a dotted path with its
+line: `unknown key(s) ignored, check for a typo: runtime.idle_unload_second (line 14)`.
 
 Validation is structural only. Whether the weights are on disk is checked later, so a model can
 be **listed** before it is downloaded (state `not_downloaded`, then `available`, then

@@ -10,8 +10,9 @@
 
 The server answers many requests at the same time. Go's `net/http` runs **every request in
 its own goroutine**, so every handler, and everything it calls, may run in parallel with
-itself. CLAUDE.md warns: "access to a model session must be thread-safe ... This is an easy
-place to get wrong." This chapter shows how the code gets it right.
+itself. CLAUDE.md warns: "access to a model session must be thread-safe. Sessions run on
+their own OS-locked worker goroutine; never call one from an arbitrary goroutine under a
+mutex." This chapter shows how the code gets it right, and why a mutex is not enough.
 
 ## Goroutines
 
@@ -33,7 +34,7 @@ all CPU cores, moving them between OS threads as it likes.
     ```
 
 The lifecycle manager starts its idle reaper this way
-([manager.go#L61-L74](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L61-L74)).
+([manager.go#L62-L75](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L62-L75)).
 
 ## Channels and `select`
 
@@ -47,9 +48,10 @@ to any number of waiters.
 MobileSAM's automatic mask generator uses a channel to hand indices to a fixed number of
 workers, a classic worker pool:
 
-```go title="internal/models/mobilesam/automask.go (lines 224-245)"
-// parallelFor runs fn(0..n-1) on at most `workers` goroutines.
-func parallelFor(n, workers int, fn func(i int)) {
+```go title="internal/models/mobilesam/automask.go (lines 291-313)"
+// parallelForW is parallelFor that also tells fn which worker (0..workers-1) runs item i, so a
+// worker can reuse state of its own across its items.
+func parallelForW(n, workers int, fn func(w, i int)) {
 	if workers > n {
 		workers = n
 	}
@@ -57,12 +59,12 @@ func parallelFor(n, workers int, fn func(i int)) {
 	next := make(chan int)
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		go func() {
+		go func(w int) {
 			defer wg.Done()
 			for i := range next {
-				fn(i)
+				fn(w, i)
 			}
-		}()
+		}(w)
 	}
 	for i := 0; i < n; i++ {
 		next <- i
@@ -72,10 +74,15 @@ func parallelFor(n, workers int, fn func(i int)) {
 }
 ```
 
-[automask.go#L224-L245 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/mobilesam/automask.go#L224-L245)
+[automask.go#L291-L313 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/mobilesam/automask.go#L291-L313)
 
 `sync.WaitGroup` counts running goroutines; `wg.Wait()` blocks until all called `Done`. In
-Python this is `ThreadPoolExecutor(max_workers).map(fn, range(n))`.
+Python this is `ThreadPoolExecutor(max_workers).map(fn, range(n))`. The worker number `w`
+lets each worker keep buffers of its own across the items it handles: the full-resolution
+pass gives every worker one mask buffer that the decoder writes into
+([automask.go#L238-L248](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/mobilesam/automask.go#L238-L248)),
+instead of allocating a new one (30 MB at 3200×2400) per mask. Since only one goroutine ever uses
+`logits[w]`, no lock is needed. The plain `parallelFor(n, workers, fn)` just drops `w`.
 
 `select` waits on several channel operations and runs the first one that is ready. The
 idle reaper wakes up every 30 seconds, or stops when the manager closes `m.stop`:
@@ -107,7 +114,7 @@ When several goroutines read and write the same map or counter, they must take t
 `sync.Mutex` is a lock: `Lock()` waits until no one else holds it. The manager guards all
 its bookkeeping with one:
 
-```go title="internal/lifecycle/manager.go (lines 29-59, trimmed)"
+```go title="internal/lifecycle/manager.go (lines 30-60, trimmed)"
 // Manager holds the live models and coordinates thread-safe load/unload.
 type Manager struct {
 	reg  *registry.Registry
@@ -124,7 +131,7 @@ type Manager struct {
 }
 ```
 
-[manager.go#L29-L59 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L29-L59)
+[manager.go#L30-L60 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L30-L60)
 
 The convention is that the fields declared after `mu` are the ones it protects. The rule the
 code follows everywhere: **hold the lock briefly, never across slow work**. Closing a GPU
@@ -134,7 +141,7 @@ session takes a while, so the reaper above collects the sessions under the lock
 `sync.Once` runs something exactly once, however many goroutines call it at the same time.
 ONNX Runtime must be initialised once per process:
 
-```go title="internal/engine/ort.go (lines 41-55)"
+```go title="internal/engine/ort.go (lines 42-56)"
 // ensureORT initializes the ORT environment exactly once per process.
 func ensureORT() error {
 	initOnce.Do(func() {
@@ -152,7 +159,7 @@ func ensureORT() error {
 }
 ```
 
-[ort.go#L33-L55 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L33-L55)
+[ort.go#L42-L56 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L42-L56)
 
 ## The engine: one OS thread per ONNX session
 
@@ -165,7 +172,7 @@ goroutines between OS threads freely. With only a mutex, each inference could ru
 different thread and leak a new CUDA context every time. The comment on the type records
 what happened:
 
-```go title="internal/engine/ort.go (lines 138-165, trimmed)"
+```go title="internal/engine/ort.go (lines 139-166, trimmed)"
 // Session is a live ONNX session. Thread-safe AND OS-thread-pinned: every call to the
 // underlying ORT session (create, Run, Destroy) is funnelled onto ONE dedicated OS thread
 // owned by this Session's worker goroutine (see worker / submit).
@@ -193,13 +200,13 @@ type Session struct {
 }
 ```
 
-[ort.go#L138-L165 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L138-L165)
+[ort.go#L139-L166 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L139-L166)
 
 **The solution.** Each `Session` starts one goroutine, the *worker*, and pins it to its OS
 thread with `runtime.LockOSThread()`. The worker creates the ORT session, then runs every
 job sent on the `jobs` channel, then destroys the session, all on that one thread:
 
-```go title="internal/engine/ort.go (lines 232-259)"
+```go title="internal/engine/ort.go (lines 234-261)"
 // worker owns the session's single OS thread for its entire lifetime: it creates the ORT
 // session, runs every job serially, and destroys the session — all on the same locked thread.
 // This is what keeps ORT's CUDA EP to one per-thread context per session (see Session doc).
@@ -230,19 +237,22 @@ func (s *Session) worker(modelPath string, providers []Provider, so SessionOptio
 }
 ```
 
-[ort.go#L232-L259 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L232-L259)
+[ort.go#L234-L261 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L234-L261)
 
 `chan<- error` is a *send-only* channel: the worker may only send on `ready`. `NewSession`
 waits on `<-ready` so it returns only once the session exists
-([ort.go#L224-L229](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L224-L229)).
+([ort.go#L226-L231](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L226-L231)).
 
 A request goroutine never touches ORT. `Run` wraps the work in a closure and **submits** it:
 
-```go title="internal/engine/ort.go (lines 476-505)"
-func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
+```go title="internal/engine/ort.go (lines 543-581)"
+func (s *Session) submit(ctx context.Context, work func() ([]Tensor, error)) ([]Tensor, error) {
 	type result struct {
 		outs []Tensor
 		err  error
+	}
+	if err := ctx.Err(); err != nil { // an idle worker must not win over a ctx already done
+		return nil, gaveUp(err)
 	}
 	ch := make(chan result, 1)
 	s.jobsMu.RLock()
@@ -250,7 +260,7 @@ func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
 		s.jobsMu.RUnlock()
 		return nil, ErrClosed
 	}
-	s.jobs <- func() {
+	job := func() {
 		var r result
 		// A panic in the job must not unwind the worker (it would kill the process, and with it
 		// every other session). The session stays usable: the panic is in Go code around the ORT
@@ -264,6 +274,12 @@ func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
 		}()
 		r.outs, r.err = work()
 	}
+	select {
+	case s.jobs <- job:
+	case <-ctx.Done():
+		s.jobsMu.RUnlock()
+		return nil, gaveUp(ctx.Err())
+	}
 	s.jobsMu.RUnlock()
 	// Work accepted before Close still runs: the worker drains jobs before destroying the session.
 	r := <-ch
@@ -271,7 +287,7 @@ func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
 }
 ```
 
-[ort.go#L473-L505 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L473-L505)
+[ort.go#L543-L581 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L543-L581)
 
 ```mermaid
 sequenceDiagram
@@ -292,21 +308,27 @@ sequenceDiagram
     W-->>R2: result on R2's own channel
 ```
 
-Three things to notice:
+Four things to notice:
 
 - **Serialisation for free.** One worker runs jobs one at a time, so the session is never
   used by two goroutines at once. No mutex is needed around `s.sess`.
 - **Each caller has its own reply channel** (`ch`, buffered with size 1 so the worker never
   waits for the caller to read).
+- **Waiting can be cancelled.** The hand-over is a `select` between sending the job and
+  `ctx.Done()`: a request whose client leaves while it queues behind other jobs gives up, and
+  its job never runs. Once the worker has the job, `submit` waits for the result regardless,
+  because an ORT run cannot be interrupted. (`context.Context` is explained at the end of
+  this chapter.)
 - **Closing is safe.** `Close` takes the write lock, sets `closed`, and closes `jobs`
-  ([ort.go#L556-L570](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L556-L570)).
+  ([ort.go#L651-L667](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L651-L667)).
   A late `submit` sees `closed` under the read lock and returns `ErrClosed` instead of
   panicking with "send on closed channel".
 
 When one session is not enough (MobileSAM's decoder is called ~256 times per image in
 automask mode), lifecycle wraps N sessions in a `SessionPool`. The pool is a buffered
-channel of free sessions, used as a semaphore: `take` receives one, and the caller sends it
-back when done ([pool.go#L53-L85](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/pool.go#L53-L85)).
+channel of free sessions, used as a semaphore: `take` receives one (or gives up when the
+pool closes or `ctx` ends, again with a `select`), and the caller sends it back when done
+([pool.go#L73-L122](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/pool.go#L73-L122)).
 
 ## Loading a model once (single-flight)
 
@@ -315,7 +337,7 @@ hashing hundreds of MB of weights and creating GPU sessions; doing it eight time
 eight times the VRAM. `Manager.Load` lets the first request build and makes the rest wait
 for it:
 
-```go title="internal/lifecycle/load.go (lines 20-72, trimmed)"
+```go title="internal/lifecycle/load.go (lines 23-31, 41-91, trimmed)"
 type loadCall struct {
 	done chan struct{}
 	// cancelled is set by Unload (or Close) while the load runs: its session must not go live.
@@ -325,8 +347,13 @@ type loadCall struct {
 	// ...
 }
 
-func (m *Manager) Load(name string) error {
+// ...
+func (m *Manager) Load(ctx context.Context, name string) error {
+	// ...
 	for {
+		if err := ctx.Err(); err != nil {
+			return gaveUp(name, err)
+		}
 		m.mu.Lock()
 		// ...
 		if _, ok := m.live[name]; ok {
@@ -339,24 +366,51 @@ func (m *Manager) Load(name string) error {
 			// ...
 			m.loading[name] = call
 			m.mu.Unlock()
-			return m.lead(name, call)
+			go func() { _ = m.lead(name, call) }() // lead publishes its result in call.err
+			if err := m.waitLoad(ctx, name, call); err != nil {
+				return err
+			}
+			return call.err // this caller started the load: its result, success or failure
 		}
 		// ...
 		call.waiters++
 		m.mu.Unlock()
-		<-call.done
+		if err := m.waitLoad(ctx, name, call); err != nil {
+			// ...
+			return err
+		}
 		// ...
 	}
 }
 ```
 
-[load.go#L20-L72 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L20-L72)
+[load.go#L23-L31](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L23-L31),
+[#L41-L91](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L41-L91)
 
-`chan struct{}` carries no data; it exists only to be closed. When the leader finishes,
-`lead` closes `call.done` and every waiter blocked on `<-call.done` wakes up at once, loops,
-and finds the model in `m.live`. The test `TestConcurrentLoadsBuildOnce` starts 8 goroutines
-and checks the factory ran exactly once
-([load_test.go#L38-L72](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load_test.go#L38-L72)).
+The build itself runs in a goroutine of its own (`go func() { ... m.lead(name, call) }()`),
+owned by no request. Every caller, including the one that started the load, then waits in
+`waitLoad`:
+
+```go title="internal/lifecycle/load.go (lines 95-102)"
+func (m *Manager) waitLoad(ctx context.Context, name string, call *loadCall) error {
+	select {
+	case <-call.done:
+		return nil
+	case <-ctx.Done():
+		return gaveUp(name, ctx.Err())
+	}
+}
+```
+
+[load.go#L95-L102 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L95-L102)
+
+`chan struct{}` carries no data; it exists only to be closed. When the build finishes,
+`lead` closes `call.done` and every waiter wakes up at once, loops, and finds the model in
+`m.live`. A waiter whose request is cancelled (`ctx.Done()`) returns early, but the load
+carries on for everyone else: one client leaving, even the one that started the load,
+never cancels it. Only `Unload` and `Close` do. The test `TestConcurrentLoadsBuildOnce`
+starts 8 goroutines and checks the factory ran exactly once
+([load_test.go#L39-L73](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load_test.go#L39-L73)).
 
 ## Admission control, leases and the reaper
 
@@ -427,10 +481,11 @@ decrements it. Unload and the reaper only *retire* a session that is in use; the
     }
     ```
 
-    [lease.go#L27-L53 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/lease.go#L27-L53)
+    [lease.go#L32-L53 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/lease.go#L32-L53)
 
-`PredictPrompt` uses it as `s, release, err := m.acquire(name)` followed by `defer release()`
-([manager.go#L100-L113](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L100-L113)).
+`PredictPrompt` uses it as `s, release, err := m.loadAndAcquire(ctx, name)` (load if needed,
+then `acquire`) followed by `defer release()`
+([manager.go#L106-L130](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L106-L130)).
 
 **Reaper.** Shown above: every 30 s it retires models idle longer than their
 `idle_unload_seconds`, skipping any with `refs > 0`.
@@ -442,30 +497,35 @@ disconnected, a deadline passed, or the server is shutting down. `ctx.Err()` is 
 once that happens, and `<-ctx.Done()` is a channel closed at that moment. `net/http` gives
 every request one, `r.Context()`.
 
-VisionServe checks it at the last cheap moment, right before inference. Once an ONNX run
-has started it cannot be interrupted, so the check prevents wasted GPU work for clients
-that already left:
+Once an ONNX run has started it cannot be interrupted, so VisionServe checks the context
+before inference and passes it down, so that every *wait* on the way can stop early: the
+model's load, an Exclusive model's lock, the session's worker, a free copy in a pool. You
+saw the pattern above: a `select` with a `case <-ctx.Done():` next to the real work. The
+first check is in `server.Predict`:
 
-```go title="internal/server/predict.go (lines 23-29)"
+```go title="internal/server/predict.go (lines 24-30)"
 func Predict(ctx context.Context, p Predictor, model string, img image.Image, prompt models.Prompt) (api.Result, error) {
 	fullW, fullH := img.Bounds().Dx(), img.Bounds().Dy()
 	img, rect, hasROI := cropROI(img, &prompt)
 	if ctx.Err() != nil {
 		return api.Result{}, errClientGone
 	}
-	res, err := p.PredictPrompt(model, img, prompt)
+	res, err := p.PredictPrompt(ctx, model, img, prompt)
 ```
 
-[predict.go#L18-L42 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L18-L42)
+[predict.go#L24-L30 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L24-L30)
+
+By convention `ctx` is the first parameter of every function that can wait on behalf of a
+request, which is why `PredictPrompt`, `Load`, `Run` and `RunNamed` all take one.
 
 The server's admit helper does the same check around admission
-([handlers.go#L92-L109](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L92-L109)).
+([handlers.go#L93-L110](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L93-L110)).
 On shutdown, `serve` waits for SIGINT/SIGTERM on a channel and gives in-flight requests
 10 seconds with `context.WithTimeout`.
 
 ??? example "The shutdown code in serve"
 
-    ```go title="internal/cli/serve.go (lines 94-112)"
+    ```go title="internal/cli/serve.go (lines 92-110)"
     	// graceful shutdown on SIGINT/SIGTERM. ListenAndServe returns as soon as Shutdown STARTS, so
     	// wait for it to finish draining requests and releasing models before returning (main exits).
     	stopped := make(chan struct{})
@@ -487,7 +547,7 @@ On shutdown, `serve` waits for SIGINT/SIGTERM on a channel and gives in-flight r
     	return nil
     ```
 
-    [serve.go#L94-L112 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/cli/serve.go#L94-L112)
+    [serve.go#L92-L110 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/cli/serve.go#L92-L110)
 
 ## Data races and the race detector
 
