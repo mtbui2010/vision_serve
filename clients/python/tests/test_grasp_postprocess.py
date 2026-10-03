@@ -64,9 +64,11 @@ def test_backproject_and_distance():
 
 
 def _depth_result(width, height, fill):
-    """Synthetic depth Result; fill is a callable(x,y)->depth."""
-    dm = [float(fill(x, y)) for y in range(height) for x in range(width)]
-    return Result(task="depth", model="midas", depth_map=dm, depth_width=width, depth_height=height)
+    """Synthetic METRIC depth (metres, float32 array as from an RGB-D sensor); fill is a
+    callable(x,y)->depth. A server depth Result is relative inverse depth and is refused by the
+    metric helpers (see tests/test_sdk_review_fixes.py)."""
+    import numpy as np
+    return np.array([[float(fill(x, y)) for x in range(width)] for y in range(height)], np.float32)
 
 
 def test_object_distances():

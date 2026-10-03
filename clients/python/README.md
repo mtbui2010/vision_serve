@@ -239,7 +239,9 @@ res = c.predict("rf-detr", raw)
 ```
 
 Grayscale `(H, W)` ndarrays are automatically promoted to RGB. Float arrays in `[0, 1]`
-are scaled to `uint8`. Encoded to PNG client-side before upload.
+are scaled to `uint8`. Encoded to lossless PNG client-side before upload (so the server sees
+exactly your pixels); pass JPEG bytes yourself if upload size matters more. Boxes, points and
+numeric options may also be numpy arrays / scalars.
 
 Prompts (serialized to the server's string format):
 - `box`: `[x, y, w, h]` or a list of boxes → `"x,y,w,h"` joined by `;`.
@@ -489,6 +491,27 @@ if best:
 
 See [Grasp post-processing](#grasp-post-processing) below for the full selection and filtering API.
 
+### Preprocessing parity — `Client.preprocess()` / `Client.tokenize()`
+
+`POST /api/preprocess` returns exactly what a model is fed (no inference runs), so you can check
+the server prepares inputs the way your model was trained. A mismatch here never raises an error;
+it only makes the served model quietly worse.
+
+```python
+x = c.preprocess("my-detector", "img.jpg")      # PreprocessResult (needs numpy)
+x.inputs                                        # {onnx_input_name: np.ndarray}, bit-exact
+x.meta                                          # {"orig_width", ..., "scale_x", "pad_x", ...} or None
+np.abs(x.inputs["input"] - my_transform(pil)).max()
+c.tokenize("siglip-text", "a photo of a cup")   # token ids, padded as served
+```
+
+### Checkpoint converter — `pip install visionserve[convert]`
+
+`visionserve-convert` / `visionserve.convert.export()` turn a PyTorch, RF-DETR, HuggingFace or
+(with `[convert-tf]`, in its own environment) TensorFlow checkpoint into an installed VisionServe
+model. They verify it end to end: parity, preprocessing, outputs, optional mAP and speed. See
+`deploy/README.md` § "Bringing your own checkpoint".
+
 ## Post-processing
 
 All methods return a **new** `Result`; the original is not modified. They work on
@@ -515,11 +538,13 @@ by_class = result.group_by_class()
 for cls, r in by_class.items():
     print(f"{cls}: {len(r.detections)} detections")
 
-# Combine depth model with detection
+# Combine depth model with detection. A depth MODEL's map is RELATIVE inverse depth in [0, 1]
+# (larger = closer, no units) at the model's resolution: pass the original image size so the
+# boxes are mapped onto it. For metres, use an RGB-D sensor array instead (see below).
 depth = client.predict("midas", "photo.jpg")
-depths = get_depth_at_detection(depth, result)
+depths = get_depth_at_detection(depth, result, image_size=(W, H))
 for det, d in zip(result.detections, depths):
-    print(f"{det.cls}: depth={d:.1f}" if d else f"{det.cls}: no depth")
+    print(f"{det.cls}: relative closeness={d:.2f}" if d is not None else f"{det.cls}: no depth")
 ```
 
 | Method | Signature | Description |
@@ -530,10 +555,18 @@ for det, d in zip(result.detections, depths):
 | `nms` | `(iou_threshold=0.5)` | Greedy NMS on detections; no-op if no detections |
 | `group_by_class` | `()` | Returns `Dict[str, Result]` keyed by class label |
 
-`get_depth_at_detection(depth_result, det_result, *, mode="median")` (from
-`visionserve.postprocess` or the top-level `visionserve` package) returns
-`List[Optional[float]]` — one depth value per detection/mask, or `None` when
-the box falls outside the depth map. `mode` is `"median"` (default) or `"mean"`.
+`get_depth_at_detection(depth_result, det_result, *, mode="median", depth_scale=None, image_size=None)`
+(from `visionserve.postprocess` or the top-level `visionserve` package) returns
+`List[Optional[float]]` — one value per detection/mask, or `None` when the box has no valid
+depth. `mode` is `"median"` (default), `"mean"`, `"min"` or `"max"`.
+
+* With a **depth `Result`** (`midas`, `depth-anything-v2`) the values are the server's
+  RELATIVE inverse depth (min-max normalised per image, larger = closer, **not metres**);
+  `image_size=(W, H)` of the original image is required, because the map is at the model's
+  resolution, and `depth_scale` is refused.
+* With a **2-D numpy array from an RGB-D sensor** the values are in **metres** (`uint16` is
+  taken as millimetres unless `depth_scale` says otherwise); pass `image_size` if the array is
+  not at the image's resolution.
 
 ### Grasp post-processing
 
@@ -594,27 +627,19 @@ target = select_target_grasp(res.grasps)
 # 2. Prefer grasps near a pixel (e.g. robot workspace centre)
 target = select_target_grasp(res.grasps, target_point=(320, 240))
 
-# 3. Prefer grasps at a specific 3D distance (needs depth model)
-depth = c.predict("depth-anything-v2", "bin.jpg")
-K = CameraIntrinsics(fx=600, fy=600, cx=320, cy=240)
-target = select_target_grasp(
-    res.grasps,
-    target_distance=0.55,       # metres
-    depth_result=depth,
-    intrinsics=K,
-)
-
-# 3b. depth_result / intrinsics also accept plain arrays/lists (e.g. RGB-D sensor):
+# 3. Prefer grasps at a specific 3D distance: needs METRIC depth from an RGB-D sensor,
+#    aligned to the image. (A depth model's Result is relative and has no metres: it is refused.)
 import numpy as np
 depth_mm = np.asarray(realsense_depth, dtype=np.uint16)   # (H, W) millimetres
+K = CameraIntrinsics(fx=600, fy=600, cx=320, cy=240)       # or [fx, fy, cx, cy]
 target = select_target_grasp(
     res.grasps,
     target_distance=0.55,                 # metres
     depth_result=depth_mm,                # 2-D ndarray (uint16/float32) at image res
-    intrinsics=[600, 600, 320, 240],      # [fx, fy, cx, cy]
+    intrinsics=K,
 )
 # Depth is normalised to METRES: integer arrays default to mm→m (×0.001), float
-# arrays / a depth Result are taken as metres. Override with depth_scale=<m per unit>.
+# arrays are taken as metres. Override with depth_scale=<m per unit>.
 
 # 4. Filter by class + gripper bounds, weighted composite
 target = select_target_grasp(
@@ -632,10 +657,10 @@ if target:
 
 `return_index=True` returns `(grasp_or_None, index)` into the original list.
 
-> `depth_result` (a depth `Result` **or** a 2-D numpy array), `intrinsics`
-> (`CameraIntrinsics` **or** `[fx, fy, cx, cy]`), and `depth_scale` are accepted the
-> same way by `select_target_object`, `grasp_distances`, `object_distances`, and
-> `get_depth_at_detection`.
+> `depth_result` (a METRIC 2-D numpy array), `intrinsics` (`CameraIntrinsics` **or**
+> `[fx, fy, cx, cy]`), and `depth_scale` are accepted the same way by `select_target_object`,
+> `grasp_distances` and `object_distances`. These metric helpers refuse a depth-model `Result`
+> (relative inverse depth); `get_depth_at_detection` accepts both (see above).
 
 #### `select_target_object()`
 

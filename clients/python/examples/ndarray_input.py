@@ -2,8 +2,9 @@
 
 ``Client.predict()`` accepts a ``numpy.ndarray`` directly (HWC ``uint8``, or float in
 ``[0, 1]``; grayscale ``(H, W)`` is promoted to RGB), so you can feed a frame straight
-from a camera / video pipeline with NO file round-trip — the client JPEG-encodes it for
-you.
+from a camera / video pipeline with NO file round-trip — the client PNG-encodes it
+(lossless) for you. If upload size matters more than exact pixels, encode it to JPEG
+yourself and pass the bytes.
 
 IMPORTANT — colour order: the client treats the array as **RGB**. OpenCV delivers frames
 in **BGR**, so convert BGR→RGB first (``cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)`` or

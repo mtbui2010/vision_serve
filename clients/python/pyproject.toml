@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "visionserve"
-version = "0.1.5"
+dynamic = ["version"]  # single source: visionserve/__init__.py::__version__
 description = "Python client SDK for the VisionServe HTTP server (talks to the Go runtime over HTTP)."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -35,16 +35,38 @@ dependencies = []
 [project.optional-dependencies]
 images = ["pillow>=8.0", "numpy>=1.20"]
 dev = ["pillow>=8.0", "numpy>=1.20", "pytest>=7.0"]
+# Checkpoint converter (`visionserve-convert`, `visionserve.convert.export`): PyTorch, RF-DETR and
+# HuggingFace checkpoints -> ONNX + manifest, with parity / end-to-end / speed / mAP checks.
+# The SERVER never needs these — it stays a Python-free Go binary (CLAUDE.md rule 3).
+convert = [
+  "numpy>=1.24", "pillow>=9.0", "pyyaml>=6.0",
+  "onnx>=1.16", "onnxruntime>=1.18", "onnxscript>=0.1",
+  "torch>=2.2", "torchvision>=0.17",
+  "transformers>=4.45", "huggingface_hub>=0.24", "safetensors>=0.4",
+  "rfdetr>=1.7",
+  "pycocotools>=2.0.7",  # tier C (--eval): COCO mAP
+]
+# TensorFlow / Keras / TFLite. tf2onnx 1.16 needs TF <= 2.15, numpy < 2 and protobuf ~= 3.20, which
+# conflict with the torch side: install this extra in its OWN environment (Python 3.9-3.11).
+convert-tf = [
+  "tensorflow-cpu==2.15.1", "keras==2.15.0", "tf2onnx==1.16.1",
+  "onnx==1.16.2", "onnxruntime==1.18.1", "numpy==1.26.4", "protobuf==3.20.3", "pyyaml>=6.0",
+  "pillow>=9.0", "pycocotools>=2.0.7",
+]
 
 # `visionserve` CLI entrypoint. The transport is stdlib-only, so the bare command
 # works without extras; `--save` (annotated image) additionally needs `[images]`.
 [project.scripts]
 visionserve = "visionserve.cli:main"
+visionserve-convert = "visionserve.convert.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/mtbui2010/vision_serve"
 Repository = "https://github.com/mtbui2010/vision_serve"
 Issues = "https://github.com/mtbui2010/vision_serve/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "visionserve.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["."]

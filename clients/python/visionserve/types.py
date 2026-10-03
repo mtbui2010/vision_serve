@@ -88,22 +88,18 @@ class Mask:
             ) from e
 
         total = int(width) * int(height)
-        counts = [int(c) for c in self.rle.split()] if self.rle.strip() else []
-        if sum(counts) != total:
+        counts = np.array(self.rle.split(), dtype=np.int64) if self.rle.strip() else np.zeros(0, np.int64)
+        if counts.size and counts.min() < 0:
+            raise ValueError("RLE run counts must be non-negative")
+        if int(counts.sum()) != total:
             raise ValueError(
-                "RLE run counts sum to %d but width*height = %d" % (sum(counts), total)
+                "RLE run counts sum to %d but width*height = %d" % (int(counts.sum()), total)
             )
 
-        # Build a flat array in COLUMN-MAJOR order, then reshape with Fortran order so
+        # Runs alternate background/foreground starting with background: run k is foreground
+        # when k is odd. np.repeat expands them into the flat COLUMN-MAJOR pixel order, so
         # element index i corresponds to (x = i // height, y = i % height).
-        flat = np.zeros(total, dtype=bool)
-        idx = 0
-        value = False  # runs start with background
-        for c in counts:
-            if value and c > 0:
-                flat[idx : idx + c] = True
-            idx += c
-            value = not value
+        flat = np.repeat((np.arange(counts.size) % 2).astype(bool), counts)
 
         # flat is column-major over (height, width): reshape with order="F".
         return flat.reshape((height, width), order="F")
@@ -208,6 +204,12 @@ class Result:
         duration_ms:    server-side inference duration in milliseconds.
         device:         execution device the server ran on, e.g. ``"cpu"``,
                         ``"gpu:0"``, or ``"gpu:0+trt"`` (empty if unreported).
+        hint:           the server's setup recommendation, if any (e.g. "install the
+                        TensorRT EP for faster inference"); empty otherwise.
+
+    The depth map of a ``midas`` / ``depth-anything-v2`` result is RELATIVE inverse depth
+    (disparity) min-max normalised to ``[0, 1]`` per image — larger = closer, no units — at
+    the MODEL's resolution (``depth_width x depth_height``), not the image's.
     """
 
     task: str
@@ -222,6 +224,7 @@ class Result:
     embeddings: List[List[float]] = field(default_factory=list)
     duration_ms: float = 0.0
     device: str = ""
+    hint: str = ""
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "Result":
@@ -242,7 +245,18 @@ class Result:
             ],
             duration_ms=float(d.get("duration_ms", 0.0)),
             device=str(d.get("device", "")),
+            hint=str(d.get("hint", "") or ""),
         )
+
+    def depth_array(self):
+        """The depth map as a float32 numpy array of shape ``(depth_height, depth_width)``
+        (relative inverse depth in ``[0, 1]``, larger = closer — see the class docstring), or
+        ``None`` when this result has no depth map."""
+        import numpy as np
+
+        if not self.depth_map or self.depth_width <= 0 or self.depth_height <= 0:
+            return None
+        return np.asarray(self.depth_map, dtype=np.float32).reshape(self.depth_height, self.depth_width)
 
     def filter_by_size(
         self,
@@ -390,12 +404,20 @@ class Result:
         return dataclasses.replace(self, grasps=kept)
 
     def group_by_class(self) -> "Dict[str, 'Result']":
-        """Return a ``dict[class_label → Result]`` grouping detections and masks by class."""
+        """Return a ``dict[class_label → Result]`` grouping detections and masks by class.
+
+        Masks carry no class in the wire schema. A mask whose bbox equals a detection's bbox
+        (Grounded-SAM / grasp pipelines copy the detection box onto its mask) takes that
+        detection's class; any other mask (e.g. a box-prompted SAM mask) is grouped under ``""``.
+        """
         groups: Dict[str, Dict[str, list]] = {}
+        box_cls: Dict[tuple, str] = {}
         for det in self.detections:
             groups.setdefault(det.cls, {"detections": [], "masks": []})["detections"].append(det)
+            box_cls.setdefault(tuple(float(v) for v in det.bbox), det.cls)
         for mask in self.masks:
-            groups.setdefault(mask.cls, {"detections": [], "masks": []})["masks"].append(mask)
+            label = box_cls.get(tuple(float(v) for v in mask.bbox), "")
+            groups.setdefault(label, {"detections": [], "masks": []})["masks"].append(mask)
 
         result: Dict[str, Result] = {}
         for label, items in groups.items():

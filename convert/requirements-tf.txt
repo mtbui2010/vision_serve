@@ -1,0 +1,26 @@
+# Full requirement set of the TensorFlow converter venv (formats: tensorflow, keras, tflite).
+# Verified together on Python 3.11 (CPU): tests/test_tf.py passes and a MobileNetV3Small
+# .keras / SavedModel / .tflite converts with parity <= 1.2e-6.
+#
+# This MUST be a separate venv from the torch/transformers one (e.g. /opt/tfenv, entrypoint
+# routes tensorflow|keras|tflite to it):
+#   * tf2onnx 1.16.1 (latest) does not support Keras 3, so TF is capped at 2.15 (the last
+#     release shipping Keras 2). TF 2.15 needs numpy < 2 and pins protobuf < 4.24; tf2onnx
+#     pins protobuf ~= 3.20. The torch side uses numpy 2.x / onnx 1.21 / onnxruntime 1.26,
+#     whose onnx needs protobuf >= 4, so the two sets cannot share one environment.
+#   * TF 2.15 wheels exist for Python 3.9 - 3.11 only.
+# The shared core (common.py, cli.py) runs here too: it needs numpy, onnx, onnxruntime, pyyaml.
+# onnxruntime 1.18.1 is only used for the parity check; the served graph runs on the Go
+# binary's ORT (1.26), which reads opset 17 fine.
+tensorflow-cpu==2.15.1
+keras==2.15.0
+tf2onnx==1.16.1
+onnx==1.16.2
+onnxruntime==1.18.1
+numpy==1.26.4
+protobuf==3.20.3
+pyyaml==6.0.3
+# tests only
+pytest==9.1.1
+pillow==10.4.0
+pycocotools==2.0.8

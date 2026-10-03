@@ -49,31 +49,39 @@ def get_depth_at_detection(
     *,
     mode: str = "median",
     depth_scale: Optional[float] = None,
+    image_size: Optional[Tuple[int, int]] = None,
 ) -> List[Optional[float]]:
-    """Return the depth value (in metres) at each detection bbox / mask in *det_result*.
+    """Return the depth inside each detection / mask bbox of *det_result*.
 
-    Extracts the region of the depth map (from *depth_result*) that overlaps
-    each detection's bounding box or mask, then aggregates with *mode*.
+    Two kinds of depth, with different units:
+
+    * a **2-D numpy array** from an RGB-D sensor (``uint16`` millimetres / ``float32``
+      metres): values are returned **in metres** (``depth_scale`` = metres per unit;
+      ``None`` auto-picks ``0.001`` for integer arrays, ``1.0`` otherwise). Pixels ``<= 0``
+      are "no reading" and ignored. The array is assumed to be at the image's resolution;
+      pass ``image_size=(W, H)`` if it is not, and the boxes are scaled onto it.
+    * a depth :class:`~visionserve.Result` (``midas`` / ``depth-anything-v2``): the server's
+      map is RELATIVE inverse depth min-max normalised to ``[0, 1]`` per image (larger =
+      CLOSER, no units) at the MODEL's resolution. ``image_size=(W, H)`` of the ORIGINAL
+      image is then required to map the boxes onto it, the values returned are in that
+      relative scale — NOT metres — and ``depth_scale`` is refused.
 
     Args:
-        depth_result: a depth :class:`~visionserve.Result` (e.g. ``midas`` /
-                      ``depth-anything-v2``) **or** a 2-D numpy depth array
-                      ``(H, W)`` (``uint16`` / ``float32``) at image resolution.
-        det_result:   :class:`~visionserve.Result` from a detection or
-                      segmentation model.
-        mode:         Aggregation over depth pixels in the region —
-                      ``"median"`` (default) | ``"mean"`` | ``"min"`` | ``"max"``.
-        depth_scale:  metres-per-unit multiplier; ``None`` (default) auto-picks
-                      ``0.001`` for integer arrays (mm → m) and ``1.0`` otherwise.
+        depth_result: a depth array or a depth :class:`~visionserve.Result` (see above).
+        det_result:   :class:`~visionserve.Result` from a detection or segmentation model
+                      (boxes in ORIGINAL image pixels).
+        mode:         ``"median"`` (default) | ``"mean"`` | ``"min"`` | ``"max"``.
+        depth_scale:  metres-per-unit for a sensor array.
+        image_size:   ``(width, height)`` of the original image the boxes refer to.
 
     Returns:
-        A list with one entry per detection in *det_result* (same order).
-        Each entry is a ``float`` depth value **in metres**, or ``None`` if the
-        region had no valid depth pixels.
+        One entry per detection (or per mask when there are no detections), ``None`` where
+        the box has no valid depth pixel.
 
     Raises:
         ImportError: if numpy is not installed.
-        ValueError:  if *depth_result* contains no depth map.
+        ValueError:  if *depth_result* has no depth map, or a relative depth Result comes
+                     without ``image_size`` / with a ``depth_scale``.
     """
     try:
         import numpy as np
@@ -82,9 +90,6 @@ def get_depth_at_detection(
             "get_depth_at_detection() requires numpy. "
             "Install with: pip install 'visionserve[images]'"
         ) from e
-
-    depth_arr = _as_depth_meters(depth_result, depth_scale)
-    H, W = depth_arr.shape
 
     agg = {
         "median": np.median,
@@ -95,26 +100,55 @@ def get_depth_at_detection(
     if agg is None:
         raise ValueError(f"Unknown mode {mode!r}. Use 'median', 'mean', 'min', or 'max'.")
 
-    results: List[Optional[float]] = []
+    if _is_depth_result(depth_result):
+        if depth_scale is not None:
+            raise ValueError(
+                "depth_scale cannot turn a server depth Result into metres: it is relative inverse "
+                "depth (normalised per image, larger = closer). Use a metric depth array from an "
+                "RGB-D sensor for metric values."
+            )
+        if image_size is None:
+            raise ValueError(
+                "a depth Result is at the model's resolution (%dx%d), not the image's: pass "
+                "image_size=(width, height) of the original image so the boxes can be mapped onto it"
+                % (depth_result.depth_width, depth_result.depth_height)
+            )
+        depth_arr = _depth_result_array(depth_result)
+        valid_fn = np.isfinite  # 0 is the farthest point of the map, not "no reading"
+    else:
+        depth_arr = _as_depth_meters(depth_result, depth_scale)
+        valid_fn = lambda r: np.isfinite(r) & (r > 0)  # noqa: E731 — 0 = no sensor reading
 
+    results: List[Optional[float]] = []
     items = det_result.detections if det_result.detections else det_result.masks
     for item in items:
-        x, y, w, h = item.bbox
-        x1 = max(0, int(x))
-        y1 = max(0, int(y))
-        x2 = min(W, int(x + w))
-        y2 = min(H, int(y + h))
-        if x2 <= x1 or y2 <= y1:
+        region = _box_region(depth_arr, item.bbox, image_size)
+        if region is None:
             results.append(None)
             continue
-        region = depth_arr[y1:y2, x1:x2]
-        valid = region[region > 0]
-        if valid.size == 0:
-            results.append(None)
-        else:
-            results.append(float(agg(valid)))
-
+        valid = region[valid_fn(region)]
+        results.append(float(agg(valid)) if valid.size else None)
     return results
+
+
+def _box_region(arr, bbox, image_size):
+    """The part of ``arr`` (H, W) under ``bbox`` = [x, y, w, h] in ORIGINAL image pixels, the box
+    scaled by ``arr``'s size / ``image_size`` when given. None when the box misses the array."""
+    H, W = arr.shape
+    sx = sy = 1.0
+    if image_size is not None:
+        iw, ih = float(image_size[0]), float(image_size[1])
+        if iw <= 0 or ih <= 0:
+            raise ValueError("image_size must be (width, height) > 0, got %r" % (image_size,))
+        sx, sy = W / iw, H / ih
+    x, y, w, h = (float(v) for v in bbox)
+    x1 = max(0, int(math.floor(x * sx)))
+    y1 = max(0, int(math.floor(y * sy)))
+    x2 = min(W, int(math.ceil((x + w) * sx)))
+    y2 = min(H, int(math.ceil((y + h) * sy)))
+    if x2 <= x1 or y2 <= y1:
+        return None
+    return arr[y1:y2, x1:x2]
 
 
 # ---------------------------------------------------------------------------
@@ -142,20 +176,41 @@ def _as_intrinsics(intrinsics: "Union[CameraIntrinsics, Sequence[float]]") -> Ca
     return CameraIntrinsics(fx=vals[0], fy=vals[1], cx=vals[2], cy=vals[3])
 
 
+def _is_depth_result(depth: Any) -> bool:
+    try:
+        import numpy as np
+        if isinstance(depth, np.ndarray):
+            return False
+    except ImportError:  # pragma: no cover
+        pass
+    return hasattr(depth, "depth_map")
+
+
+def _depth_result_array(depth: Any):
+    import numpy as np
+
+    if not depth.depth_map:
+        raise ValueError("depth_result contains no depth_map")
+    return np.asarray(depth.depth_map, dtype=np.float32).reshape(depth.depth_height, depth.depth_width)
+
+
+_RELATIVE_DEPTH_MSG = (
+    "a depth Result from the server (midas / depth-anything-v2) is RELATIVE inverse depth, "
+    "min-max normalised to [0, 1] per image (larger = closer) at the model's resolution — it "
+    "has no metric scale, so it cannot give distances in metres. Pass a METRIC depth array "
+    "from an RGB-D sensor instead (e.g. uint16 millimetres, aligned to the image), or use "
+    "get_depth_at_detection(..., image_size=(W, H)) for a relative near/far ordering."
+)
+
+
 def _as_depth_meters(depth: "Union[Result, Any]", depth_scale: Optional[float] = None):
-    """Return a float ``(H, W)`` depth array **in metres**.
+    """Return a float ``(H, W)`` depth array **in metres** from a METRIC sensor array.
 
-    *depth* may be either:
-      * a depth :class:`~visionserve.Result` (uses ``depth_map`` +
-        ``depth_width/height``), or
-      * a 2-D numpy array (e.g. ``uint16`` / ``float32``) already at the pixel
-        resolution of the grasps / detections being measured.
-
-    Values are normalised to metres:
-      * ``depth_scale`` (metres = raw × depth_scale), when given, is used verbatim;
-      * otherwise INTEGER arrays (e.g. ``uint16`` millimetres from an RGB-D sensor)
-        default to ``0.001`` (mm → m), and float arrays / a ``Result`` are assumed
-        to already be in metres (scale ``1.0``).
+    *depth* must be a 2-D numpy array (e.g. ``uint16`` / ``float32``) already at the pixel
+    resolution of the grasps / detections being measured. Values are normalised to metres:
+    ``depth_scale`` (metres = raw × depth_scale), when given, is used verbatim; otherwise
+    INTEGER arrays (e.g. ``uint16`` millimetres) default to ``0.001`` and float arrays to
+    ``1.0``. A server depth :class:`~visionserve.Result` is refused (relative, unitless).
     """
     try:
         import numpy as np
@@ -167,14 +222,10 @@ def _as_depth_meters(depth: "Union[Result, Any]", depth_scale: Optional[float] =
     if isinstance(depth, np.ndarray):
         arr = depth
     elif hasattr(depth, "depth_map"):  # a depth Result
-        if not depth.depth_map:
-            raise ValueError("depth_result contains no depth_map")
-        arr = np.asarray(depth.depth_map, dtype=float).reshape(
-            depth.depth_height, depth.depth_width
-        )
+        raise ValueError(_RELATIVE_DEPTH_MSG)
     else:
         raise TypeError(
-            "depth must be a depth Result or a 2-D numpy array (H, W), got %r" % type(depth)
+            "depth must be a 2-D numpy array (H, W) of METRIC depth, got %r" % type(depth)
         )
 
     if arr.ndim != 2:
@@ -182,7 +233,7 @@ def _as_depth_meters(depth: "Union[Result, Any]", depth_scale: Optional[float] =
 
     if depth_scale is None:
         depth_scale = 0.001 if np.issubdtype(arr.dtype, np.integer) else 1.0
-    return arr.astype(float) * float(depth_scale)
+    return arr.astype(np.float32) * np.float32(depth_scale)
 
 
 def _depth_at_point(depth_arr, x: float, y: float, window: int = 2) -> Optional[float]:
@@ -214,10 +265,13 @@ def object_distances(
     then back-projects the bbox CENTRE pixel with that depth through *intrinsics*.
     One entry per object (same order); ``None`` where depth is unavailable.
 
-    *depth_result* may be a depth :class:`~visionserve.Result` or a 2-D numpy
-    array; *intrinsics* a :class:`CameraIntrinsics` or ``[fx, fy, cx, cy]``.
+    *depth_result* must be a METRIC 2-D numpy depth array (RGB-D sensor) at the image's
+    resolution — a server depth Result is relative and refused; *intrinsics* a
+    :class:`CameraIntrinsics` or ``[fx, fy, cx, cy]``.
     """
     K = _as_intrinsics(intrinsics)
+    if _is_depth_result(depth_result):
+        raise ValueError(_RELATIVE_DEPTH_MSG)
     depths = get_depth_at_detection(depth_result, det_result, mode=mode, depth_scale=depth_scale)
     items = det_result.detections if det_result.detections else det_result.masks
     out: List[Optional[float]] = []
@@ -241,8 +295,9 @@ def grasp_distances(
     """True camera→grasp Euclidean distance (metres) for each grasp (depth sampled
     at the grasp centre). One entry per grasp; ``None`` where depth is unavailable.
 
-    *depth_result* may be a depth :class:`~visionserve.Result` or a 2-D numpy
-    array; *intrinsics* a :class:`CameraIntrinsics` or ``[fx, fy, cx, cy]``.
+    *depth_result* must be a METRIC 2-D numpy depth array (RGB-D sensor) at the grasps'
+    pixel resolution — a server depth Result is relative and refused; *intrinsics* a
+    :class:`CameraIntrinsics` or ``[fx, fy, cx, cy]``.
     """
     K = _as_intrinsics(intrinsics)
     depth_arr = _as_depth_meters(depth_result, depth_scale)
@@ -330,12 +385,12 @@ def select_target_object(
     (distance > near > conf). Pass ``weights={"conf": .., "near": .., ...}`` to
     combine several into a weighted composite.
 
-    For the ``"distance"`` criterion, *depth_result* may be a depth
-    :class:`~visionserve.Result` OR a 2-D numpy depth array ``(H, W)`` (``uint16`` /
-    ``float32``) at image resolution, and *intrinsics* may be a
-    :class:`CameraIntrinsics` OR ``[fx, fy, cx, cy]``. Depth is normalised to metres
-    (``depth_scale``: ``None`` auto-picks ``0.001`` for integer/mm arrays, ``1.0``
-    otherwise), so ``target_distance`` is in metres.
+    For the ``"distance"`` criterion, *depth_result* must be a METRIC 2-D numpy depth
+    array ``(H, W)`` (``uint16`` mm / ``float32`` m, from an RGB-D sensor) at image
+    resolution — a server depth Result is relative inverse depth and is refused — and
+    *intrinsics* may be a :class:`CameraIntrinsics` OR ``[fx, fy, cx, cy]``. Depth is
+    normalised to metres (``depth_scale``: ``None`` auto-picks ``0.001`` for integer/mm
+    arrays, ``1.0`` otherwise), so ``target_distance`` is in metres.
 
     Returns the chosen object (``Detection`` or ``Mask``), or ``None`` if no
     candidate passes the filters. With ``return_index=True`` returns
@@ -433,10 +488,10 @@ def select_target_grasp(
     By default the single most-specific available criterion is used
     (distance > near > quality). Pass ``weights={...}`` for a weighted composite.
 
-    For the ``"distance"`` criterion, *depth_result* may be a depth
-    :class:`~visionserve.Result` OR a 2-D numpy depth array ``(H, W)`` (``uint16`` /
-    ``float32``) at the grasps' pixel resolution, and *intrinsics* may be a
-    :class:`CameraIntrinsics` OR ``[fx, fy, cx, cy]``. Depth is normalised to metres
+    For the ``"distance"`` criterion, *depth_result* must be a METRIC 2-D numpy depth
+    array ``(H, W)`` (``uint16`` mm / ``float32`` m, from an RGB-D sensor) at the grasps'
+    pixel resolution — a server depth Result is relative and refused — and *intrinsics*
+    may be a :class:`CameraIntrinsics` OR ``[fx, fy, cx, cy]``. Depth is normalised to metres
     (``depth_scale``: ``None`` auto-picks ``0.001`` for integer/mm arrays, ``1.0``
     otherwise), so ``target_distance`` is in metres.
 

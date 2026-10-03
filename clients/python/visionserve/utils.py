@@ -1,4 +1,33 @@
-import cv2, numpy as np
+"""Optional depth / drawing helpers (numpy; the drawing ones need OpenCV).
+
+Not imported by the package itself: ``import visionserve`` stays dependency-free. OpenCV is
+imported lazily, only by the functions that draw with it (``pip install opencv-python``).
+"""
+import numpy as np
+
+
+def _cv2():
+    try:
+        import cv2
+    except ImportError as e:
+        raise ImportError("this visionserve.utils function needs OpenCV: pip install opencv-python") from e
+    return cv2
+
+
+def _as_numpy(x):
+    """PIL image / list / torch tensor / ndarray -> ndarray (no copy for an ndarray)."""
+    if isinstance(x, np.ndarray):
+        return x
+    if hasattr(x, "detach") and hasattr(x, "cpu"):  # torch.Tensor
+        return x.detach().cpu().numpy()
+    return np.asarray(x)
+
+
+def n2colormap(n):
+    """``n`` distinct RGB uint8 colours, evenly spaced in hue."""
+    import colorsys
+
+    return [tuple(int(round(255 * c)) for c in colorsys.hsv_to_rgb(i / max(1, n), 0.9, 1.0)) for i in range(n)]
 
 
 def get_valid_depth_locs(depth, mask=None, box=None, bound_pixels=False):
@@ -11,6 +40,7 @@ def get_valid_depth_locs(depth, mask=None, box=None, bound_pixels=False):
     if bound_pixels and mask is None:
         raise ValueError("bound_pixels=True requires a mask")
     if mask is not None:
+        cv2 = _cv2()
         k_big   = np.ones((21, 21), "uint8")
         k_small = np.ones((5, 5), "uint8")
         region = (
@@ -29,7 +59,7 @@ def get_valid_depth_locs(depth, mask=None, box=None, bound_pixels=False):
     values = valid_depth[valid_depth > 0]
     if len(values) == 0:
         return [(), ()]
-    q1, q3 = np.percentile(values, 25), np.percentile(values, 50)
+    q1, q3 = np.percentile(values, 25), np.percentile(values, 75)
     iqr = q3 - q1
     return np.where(
         (valid_depth >= q1 - 1.5 * iqr) & (valid_depth <= q3 + 1.5 * iqr)
@@ -59,6 +89,7 @@ def xyz2Ixy(x, y, z, cam_params, eps=1e-10):
         return int(Ix), int(Iy)
 
 def show_mask_on_rgb(rgb, mask):
+    cv2 = _cv2()
     rgb, mask = _as_numpy(rgb), _as_numpy(mask)
     locs = np.where(mask > 0)
     heatmap = 255 - cv2.applyColorMap(
@@ -84,6 +115,7 @@ def show_masks_on_rgb(rgb, masks, colors=None):
 
 
 def show_box_on_rgb(rgb, box, color=(0, 255, 0), thick=1, label=None):
+    cv2 = _cv2()
     x0, y0, x1, y1 = (int(v) for v in box)
     out = cv2.rectangle(rgb.copy(), (x0, y0), (x1, y1), color, thick)
     # out = cv2.drawMarker(out, ((x0 + x1) // 2, (y0 + y1) // 2),
@@ -101,11 +133,13 @@ def show_boxes_on_rgb(rgb, boxes, color=(0, 255, 0), thick=1):
 
 
 def show_line_on_rgb(rgb, line, color=(0, 255, 0), thick=1):
+    cv2 = _cv2()
     x0, y0, x1, y1 = [int(el) for el in line]
     return cv2.line(rgb.copy(), (x0, y0), (x1, y1), color, thick)
 
 
 def show_text_on_rgb(rgb, text, org, size=0.4, color=(0, 255, 0), thick=1):
+    cv2 = _cv2()
     return cv2.putText(rgb.copy(), text, (int(org[0]), int(org[1])),
                        cv2.FONT_HERSHEY_COMPLEX, size, color, thick)
 

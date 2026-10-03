@@ -7,9 +7,14 @@ for ndarray / PIL image inputs and for :meth:`Mask.to_ndarray`.
 
 from __future__ import annotations
 
+import base64
+import http.client
 import io
 import json
+import numbers
 import os
+import re
+import socket
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
@@ -91,6 +96,9 @@ class Client:
         gripper_min: Optional[float] = None,
         gripper_max: Optional[float] = None,
         max_grasps_per_object: Optional[int] = 3,
+        claim_threshold: Optional[float] = None,
+        crop_temp: Optional[float] = None,
+        template_name: Optional[str] = None,
     ) -> Result:
         """POST /api/predict (multipart) -> :class:`Result`.
 
@@ -135,26 +143,25 @@ class Client:
                     in ORIGINAL-image pixels; ``None`` = use the manifest default.
             max_grasps_per_object: client-side post-filter — keep at most this many
                     highest-quality grasps per detected object (``None`` = keep all).
+            claim_threshold: ``rfdetr-textalign`` (``method="dual"``) — probability in (0, 1) the
+                    closed head must reach on a requested word before it names a detection;
+                    ``>= 1`` = never claims. ``None`` = model default.
+            crop_temp: softmax temperature of the crop namer (textalign / hybrid); lower is more
+                    decisive. ``None`` = model default.
+            template_name: ``instance_detection`` models — a template set registered via
+                    ``POST /api/templates``.
+
+        Boxes, points and numeric options may be Python numbers or numpy arrays / scalars.
 
         Returns:
             :class:`Result`.
         """
-        # Default prompt for open-vocab models so the server does not reject promptless requests.
-        effective_prompt = prompt
-        if (effective_prompt is None or not str(effective_prompt).strip()) and _is_open_vocab_model(model):
-            effective_prompt = "object"
-        # Normalize phrase separators to '.' (GroundingDINO's separator) and ensure a trailing
-        # '.'. Guard on a non-empty prompt: plain models (e.g. rf-detr) pass prompt=None.
-        if effective_prompt is not None and str(effective_prompt).strip():
-            effective_prompt = str(effective_prompt).replace(",", ".").replace("|", ".")
-            if "." not in effective_prompt:
-                effective_prompt = effective_prompt + "."
-
+        effective_prompt = normalize_prompt(model, prompt)
         image_bytes, filename = _encode_image(image)
 
         fields: Dict[str, str] = {"model": model}
-        if effective_prompt is not None and str(effective_prompt).strip():
-            fields["prompt"] = str(effective_prompt)
+        if effective_prompt is not None:
+            fields["prompt"] = effective_prompt
         box_str = _serialize_boxes(box)
         if box_str:
             fields["box"] = box_str
@@ -169,14 +176,20 @@ class Client:
             ("text_threshold", text_threshold),
             ("bg_max_area", bg_max_area),
             ("fg_min_area", fg_min_area),
-            ("grid_size", grid_size),
-            ("method", method),
-            ("dilate", dilate),
             ("min_size", min_size),
             ("max_size", max_size),
             ("gripper_min", gripper_min),
             ("gripper_max", gripper_max),
+            ("claim_threshold", claim_threshold),
+            ("crop_temp", crop_temp),
         ):
+            if val is not None:
+                fields[key] = _fmt_num(_plain(val))
+        # The server parses these with Atoi: "2.0" would silently become 0 (= default / off).
+        for key, val in (("grid_size", grid_size), ("dilate", dilate)):
+            if val is not None:
+                fields[key] = str(_as_int(key, val))
+        for key, val in (("method", method), ("template_name", template_name)):
             if val is not None:
                 fields[key] = str(val)
 
@@ -194,6 +207,49 @@ class Client:
         if max_grasps_per_object is not None:
             result = result.filter_grasps(max_grasps_per_object)
         return result
+
+    def preprocess(
+        self,
+        model: str,
+        image: Optional[ImageInput] = None,
+        *,
+        prompt: Optional[str] = None,
+        box: BoxInput = None,
+        point: PointInput = None,
+    ) -> "PreprocessResult":
+        """POST /api/preprocess -> exactly what ``model`` would feed its first ONNX session.
+
+        Runs NO inference. Use it to check that the server prepares inputs the way your model
+        was trained: compare ``res.inputs[name]`` with the tensor your own pipeline builds for
+        the same image (resize / normalisation / letterbox) or text (token ids, padding). A
+        mismatch there serves a working model silently worse.
+
+        Needs numpy. ``image`` is optional for text-only models (``siglip-text``, ``clip-text``).
+        """
+        fields: Dict[str, str] = {"model": model}
+        effective_prompt = normalize_prompt(model, prompt)  # exactly what predict() would send
+        if effective_prompt is not None:
+            fields["prompt"] = effective_prompt
+        box_str = _serialize_boxes(box)
+        if box_str:
+            fields["box"] = box_str
+        point_str = _serialize_points(point)
+        if point_str:
+            fields["point"] = point_str
+        image_bytes, filename = _encode_image(image) if image is not None else (None, "")
+        body, content_type = _build_multipart(fields, image_bytes, filename)
+        return PreprocessResult.from_json(self._post_raw("/api/preprocess", body, content_type))
+
+    def tokenize(self, model: str, text: str) -> "Any":
+        """Token ids the server feeds ``model`` for ``text`` (padded exactly as served).
+
+        Shorthand for ``preprocess(model, prompt=text)`` returning the ``input_ids`` array, e.g. to
+        compare with ``transformers.AutoTokenizer(...)(text, padding="max_length")``.
+        """
+        res = self.preprocess(model, prompt=text)
+        if "input_ids" not in res.inputs:
+            raise VisionServeError(f"{model} takes no token ids (inputs: {sorted(res.inputs)})")
+        return res.inputs["input_ids"]
 
     # ------------------------------------------------------------------ #
     # Transport
@@ -224,7 +280,10 @@ class Client:
             with urllib_request.urlopen(req, timeout=self.timeout) as resp:
                 raw = resp.read()
         except urllib_error.HTTPError as e:
-            raw = e.read()
+            try:
+                raw = e.read()
+            except (OSError, http.client.HTTPException):
+                raw = b""
             message = _extract_error(raw) or e.reason or "HTTP error"
             raise VisionServeError(
                 "%s %s -> %s: %s" % (method, path, e.code, message), status=e.code
@@ -232,6 +291,17 @@ class Client:
         except urllib_error.URLError as e:
             raise VisionServeError(
                 "failed to reach VisionServe at %s: %s" % (url, e.reason)
+            )
+        except (socket.timeout, TimeoutError) as e:
+            raise VisionServeError(
+                "%s %s: no answer from VisionServe at %s within %ss (%s)"
+                % (method, path, self.host, self.timeout, e or "timed out")
+            )
+        except (http.client.HTTPException, ConnectionError, OSError) as e:
+            # RemoteDisconnected, IncompleteRead, BadStatusLine, ConnectionResetError, ...
+            raise VisionServeError(
+                "%s %s: connection to VisionServe at %s failed: %s: %s"
+                % (method, path, self.host, type(e).__name__, e)
             )
         if not raw:
             return None
@@ -252,7 +322,7 @@ def _encode_image(image: ImageInput) -> "tuple[bytes, str]":
     # Path-like / str path
     if isinstance(image, (str, os.PathLike)):
         p = Path(image)
-        return p.read_bytes(), p.name
+        return p.read_bytes(), _safe_filename(p.name)
 
     # Raw already-encoded bytes
     if isinstance(image, (bytes, bytearray)):
@@ -334,37 +404,47 @@ def _ndarray_to_png(arr) -> bytes:
             % (a.shape,)
         )
 
-    img = Image.fromarray(a)
+    img = Image.fromarray(np.ascontiguousarray(a))
     buf = io.BytesIO()
-    # Encode RGB/grayscale frames as JPEG (q92): a numpy frame is almost always photographic, and
-    # JPEG decodes ~4-5x faster server-side than PNG (zlib inflate). Keep PNG only for RGBA, where
-    # alpha must survive losslessly.
-    if a.ndim == 3 and a.shape[2] == 4:
-        img.save(buf, format="PNG")
-    else:
-        img.save(buf, format="JPEG", quality=92)
+    # PNG (lossless): the server must see exactly these pixels, or preprocess() comparisons and
+    # predict() on a frame differ from the array the caller holds. compress_level=1 keeps the
+    # encode cheap; pass already-encoded JPEG bytes if bandwidth matters more than exactness.
+    img.save(buf, format="PNG", compress_level=1)
     return buf.getvalue()
 
 
 # ---------------------------------------------------------------------- #
 # Prompt / box / point serialization (server string formats)
 # ---------------------------------------------------------------------- #
+def _plain(v: Any) -> Any:
+    """numpy arrays / scalars -> Python lists / numbers (recursively); anything else unchanged."""
+    if isinstance(v, (str, bytes)):
+        return v
+    if hasattr(v, "tolist") and callable(v.tolist):  # numpy ndarray or numpy scalar
+        return v.tolist()
+    if isinstance(v, (list, tuple)):
+        return [_plain(x) for x in v]
+    return v
+
+
 def _is_scalar_seq(seq: Any) -> bool:
     """True if seq looks like a flat sequence of numbers, e.g. [x, y, w, h]."""
     return (
         isinstance(seq, (list, tuple))
         and len(seq) > 0
-        and all(isinstance(v, (int, float)) for v in seq)
+        and all(isinstance(v, numbers.Real) for v in seq)
     )
 
 
 def _normalize_list(values: Any) -> List[Sequence[float]]:
-    """Normalize a single tuple or a list of tuples into a list of tuples."""
+    """Normalize a single tuple or a list of tuples into a list of tuples. numpy input (an
+    ``(4,)`` / ``(N, 4)`` array, numpy scalars) is converted to Python numbers first."""
     if values is None:
         return []
+    values = _plain(values)
     if _is_scalar_seq(values):
         return [values]  # a single box/point
-    return list(values)  # already a list of boxes/points
+    return [list(v) if isinstance(v, (list, tuple)) else v for v in values]  # list of boxes/points
 
 
 def _serialize_boxes(box: BoxInput) -> str:
@@ -389,15 +469,31 @@ def _serialize_points(point: PointInput) -> str:
     return ";".join(parts)
 
 
-def _fmt_num(v: float) -> str:
-    """Format a number without a trailing ``.0`` for integers (server parses floats)."""
+def _fmt_num(v: Any) -> str:
+    """Format a number without a trailing ``.0`` for integers (server parses floats). numpy
+    scalars are converted first (``repr(np.float64(1.5))`` is ``"np.float64(1.5)"`` on numpy 2)."""
+    v = _plain(v)
     if isinstance(v, bool):
         return str(int(v))
-    if isinstance(v, int):
-        return str(v)
-    if isinstance(v, float) and v.is_integer():
+    if isinstance(v, numbers.Integral):
         return str(int(v))
-    return repr(v)
+    if not isinstance(v, numbers.Real):
+        raise TypeError("expected a number, got %r" % (v,))
+    f = float(v)
+    if f.is_integer():
+        return str(int(f))
+    return repr(f)
+
+
+def _as_int(name: str, v: Any) -> int:
+    """An integer form field (the server uses Atoi). Integral floats are accepted (2.0 -> 2)."""
+    v = _plain(v)
+    if isinstance(v, bool) or not isinstance(v, numbers.Real):
+        raise TypeError("%s must be an integer, got %r" % (name, v))
+    f = float(v)
+    if not f.is_integer():
+        raise ValueError("%s must be an integer, got %r" % (name, v))
+    return int(f)
 
 
 # ---------------------------------------------------------------------- #
@@ -415,7 +511,13 @@ def _encode_depth(depth: "Any") -> "tuple[bytes, int, int, str]":
     arr = np.asarray(depth)
     if arr.ndim != 2:
         raise ValueError("depth must be a 2-D (H, W) array, got shape %r" % (arr.shape,))
-    if np.issubdtype(arr.dtype, np.integer):
+    if np.issubdtype(arr.dtype, np.integer) or arr.dtype == np.bool_:
+        if arr.size and (int(arr.min()) < 0 or int(arr.max()) > 65535):
+            raise ValueError(
+                "integer depth is sent as uint16 but ranges over [%d, %d]; values outside "
+                "[0, 65535] would wrap around — rescale it, or pass a float32 array"
+                % (int(arr.min()), int(arr.max()))
+            )
         arr = np.ascontiguousarray(arr.astype("<u2"))
         dtype = "uint16"
     else:
@@ -426,7 +528,7 @@ def _encode_depth(depth: "Any") -> "tuple[bytes, int, int, str]":
 
 
 def _build_multipart(
-    fields: Dict[str, str], image_bytes: bytes, filename: str, extra_files=None
+    fields: Dict[str, str], image_bytes: Optional[bytes], filename: str, extra_files=None
 ) -> "tuple[bytes, str]":
     """Build a ``multipart/form-data`` body with text fields + the image file (+ optional
     extra binary files, each a ``(field_name, bytes, filename)`` tuple)."""
@@ -445,14 +547,16 @@ def _build_multipart(
     def _write_file(field: str, data: bytes, fname: str) -> None:
         out.write(b"--" + boundary.encode() + crlf)
         out.write(
-            ('Content-Disposition: form-data; name="%s"; filename="%s"' % (field, fname)).encode("utf-8")
+            ('Content-Disposition: form-data; name="%s"; filename="%s"'
+             % (field, _safe_filename(fname))).encode("utf-8")
             + crlf
         )
         out.write(b"Content-Type: application/octet-stream" + crlf)
         out.write(crlf)
         out.write(data + crlf)
 
-    _write_file("image", image_bytes, filename)
+    if image_bytes is not None:  # optional for text-only requests (/api/preprocess on a text tower)
+        _write_file("image", image_bytes, filename)
     for field, data, fname in (extra_files or []):
         _write_file(field, data, fname)
 
@@ -462,12 +566,55 @@ def _build_multipart(
     return out.getvalue(), content_type
 
 
+def _safe_filename(name: str) -> str:
+    """A multipart ``filename="..."`` value: quotes, backslashes and line breaks would end the
+    header (or inject another); the server ignores the name anyway."""
+    s = re.sub(r'["\\\r\n]', "_", str(name or "image"))
+    return s or "image"
+
+
+# Models that REQUIRE a text prompt (the server rejects an empty one): GroundingDINO and the
+# pipelines built on it. "gdino-siglip" (and -sam) runs GroundingDINO first; rfdetr-gdino-* does
+# NOT need a prompt (no prompt = everything RF-DETR knows), so it is excluded.
 _OPEN_VOCAB_MODELS = ("grounding-dino", "grounded-sam", "grasp-gd")
+_OPEN_VOCAB_RE = re.compile(r"(?<!rfdetr-)gdino-siglip")
+# CLIP / SigLIP text and image towers: each "."-separated phrase is one label, and a comma is
+# part of the label ("a photo of a cat, sitting"), so commas must not become phrase separators.
+_EMBED_RE = re.compile(r"clip|siglip")
+_DETECTOR_RE = re.compile(r"gdino|grounding|grounded|textalign|grasp")
 
 
 def _is_open_vocab_model(model: str) -> bool:
     """True when the model requires a text prompt and should default to 'object'."""
-    return any(k in model for k in _OPEN_VOCAB_MODELS)
+    m = str(model).lower()
+    return any(k in m for k in _OPEN_VOCAB_MODELS) or bool(_OPEN_VOCAB_RE.search(m))
+
+
+def _is_embedding_model(model: str) -> bool:
+    m = str(model).lower()
+    return bool(_EMBED_RE.search(m)) and not _DETECTOR_RE.search(m)
+
+
+def normalize_prompt(model: str, prompt: Optional[str]) -> Optional[str]:
+    """The prompt string :meth:`Client.predict`, :meth:`Client.preprocess` and
+    :meth:`Client.tokenize` send for ``model`` (one rule, so a preprocess() check sees what
+    predict() feeds). ``None`` when no prompt field is sent.
+
+    * empty / ``None``: ``"object."`` for models that require a prompt (GroundingDINO family),
+      else ``None``;
+    * CLIP / SigLIP towers: sent verbatim (the server splits phrases on ``"."`` only);
+    * everything else: ``","`` and ``"|"`` become the ``"."`` phrase separator and a single
+      phrase gets a trailing ``"."`` (``"cat, remote"`` -> ``"cat. remote"``, ``"cat"`` -> ``"cat."``).
+    """
+    if prompt is None or not str(prompt).strip():
+        return "object." if _is_open_vocab_model(model) else None
+    text = str(prompt)
+    if _is_embedding_model(model):
+        return text
+    text = text.replace(",", ".").replace("|", ".")
+    if "." not in text:
+        text += "."
+    return text
 
 
 def _extract_error(raw: bytes) -> Optional[str]:
@@ -479,3 +626,36 @@ def _extract_error(raw: bytes) -> Optional[str]:
     if isinstance(d, dict) and "error" in d:
         return str(d["error"])
     return None
+
+
+class PreprocessResult:
+    """Response of :meth:`Client.preprocess`.
+
+    Attributes:
+        inputs: ``{onnx_input_name: numpy.ndarray}`` — bit-exact copies of the served tensors.
+        roles:  ``{onnx_input_name: session_role}`` (``"model"`` for single-session models).
+        meta:   ``{"orig_width", "orig_height", "scale_x", "scale_y", "pad_x", "pad_y"}`` mapping
+                model-input pixels back to the original image (``input = orig * scale + pad``),
+                or ``None`` when the model's preprocessing has no such mapping.
+    """
+
+    def __init__(self, model: str, inputs: Dict[str, Any], roles: Dict[str, str], meta: Optional[Dict[str, Any]]):
+        self.model, self.inputs, self.roles, self.meta = model, inputs, roles, meta
+
+    @classmethod
+    def from_json(cls, data: Dict[str, Any]) -> "PreprocessResult":
+        try:
+            import numpy as np
+        except ImportError as e:  # pragma: no cover - numpy is in the [images] extra
+            raise VisionServeError("preprocess() needs numpy: pip install visionserve[images]") from e
+        inputs, roles = {}, {}
+        for it in data.get("inputs") or []:
+            dtype = {"float32": np.float32, "int64": np.int64}[it["dtype"]]
+            arr = np.frombuffer(base64.b64decode(it["data"]), dtype=dtype).reshape(it["shape"])
+            inputs[it["name"]] = arr
+            roles[it["name"]] = it.get("role", "model")
+        return cls(data.get("model", ""), inputs, roles, data.get("meta"))
+
+    def __repr__(self) -> str:
+        shapes = {k: tuple(v.shape) for k, v in self.inputs.items()}
+        return f"PreprocessResult(model={self.model!r}, inputs={shapes}, meta={self.meta})"

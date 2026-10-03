@@ -17,7 +17,10 @@ Quickstart::
         print(d.cls, d.conf, d.bbox)
 """
 
-from .client import Client, VisionServeError
+# Single source of the package version: pyproject.toml reads it (tool.setuptools.dynamic).
+__version__ = "0.1.5"
+
+from .client import Client, PreprocessResult, VisionServeError
 from .types import Classification, Detection, Grasp, Mask, Result, ModelInfo
 from .postprocess import (
     CameraIntrinsics,
@@ -33,6 +36,7 @@ from .postprocess import (
 __all__ = [
     "Client",
     "VisionServeError",
+    "PreprocessResult",
     "Classification",
     "Detection",
     "Grasp",
@@ -59,4 +63,3 @@ def __getattr__(name: str):  # noqa: N807 — PEP 562 module __getattr__
         return _draw
     raise AttributeError("module 'visionserve' has no attribute %r" % name)
 
-__version__ = "0.1.0"

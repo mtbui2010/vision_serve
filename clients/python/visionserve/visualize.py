@@ -93,8 +93,9 @@ def draw(
         image:  Input image — one of:
 
                 * ``PIL.Image.Image`` (used directly, not modified in-place),
-                * ``str`` file path,
-                * ``bytes`` raw encoded image data.
+                * ``str`` / ``pathlib.Path`` file path,
+                * ``bytes`` raw encoded image data,
+                * ``numpy.ndarray`` ``(H, W)``, ``(H, W, 1)``, ``(H, W, 3)`` or ``(H, W, 4)``.
         alpha:  Opacity for mask colour overlays (0.0 = transparent, 1.0 = opaque).
         max_grasps_per_object: For a ``grasp`` result, draw at most this many
                 highest-quality grasps PER object (grouped by the detection/mask
@@ -256,37 +257,31 @@ def _draw_masks(
     w_img, h_img = img.size
     target_bbox = _target_bbox(target_box)
 
+    # All masks go into ONE RGBA overlay composited once (a full-image composite per mask was
+    # O(masks x pixels)); where masks overlap, the later one's colour wins.
+    try:
+        import numpy as np
+    except ImportError:  # no numpy: bbox outlines only
+        np = None
+    if np is not None:
+        overlay_arr = np.zeros((h_img, w_img, 4), np.uint8)
+        a_val = int(round(max(0.0, min(1.0, alpha)) * 255))
+        any_mask = False
+        for i, mask in enumerate(result.masks):
+            try:
+                arr = mask.to_ndarray(w_img, h_img)
+            except ValueError:  # RLE for another image size: outline only
+                continue
+            overlay_arr[arr] = _colour(i) + (a_val,)
+            any_mask = True
+        if any_mask:
+            img = Image.alpha_composite(img, Image.fromarray(overlay_arr, "RGBA"))
+
+    draw_ctx = ImageDraw.Draw(img)
     for i, mask in enumerate(result.masks):
         colour = _colour(i)
         is_target = _is_target_item(mask, target_box, target_bbox)
-        # Decode the RLE — requires numpy.
-        try:
-            arr = mask.to_ndarray(w_img, h_img)
-        except ImportError:
-            # numpy not available: fall back to drawing only the bbox outline.
-            arr = None
-        except ValueError:
-            arr = None
-
-        if arr is not None:
-            # Build an RGBA overlay where foreground pixels = colour at given alpha.
-            try:
-                import numpy as np
-
-                overlay = Image.new("RGBA", (w_img, h_img), (0, 0, 0, 0))
-                overlay_arr = np.array(overlay)
-                a_val = int(alpha * 255)
-                overlay_arr[arr, 0] = colour[0]
-                overlay_arr[arr, 1] = colour[1]
-                overlay_arr[arr, 2] = colour[2]
-                overlay_arr[arr, 3] = a_val
-                overlay = Image.fromarray(overlay_arr, "RGBA")
-                img = Image.alpha_composite(img, overlay)
-            except ImportError:
-                pass  # no numpy — bbox-only fallback below
-
         # Draw bbox outline + label (red + thicker when this is the target).
-        draw_ctx = ImageDraw.Draw(img)
         x, y, bw, bh = mask.bbox
         box_colour = _TARGET_BOX_COLOUR if is_target else colour
         _draw_box(draw_ctx, x, y, bw, bh, box_colour, thickness=4 if is_target else 2)
@@ -448,6 +443,22 @@ def _draw_depth(result: "Result", Image: Any) -> Any:
         # Nothing to render — return a small black square.
         return Image.new("RGB", (1, 1), (0, 0, 0))
 
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+    if np is not None:  # vectorised: same ramp as _turbo_colour, ~100x faster than per pixel
+        d = np.asarray(depth, np.float64).reshape(dh, dw)
+        lo, hi = float(d.min()), float(d.max())
+        t = np.clip((d - lo) / (hi - lo if hi > lo else 1.0), 0.0, 1.0)
+        s = np.where(t < 0.25, t / 0.25, np.where(t < 0.5, (t - 0.25) / 0.25,
+                                                   np.where(t < 0.75, (t - 0.5) / 0.25, (t - 0.75) / 0.25)))
+        r = np.where(t < 0.5, 0, np.where(t < 0.75, s * 255, 255))
+        g = np.where(t < 0.25, s * 255, np.where(t < 0.75, 255, (1.0 - s) * 255))
+        b = np.where(t < 0.25, 255, np.where(t < 0.5, (1.0 - s) * 255, 0))
+        rgb = np.stack([r, g, b], -1).astype(np.int32).clip(0, 255).astype(np.uint8)
+        return Image.fromarray(rgb, "RGB")
+
     # Normalise to [0, 1].
     d_min = min(depth)
     d_max = max(depth)
@@ -503,9 +514,11 @@ def _turbo_colour(t: float) -> Tuple[int, int, int]:
 
 def _open_image(image: Any, Image: Any) -> Any:
     """Accept PIL.Image, str path, bytes, or numpy ndarray; always return a PIL.Image."""
+    import os
+
     if isinstance(image, Image.Image):
         return image
-    if isinstance(image, str):
+    if isinstance(image, (str, os.PathLike)):
         return Image.open(image)
     if isinstance(image, (bytes, bytearray)):
         import io as _io
@@ -520,9 +533,14 @@ def _open_image(image: Any, Image: Any) -> Any:
                 a = (a * 255.0 + 0.5).astype(np.uint8)
             elif a.dtype != np.uint8:
                 a = np.clip(a, 0, 255).astype(np.uint8)
+            if a.ndim == 3 and a.shape[2] == 1:
+                a = a[:, :, 0]
             if a.ndim == 2:
                 a = np.stack([a, a, a], axis=-1)
-            return Image.fromarray(a)
+            if a.ndim != 3 or a.shape[2] not in (3, 4):
+                raise ValueError("unsupported ndarray shape %r; expected (H,W), (H,W,1), (H,W,3) or (H,W,4)"
+                                 % (image.shape,))
+            return Image.fromarray(np.ascontiguousarray(a))
     except ImportError:
         pass
     raise TypeError(
