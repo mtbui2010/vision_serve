@@ -34,6 +34,8 @@ func TestInstallRemovesStaleStagingOnly(t *testing.T) {
 	}
 	staleStage := mk(".tmp-my-detector-123456", 2*time.Hour)
 	staleAside := mk(".tmp-other-42-old", 3*time.Hour)
+	mk("other", 3*time.Hour)                         // "other" is installed again, so its aside can go
+	onlyCopy := mk(".tmp-lonely-7-old", 3*time.Hour) // no "lonely" install: the aside is the only copy
 	fresh := mk(".tmp-busy-777", time.Minute)        // a concurrent install's staging
 	userModel := mk("legacy-old", 5*time.Hour)       // a model that is merely named *-old
 	notOurs := mk(".tmp-notdigits", 5*time.Hour)     // not a MkdirTemp name
@@ -61,13 +63,16 @@ func TestInstallRemovesStaleStagingOnly(t *testing.T) {
 			t.Errorf("stale staging %s was not removed", filepath.Base(gone))
 		}
 	}
-	for _, kept := range []string{fresh, userModel, notOurs, nested, staleFile, link, filepath.Join(target, "keep.txt")} {
+	for _, kept := range []string{onlyCopy, fresh, userModel, notOurs, nested, staleFile, link, filepath.Join(target, "keep.txt")} {
 		if _, err := os.Lstat(kept); err != nil {
 			t.Errorf("%s must be kept: %v", kept, err)
 		}
 	}
 	if !strings.Contains(out.String(), "removed .tmp-my-detector-123456") || !strings.Contains(out.String(), "removed .tmp-other-42-old") {
 		t.Errorf("cleanup not reported:\n%s", out.String())
+	}
+	if !strings.Contains(out.String(), "WARNING: .tmp-lonely-7-old holds the previous install") {
+		t.Errorf("the kept only copy is not reported:\n%s", out.String())
 	}
 	if _, err := os.Stat(filepath.Join(models, "my-detector", "manifest.yaml")); err != nil {
 		t.Errorf("the install itself did not happen: %v", err)

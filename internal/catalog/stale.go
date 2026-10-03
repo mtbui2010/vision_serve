@@ -20,7 +20,7 @@ var staleStagingAfter = 60 * time.Minute
 // os.MkdirTemp(root, ".tmp-<name>-") → ".tmp-<name>-<digits>", and the previous install moved
 // aside next to it, "<staging>-old". Nothing else — a model directory merely named "x-old", or any
 // other dot-directory, is never a candidate.
-var stagingDirRE = regexp.MustCompile(`^\.tmp-.+-[0-9]+(-old)?$`)
+var stagingDirRE = regexp.MustCompile(`^\.tmp-(.+)-[0-9]+(-old)?$`)
 
 // cleanStaleStaging removes what interrupted local installs (`pull <folder>` killed mid-copy or
 // mid-swap) leave in the registry root: staging copies and moved-aside previous installs older than
@@ -38,8 +38,18 @@ func cleanStaleStaging(root string, out io.Writer) {
 	now := time.Now()
 	for _, de := range entries {
 		name := de.Name()
-		if !de.IsDir() || !stagingDirRE.MatchString(name) {
+		m := stagingDirRE.FindStringSubmatch(name)
+		if !de.IsDir() || m == nil {
 			continue
+		}
+		// A moved-aside previous install is the ONLY copy when the swap or its roll-back was
+		// interrupted: keep it unless <root>/<model> is a complete install again.
+		if m[2] != "" {
+			if _, err := os.Stat(filepath.Join(root, m[1], "manifest.yaml")); err != nil {
+				fmt.Fprintf(out, "WARNING: %s holds the previous install of %q and %s has none; "+
+					"move it back to %s (not removed)\n", name, m[1], root, m[1])
+				continue
+			}
 		}
 		p := filepath.Join(root, name)
 		st, err := os.Lstat(p)
