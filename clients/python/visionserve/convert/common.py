@@ -26,6 +26,8 @@ from typing import Callable, Optional, Sequence
 
 import numpy as np
 
+from .constants import TEXT_ARCHS
+
 # Keep in sync with internal/registry/manifest.go::licenseAllowlist (the Go gate re-checks).
 LICENSE_ALLOWLIST = {
     "apache-2.0": "Apache-2.0",
@@ -468,7 +470,7 @@ def check_contract(b: Bundle) -> None:
         image_input()
         if len(outs[0][1]) != 2:
             raise ConvertError(f"{arch}: needs an embedding output [N,D]; graph emits {[(o[0], o[1]) for o in outs]}")
-    elif arch in ("siglip-text", "clip-text"):
+    elif arch in TEXT_ARCHS:
         if len(ins) != 1 or ins[0][2] != 7:  # 7 = INT64
             raise ConvertError(f"{arch}: needs one int64 input_ids [N,L]; graph has {ins}")
     elif arch == "grounding-dino":

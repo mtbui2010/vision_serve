@@ -20,15 +20,13 @@ verification FAIL does not raise: it returns the Report with .ok == False.
 from __future__ import annotations
 
 import os
-import re
 import tempfile
 import zipfile
 from pathlib import Path
 from typing import Callable, Optional, Sequence, Union
 
 from .common import ConvertError
-
-_HUB_ID = re.compile(r"^[A-Za-z0-9][\w.-]*/[\w.-]+$")
+from .constants import HUB_ID_RE
 
 
 def default_models_dir() -> Path:
@@ -49,7 +47,7 @@ def infer_format(source) -> str:
             return "rfdetr"
         raise ConvertError(f"cannot infer the format of directory {p}; pass format=")
     if not p.exists():
-        if _HUB_ID.match(str(source)):
+        if HUB_ID_RE.match(str(source)):
             return "hf"
         raise ConvertError(f"{source}: no such file or directory (and not a hub id org/name)")
     suf = p.suffix.lower()

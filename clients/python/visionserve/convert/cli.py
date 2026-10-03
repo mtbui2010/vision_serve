@@ -25,6 +25,7 @@ import tempfile
 from pathlib import Path
 
 from .common import MODELS_DIR, ConvertError, install, log
+from .constants import parse_wxh  # noqa: F401 — also re-exported for callers of cli.parse_wxh
 
 # format name -> module (imported lazily: each pulls in a heavy framework)
 FORMATS = {
@@ -62,14 +63,6 @@ def add_generic_arguments(p: argparse.ArgumentParser) -> None:
                    "a graph that expects raw 0-255 pixels: --mean 0,0,0 --std 0.00392157,0.00392157,0.00392157")
     p.add_argument("--letterbox", action="store_true", help="aspect-preserving resize + pad (default: squash) — "
                    "use it ONLY if the model was trained that way")
-
-
-def parse_wxh(s: str):
-    try:
-        w, h = s.lower().split("x")
-        return int(w), int(h)
-    except ValueError:
-        raise ConvertError(f"--input must look like 224x224, got {s!r}")
 
 
 def parse_floats(s: str):
