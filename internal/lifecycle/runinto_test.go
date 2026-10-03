@@ -35,9 +35,12 @@ func (e *ctxEngine) RunNamed(ctx context.Context, in map[string]engine.Tensor) (
 
 // runner.RunInto hands the buffers and the request ctx to a session that can take them, runs a
 // session that cannot as Run does (same ctx), and fails an unknown role like Run.
+// runIntoCtxKey marks the request ctx TestRunnerRunInto expects the session to receive.
+type runIntoCtxKey struct{}
+
 func TestRunnerRunInto(t *testing.T) {
 	ie, plain := &intoEngine{}, &ctxEngine{}
-	ctx := context.WithValue(context.Background(), struct{}{}, "request")
+	ctx := context.WithValue(context.Background(), runIntoCtxKey{}, "request")
 	r := runner{ctx: ctx, engines: map[string]engine.Runnable{"into": ie, "plain": plain}}
 	buf := engine.F32(make([]float32, 3), 1, 3)
 
