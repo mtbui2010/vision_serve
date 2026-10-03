@@ -154,7 +154,7 @@ func TestDecodeBBoxInOriginalCoords(t *testing.T) {
 	// A 640×480 original letterboxed into 512×512: scale 0.8, 64 px of padding top/bottom.
 	meta := models.PreprocessMeta{OrigWidth: 640, OrigHeight: 480, ScaleX: 0.8, ScaleY: 0.8, PadX: 0, PadY: 64}
 
-	res, err := m.decode(h, boxes, feats, meta, true)
+	res, err := m.decode(h, boxes, feats, meta, true, nil)
 	if err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -196,11 +196,11 @@ func TestDecodeFoldedKeepsBoxes(t *testing.T) {
 	feats := engine.F32(f, 1, 1, 4)
 	meta := models.PreprocessMeta{OrigWidth: 640, OrigHeight: 480, ScaleX: 0.8, ScaleY: 0.8, PadY: 64}
 
-	exact, err := m.decode(h, boxes, feats, meta, true)
+	exact, err := m.decode(h, boxes, feats, meta, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	folded, err := m.decode(h, boxes, feats, meta, false)
+	folded, err := m.decode(h, boxes, feats, meta, false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

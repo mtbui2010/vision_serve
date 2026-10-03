@@ -62,7 +62,10 @@ def read_head(path):
                 d_text=d_text, d_feat=d_feat, sha256=hashlib.sha256(raw).hexdigest())
 
 
-def build(head, out_path):
+def build(head, out_path, graph_name="fastpath_head", source="head.bin (VSTXALN1)",
+          producer="visionserve/export_head_onnx.py"):
+    """Write the head graph. models/rfdetr-textalign-dec1-siglip/export_head_onnx.py reuses it for
+    textalign's proj.bin: the same VSTXALN1 object and the same function, with its own labels."""
     import onnx
     from onnx import TensorProto, helper, numpy_helper
 
@@ -89,7 +92,7 @@ def build(head, out_path):
         helper.make_node("Add", ["scaled", "bias"], ["logits"]),
     ]
     graph = helper.make_graph(
-        nodes, "fastpath_head",
+        nodes, graph_name,
         inputs=[
             helper.make_tensor_value_info("query_feats", TensorProto.FLOAT,
                                           ["batch", "queries", d_feat]),
@@ -101,9 +104,9 @@ def build(head, out_path):
         initializer=inits,
     )
     model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 13)],
-                              producer_name="visionserve/export_head_onnx.py")
+                              producer_name=producer)
     model.ir_version = 8
-    for k, v in [("source", "head.bin (VSTXALN1)"), ("source_sha256", head["sha256"]),
+    for k, v in [("source", source),("source_sha256", head["sha256"]),
                  ("d_text", str(d_text)), ("d_feat", str(d_feat)),
                  ("scale", repr(float(head["scale"]))), ("bias", repr(float(head["bias"]))),
                  ("flags", str(head["flags"]))]:
@@ -112,7 +115,7 @@ def build(head, out_path):
     onnx.checker.check_model(model, full_check=True)
     onnx.save(model, out_path)
     print(f"wrote {out_path}: P [{d_text}x{d_feat}] scale={float(head['scale']):.6f} "
-          f"bias={float(head['bias']):.6f} flags={head['flags']} sha256(head.bin)={head['sha256'][:16]}")
+          f"bias={float(head['bias']):.6f} flags={head['flags']} sha256({source.split()[0]})={head['sha256'][:16]}")
 
 
 def go_folded(head, feats, text):

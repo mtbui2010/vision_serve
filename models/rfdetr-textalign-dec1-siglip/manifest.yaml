@@ -51,6 +51,17 @@ architecture: rfdetr-textalign
 files:
   rfdetr: detector.onnx
   text:   ../siglip-text/model.onnx
+  # OPTIONAL, off by default: method "exact" (the default when a request names no method) on ONNX
+  # Runtime instead of scalar Go. Generate head.onnx from proj.bin, then uncomment the line:
+  #
+  #   python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py
+  #
+  # Served on GPU (CUDA EP, whole request, 2026-10-03): ~62 ms -> ~25 ms median. On a CPU-only
+  # ORT it is SLOWER (~140 ms -> ~440 ms on a loaded 48-core host): the head itself is ~1 ms, but
+  # a third ORT session with its own default spinning thread pool slows the detector down.
+  # Enable it only where this manifest runs on a GPU. Outputs are identical on CPU (max |dconf|
+  # 4.9e-7). Re-export whenever proj.bin changes; a stale head.onnx is refused per request.
+  # head:   head.onnx
 
 input:
   width: 512

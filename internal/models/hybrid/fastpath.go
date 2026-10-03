@@ -40,11 +40,14 @@ const headFile = "head.bin"
 //
 // Scale lives INSIDE the graph and is applied there exactly once; the Go side passes the text
 // rows as the rescorer returns them and adds nothing (bug #7 was Scale applied twice).
+//
+// textalign's exact head is the same graph over the same VSTXALN1 object, so the contract and the
+// call (textalign.RunHeadONNX) live there and are shared.
 const (
 	roleHead      = "head"
-	headInFeats   = "query_feats"
-	headInText    = "text_embeds"
-	headOutLogits = "logits"
+	headInFeats   = textalign.HeadInFeats
+	headInText    = textalign.HeadInText
+	headOutLogits = textalign.HeadOutLogits
 )
 
 // fastPath is the distilled open branch: RF-DETR's own 300 queries, scored against the requested
@@ -179,49 +182,11 @@ func (fp *fastPath) score(feats engine.Tensor, text [][]float32, q int, r models
 // scoreONNX runs the head as the roleHead session. Nothing is folded or scaled here: the text rows
 // go in exactly as the text tower returned them, and Scale and Bias are initializers of the graph.
 func (fp *fastPath) scoreONNX(feats engine.Tensor, text [][]float32, q int, r models.Runner) ([]float32, error) {
-	if r == nil {
-		return nil, fmt.Errorf("hybrid: the ONNX head needs a Runner")
-	}
-	names := r.InputNames(roleHead)
-	if !hasName(names, headInFeats) || !hasName(names, headInText) {
-		return nil, fmt.Errorf("hybrid: files.%s has inputs %v, want %q and %q — export it with "+
-			"models/rfdetr-gdino-fastpath/export_head_onnx.py", roleHead, names, headInFeats, headInText)
-	}
-	dFeat, n, dText := int(feats.Dim(-1)), len(text), len(text[0])
-	flat := make([]float32, 0, n*dText)
-	for c, row := range text {
-		if len(row) != dText {
-			return nil, fmt.Errorf("hybrid: text embedding %d has dim %d, embedding 0 has %d", c, len(row), dText)
-		}
-		flat = append(flat, row...)
-	}
-	outs, err := r.Run(roleHead, map[string]engine.Tensor{
-		headInFeats: engine.F32(feats.Data[:q*dFeat], 1, int64(q), int64(dFeat)),
-		headInText:  engine.F32(flat, int64(n), int64(dText)),
-	})
+	logits, err := textalign.RunHeadONNX(r, roleHead, feats, text, q)
 	if err != nil {
-		return nil, fmt.Errorf("hybrid: head session (files.%s) rejected query features [1 %d %d] "+
-			"and text [%d %d] — the head must be exported from the head trained against this "+
-			"detector export and this text tower: %w", roleHead, q, dFeat, n, dText, err)
+		return nil, fmt.Errorf("hybrid: %w", err)
 	}
-	idx := -1
-	for i, name := range r.OutputNames(roleHead) {
-		if name == headOutLogits {
-			idx = i
-		}
-	}
-	if idx < 0 && len(outs) == 1 {
-		idx = 0
-	}
-	if idx < 0 || idx >= len(outs) {
-		return nil, fmt.Errorf("hybrid: head session has no %q output (outputs %v)",
-			headOutLogits, r.OutputNames(roleHead))
-	}
-	out := outs[idx]
-	if len(out.Shape) != 3 || int(out.Dim(1)) != q || int(out.Dim(2)) != n || len(out.Data) != q*n {
-		return nil, fmt.Errorf("hybrid: head logits have shape %v, want [1 %d %d]", out.Shape, q, n)
-	}
-	return out.Data, nil
+	return logits, nil
 }
 
 // scoreGo is the head.bin fallback, in scalar Go.
