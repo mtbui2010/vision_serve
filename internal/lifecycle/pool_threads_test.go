@@ -49,7 +49,7 @@ func TestPoolIntraOpThreads(t *testing.T) {
 
 // A bad VISIONSERVE_POOL_THREADS is logged once per process, not on every pool it sizes.
 func TestPoolThreadsEnvWarnsOnce(t *testing.T) {
-	env := "bogus-" + t.Name() // a key no other test has used
+	env := "bogus-" + t.Name()                       // a key no other test has used
 	warned.Delete("VISIONSERVE_POOL_THREADS=" + env) // an earlier -count iteration logged it already
 	t.Setenv("VISIONSERVE_POOL_THREADS", env)
 	var buf bytes.Buffer
