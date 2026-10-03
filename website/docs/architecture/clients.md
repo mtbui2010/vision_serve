@@ -310,7 +310,7 @@ ENTRYPOINT ["visionserve"]
 CMD ["serve", "--addr", ":11435"]
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile#L133-L144)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile#L134-L145)
 
 Weights are never baked into an image. Pull them into the running container
 (`docker exec -it visionserve visionserve pull rf-detr`) or bind-mount a host folder onto

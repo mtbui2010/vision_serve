@@ -84,9 +84,13 @@ session. It is a **pure-Go postprocess on a segmentation `Result`**.
 **Performance — the dominant stage is the boundary-normal pass.** In the Go port
 (`collectBoundary` in `internal/grasp/grasp.go`) the boundary-normal map dominates cost; the
 combinatorial antipodal search is **not** the bottleneck (the decimated boundary-point count is
-bounded by the `(deg, stride)` polar grid). The boundary pass is computed with an **integral
-image (summed-area table)** for the separable Sobel-like kernel, so each per-pixel ±1 kernel sum
-reduces to a few O(1) rectangle counts, plus a **uniform-window fast-skip** (a `(2r+1)²` window
+bounded by the `(deg, stride)` polar grid). The boundary pass computes the separable Sobel-like
+kernel from **running per-column counts**: one scan over the rows keeps, for every column, the
+number of set pixels in the `r` rows above, the row itself and the `r` rows below, and a prefix
+sum over those counts turns each per-pixel ±1 kernel sum into a few O(1) rectangle counts
+(O(bbox width) memory; the earlier summed-area table over the whole bbox gave the same counts at
+8 bytes per bbox pixel, ~47 MB for one large mask of a 3200×2400 image, and was removed). Plus a
+**uniform-window fast-skip** (a `(2r+1)²` window
 that is all-set or all-background has a zero normal and is skipped — this is the solid interior
 and surrounding background, leaving only the thin boundary band to run the full sums). The result
 is **BIT-EXACT** — identical grasps to the direct convolution — but ~**2–6× faster** on this
@@ -142,10 +146,16 @@ requirement to test the pre/postprocess of every model.
 
 It is then wired as a **`PipelineModel` that REUSES the existing SAM sessions** — exactly like
 Grounded-SAM chains GroundingDINO → SAM, except the **final stage is Go analytic code instead
-of another ONNX session**. `Roles()` returns SAM's roles; `Infer` runs SAM to obtain masks
-(already column-major RLE in the unified schema), decodes each, calls `grasp.FromMask`, appends
-to `Result.Grasps`, and sets `Task = TaskGrasp`. **`lifecycle.Manager` still owns the SAM
+of another ONNX session**. `Roles()` returns SAM's roles; `Infer` runs SAM, which hands back
+the masks both as RLE (for `Result.Masks`) and as bitmaps (`SegmentBitmaps`), calls
+`grasp.FromMask` on each bitmap directly (no RLE round trip), appends to `Result.Grasps`, and
+sets `Task = TaskGrasp`. Each mask contributes at most its 20 best grasps
+(`defaultMaxGraspsPerMask` in `internal/models/grasp/grasp.go`; deliberately not the manifest's
+`max_detections`, which is the detector's cap). **`lifecycle.Manager` still owns the SAM
 sessions (VRAM-safe).** No new ONNX session, no depth, no core changes.
+
+The sketch below is the original design; the shipped code is `internal/models/grasp` composing
+`internal/pipeline/grasp.go`.
 
 ```go
 // internal/models/graspsam/graspsam.go  (sketch)
@@ -195,16 +205,17 @@ incoming `Prompt` selects between two paths:
 This enables a **"select the target client-side, then grasp just it"** flow:
 `grounding-dino` → `select_target_object(...)` → `predict("grasp", img, box=target_bbox)`.
 
-> NOTE: this fast path is the **plain `grasp` model only**. On `grasp-gd` the built-in
-> GroundingDINO detector always runs and the incoming `box` is **ignored** — to target one
-> object, use the two-step flow (GroundingDINO boxes selected client-side → plain `grasp` with
-> `box=...`) rather than `grasp-gd`.
+> NOTE: this fast path is the **plain `grasp` model only**. Any model with a configured detector
+> (`grasp-gd` with GroundingDINO, `grasp-rfdetr` with RF-DETR) always runs that detector and
+> **ignores** the incoming `box` — to target one object, use the two-step flow (detector boxes
+> selected client-side → plain `grasp` with `box=...`).
 
 ### 5b. Per-request GroundingDINO thresholds (grasp-gd)
 
 The GroundingDINO detector stage inside `grasp-gd` honors per-request threshold overrides:
 `box_threshold` / `text_threshold` carried on the `Prompt` (>0) take precedence over the
-manifest/default thresholds (`defaultBoxThresh = 0.3`, `defaultTextThresh = 0.25`) for that
+manifest/default thresholds (`groundingdino.DefaultBoxThresh = 0.3`,
+`groundingdino.DefaultTextThresh = 0.25`) for that
 request, exactly as they do for the standalone `grounding-dino` model.
 
 ## 6. Integration path B — GG-CNN learned (later)

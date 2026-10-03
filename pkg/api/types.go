@@ -122,7 +122,7 @@ type PredictJSONRequest struct {
 	// catches more small objects but slower. 0 = model default. Used by foreground.
 	GridSize int `json:"grid_size,omitempty"`
 	// Method selects the algorithm for models that offer several (the `background` model:
-	// "depth" | "sam" | "cv" | "automask"). "" = model default.
+	// "auto" | "depth" | "sam" | "cv" | "automask"). "" = model default (auto for background).
 	Method string `json:"method,omitempty"`
 	// ClaimThreshold applies to textalign's `method: dual`. It is the probability in (0,1)
 	// the supervised closed head must reach on a requested word before it names a detection

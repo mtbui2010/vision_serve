@@ -18,7 +18,9 @@ import (
 // DataCollector receives inference results so a downstream integration can filter + forward them.
 // By default, use NoopCollector — it collects nothing (local-first, no telemetry).
 type DataCollector interface {
-	// Observe is called after every predict. A downstream implementation may filter by confidence,
+	// Observe is meant to receive the result of every predict. NOT WIRED YET: nothing in the
+	// server, CLI or lifecycle calls it today, so a collector registered with SetDefault sees
+	// nothing until a call site is added. A downstream implementation may filter by confidence,
 	// store hard samples, or push to a labeling queue. It MUST be non-blocking / its errors must not block inference.
 	Observe(ctx context.Context, modelName string, result api.Result) error
 }

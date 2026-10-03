@@ -4,9 +4,11 @@
 // original image.
 //
 // Model packages do not hand-write resize / pad / HWC→CHW / normalise loops: they declare a Spec
-// (or take the manifest's) and call Apply. The Python converter's reference preprocessing
-// (clients/python/visionserve/convert/reference.py) implements the same Spec semantics, so tier B1
-// compares the server against the declared spec directly. Pure Go (disintegration/imaging), no cgo.
+// (or take the manifest's) and call Apply. The Python converter re-implements the same Spec
+// semantics in clients/python/visionserve/convert/spec.py (spec_from_manifest, apply_spec), so its
+// tier B1 compares the server against the declared spec directly; convert/reference.py is the
+// "original framework" side of tiers B and C (the official pipeline, or the manifest's spec via
+// spec.py when there is none). Pure Go (disintegration/imaging), no cgo.
 package preprocess
 
 import (

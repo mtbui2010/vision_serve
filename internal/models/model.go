@@ -176,7 +176,8 @@ type Prompt struct {
 	// foreground model to let a request trade speed for coverage.
 	GridSize int
 	// Method: per-request algorithm selector for models that offer several (the
-	// `background` model: "depth" | "sam" | "cv" | "automask"). "" = the model default.
+	// `background` model: "auto" | "depth" | "sam" | "cv" | "automask"). "" = the model default
+	// (auto for background).
 	Method string
 	// ClaimThresh: textalign `method: dual` only. The PROBABILITY in (0,1) the supervised
 	// closed head must reach on a requested word before it names a query instead of the open

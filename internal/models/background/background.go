@@ -3,11 +3,12 @@
 // surface) using one of several interchangeable methods, selected per request via
 // the `method` field:
 //
-//   - "depth"    (default): MiDaS depth → fit the dominant plane (affine disparity) →
+//   - "auto"     (default): "depth" when it finds a clear plane, otherwise "cv".
+//   - "depth":   MiDaS depth → fit the dominant plane (affine disparity) →
 //     the near-plane region IS the support surface. Fastest (~tens of ms)
 //     and the most accurate for tabletop scenes (objects rise above the plane).
-//   - "sam":     MobileSAM prompted at a few likely-background seed points (image
-//     bottom + corners), validated by area + border touch. ~tens of ms.
+//   - "sam":     MobileSAM prompted at six lower-frame seed points (a 3×2 grid, one
+//     point per prompt, encoder run once), validated by area + border touch.
 //   - "cv":      classical CV (no inference) — the large, low-texture region grown
 //     from the image border/bottom. Fastest; least robust.
 //   - "automask": MobileSAM Automatic Mask Generator, then KEEP the large / border-
@@ -160,7 +161,7 @@ func (m *backgroundModel) resolveMethod(prompt models.Prompt) (string, error) {
 	case methodCV:
 		// no session needed
 	default:
-		return "", fmt.Errorf("background: unknown method %q (use depth, sam, cv, or automask)", method)
+		return "", fmt.Errorf("background: unknown method %q (use auto, depth, sam, cv, or automask)", method)
 	}
 	return method, nil
 }

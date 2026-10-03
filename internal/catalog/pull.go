@@ -25,7 +25,9 @@ const minSaneSize = 1024 // 1 KiB
 // Pull downloads a catalog model into <ModelsDir>/<name>/, writes its
 // manifest.yaml and any embedded labels file, and verifies file sizes. It is
 // idempotent: files already present are skipped unless Force is set. Existing
-// files are never overwritten unless Force is set.
+// files are never overwritten unless Force is set, with one exception: a manifest.yaml that
+// pull itself generated and nobody edited (isUneditedGenerated) is regenerated in place.
+// Missing catalog dependencies are pulled first.
 func Pull(name string, opts PullOptions) error {
 	out := opts.Out
 	if out == nil {

@@ -122,7 +122,7 @@ point at the same files.
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L68-L78)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L70-L80)
 
 Two `pull` commands for the same model (two terminals, two containers sharing a volume) would
 otherwise write over each other. Each model folder has a `.pull.lock` file; on Unix the second
@@ -139,7 +139,7 @@ lock if the process dies, so a crash never leaves a stale lock.
 	defer unlock()
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L88-L94)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L90-L96)
 
 A file already on disk is not trusted just because it exists: when the entry has a pin, it is
 hashed again before `pull` reports "already present".
@@ -227,7 +227,7 @@ it (416) simply get a fresh download.
 		}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L150-L162)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L152-L164)
 
 Unpinned files restart from zero: without a pin, nothing would notice a prefix that came from a
 different upstream version than the rest.
@@ -284,7 +284,7 @@ edited by hand (kept; `--force` regenerates).
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L189-L204)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L191-L206)
 
 The pins land in the manifest too (`sha256:` for the ONNX sessions, `sha256_files:` for side
 files such as `model.onnx.data` or a tokenizer), so the registry re-checks the bytes every time
@@ -391,7 +391,7 @@ var licenseAllowlist = map[string]string{
 	m.License = canonLicense
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L265-L269)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L275-L279)
 
 The Python converter keeps its own copy so it can refuse a model *before* a long export (see
 [Clients and the converter](clients.md)); `internal/registry/sync_test.go` parses the Python

@@ -66,7 +66,7 @@ type Spec struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L107-L137)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L109-L139)
 
 Each pixel value `p` (0 to 255) on color channel `c` becomes `(p/255 - mean[c]) / std[c]`.
 With `NoRescale` and no mean/std the raw 0..255 value is kept (the MobileSAM encoder normalizes
@@ -162,7 +162,7 @@ func FromLegacy(l LegacyFields) Spec {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L155-L169)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L157-L171)
 
 When both a block and a legacy field are present, the registry
 (`registry.Manifest.PreprocessSpec`) requires them to agree and refuses the manifest with an
@@ -207,7 +207,7 @@ func (a Arch) Resolve(s Spec) (Spec, error) {
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L276-L297)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L278-L299)
 
 For example, RF-DETR has always ignored `input.crop`, and SCRFD's legacy `letterbox: true` has
 always meant InsightFace's top-left pad; both readings are preserved. The same unsupported mode
@@ -253,7 +253,7 @@ func (m Meta) Affine() geom.Affine {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L326-L339)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L328-L341)
 
 A decoder inverts it with `geom.Affine.BoxToOrig` and then clips with `geom.Clamp`. The box
 format is `[x, y, w, h]`, top-left corner plus size, everywhere.
