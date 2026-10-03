@@ -379,6 +379,9 @@ func (p *pbReader) walk(end int64, fn func(num uint64, wt int) (bool, error)) er
 		if err != nil {
 			return err
 		}
+		if p.off > end {
+			return fmt.Errorf("%w: field key overruns its message (end %d)", errMalformed, end)
+		}
 		num, wt := key>>3, int(key&7)
 		if num == 0 {
 			return fmt.Errorf("%w: field number 0 at offset %d", errMalformed, p.off)
@@ -439,7 +442,8 @@ func (p *pbReader) lenEnd(end int64) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if n > uint64(end-p.off) {
+	// p.off past end (a varint that ran over) would make end-p.off negative and the bound huge.
+	if p.off > end || n > uint64(end-p.off) {
 		return 0, fmt.Errorf("%w: length %d at offset %d overruns its message (end %d)", errMalformed, n, p.off, end)
 	}
 	return p.off + int64(n), nil

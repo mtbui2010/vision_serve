@@ -280,6 +280,12 @@ func TestONNXHeaderMalformed(t *testing.T) {
 		"truncated fixed64": cat(pbBytes(fieldModelGraph, g), pbKey(9, wireFixed64), []byte{1, 2}),
 		"huge name": model(cat(pbBytes(fieldGraphOutput, pbBytes(fieldValueInfoName,
 			make([]byte, maxNameLen+1))))),
+		// A 1-byte ValueInfoProto whose 2-byte key runs past its end, then a 2^63 length: end-off
+		// went negative, the bound check passed and str sliced with a negative index (a panic).
+		"key overruns its message": func() []byte {
+			graph := cat([]byte{0x5a, 1, 0x8a, 0x00}, bytes.Repeat([]byte{0x80}, 9), []byte{0x01}, make([]byte, 20))
+			return cat([]byte{0x3a, byte(len(graph))}, graph)
+		}(),
 	} {
 		if in, out, err := parseONNXHeader(bytes.NewReader(b), int64(len(b)), headerBufSize); err == nil {
 			t.Errorf("%s: parsed as %+v / %+v, want an error", name, in, out)
