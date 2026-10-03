@@ -24,7 +24,11 @@ import (
 //     A model that is not loaded yet counts 1 slot.
 //
 // A refused request fails at once with ErrOverloaded (HTTP 503) — it never waits for a slot.
-const defaultMinQueue = 4
+//
+// The floor is generous on purpose: Admit runs BEFORE the upload is decoded, so a waiting request
+// costs little memory, while a tight bound (it was 4) answered 503 to an ordinary client sending
+// 16 requests in parallel to a single-session model. Ollama's default queue is 512.
+const defaultMinQueue = 32
 
 // maxQueue values other than a positive bound (see Manager.maxQueue).
 const (

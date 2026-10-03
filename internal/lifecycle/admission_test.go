@@ -90,7 +90,7 @@ func TestAdmitReleaseIsIdempotent(t *testing.T) {
 // The automatic bound follows the model's concurrency: twice its inference slots (the largest
 // pool among its roles), never below defaultMinQueue, and the floor alone before it is loaded.
 func TestAdmitDefaultFollowsPoolSize(t *testing.T) {
-	t.Setenv("VS_POOL_OVERRIDE", "6")
+	t.Setenv("VS_POOL_OVERRIDE", "20") // 2x20 = 40 > the floor, so the pool decides
 	t.Setenv("VISIONSERVE_MAX_QUEUE", "")
 	root := t.TempDir()
 	writeTestModel(t, root, "pooled", "test-pipe", "")
@@ -108,8 +108,8 @@ func TestAdmitDefaultFollowsPoolSize(t *testing.T) {
 	if err := m.Load("pooled"); err != nil {
 		t.Fatal(err)
 	}
-	if got := admitCapacity(t, m, "pooled"); got != 12 {
-		t.Fatalf("pool of 6: bound %d, want 2x6 = 12", got)
+	if got := admitCapacity(t, m, "pooled"); got != 40 {
+		t.Fatalf("pool of 20: bound %d, want 2x20 = 40", got)
 	}
 }
 

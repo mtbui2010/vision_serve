@@ -138,7 +138,7 @@ model to `N` seconds. The reaper still skips any model whose effective idle time
 upload, so memory does not grow with the number of requests queued behind a busy model. Each
 model admits at most `VISIONSERVE_MAX_QUEUE` requests (running + waiting); unset, the bound is
 `2 × the model's inference slots` (its largest session pool, 1 for a single session or an
-`Exclusive` pipeline) and never below 4. `VISIONSERVE_MAX_QUEUE=0` turns the bound off. A
+`Exclusive` pipeline) and never below 32. `VISIONSERVE_MAX_QUEUE=0` turns the bound off. A
 refused request fails at once with `lifecycle.ErrOverloaded` (HTTP 503); it never waits.
 
 ## Hardware / execution providers
