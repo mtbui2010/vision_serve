@@ -4,33 +4,24 @@ import (
 	"image"
 
 	"visionserve/internal/engine"
-	"visionserve/internal/imageproc"
 	"visionserve/internal/models"
+	prep "visionserve/internal/vision/preprocess"
 )
 
+// arch: classification models (EfficientNet, MobileNet) squash the full frame to the target
+// resolution (224×224) — the legacy input.letterbox/crop flags were never honoured here. They
+// are trained with center-crop preprocessing in practice, but at inference with an
+// already-cropped or full-frame image a squash is standard and sufficient; no letterbox padding
+// (black borders hurt classification accuracy).
+var arch = prep.Arch{Name: "classification", Modes: []prep.Mode{prep.Squash}}
+
 // preprocess: original image -> NCHW [1,3,H,W] tensor, squash-resized + ImageNet-normalized.
-//
-// Classification models (EfficientNet, MobileNet) are trained with center-crop preprocessing
-// in practice, but at inference with an already-cropped or full-frame image a simple squash
-// resize to the target resolution (224×224) is standard and sufficient. No letterbox padding
-// is used — padding introduces spurious black border content that hurts classification accuracy.
-//
 // PreprocessMeta records per-axis scale (not used in postprocess for classification, but kept
 // for interface consistency).
 func preprocess(img image.Image, cfg models.Config) (engine.Tensor, models.PreprocessMeta, error) {
-	b := img.Bounds()
-	origW, origH := b.Dx(), b.Dy()
-
-	resized := imageproc.Resize(img, cfg.Width, cfg.Height)
-	scaleX, scaleY := imageproc.ResizeScale(origW, origH, cfg.Width, cfg.Height)
-
-	meta := models.PreprocessMeta{
-		OrigWidth:  origW,
-		OrigHeight: origH,
-		ScaleX:     scaleX,
-		ScaleY:     scaleY,
-		PadX:       0,
-		PadY:       0,
+	s, err := arch.Resolve(cfg.PreprocessSpec())
+	if err != nil {
+		return engine.Tensor{}, models.PreprocessMeta{}, err
 	}
-	return imageproc.ImageToCHWFloat(resized, cfg.Mean, cfg.Std), meta, nil
+	return s.Apply(img)
 }

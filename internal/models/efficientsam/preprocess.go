@@ -1,14 +1,13 @@
 package efficientsam
 
 import (
-	"fmt"
 	"image"
 
 	"visionserve/internal/engine"
-	"visionserve/internal/imageproc"
+	"visionserve/internal/vision/preprocess"
 )
 
-// encoderInput builds the EfficientSAM encoder input tensor.
+// encoderSpec is the EfficientSAM encoder input.
 //
 // VERIFIED against models/efficient-sam/efficient_sam_encoder.onnx (graph inspection):
 // the graph's first ops are
@@ -20,13 +19,11 @@ import (
 // (pixel/255) — exactly what the official yformer/EfficientSAM ONNX example feeds.
 // Resizing or ImageNet-normalizing in Go as well would apply both steps twice (the
 // previous implementation did, which gave ~0.01 mask IoU vs the reference).
-//
-// Returns a [1, 3, H, W] tensor at the original image size.
+// Fixed by the export, not read from the manifest.
+var encoderSpec = preprocess.Spec{Resize: preprocess.None}
+
+// encoderInput returns the [1, 3, H, W] encoder tensor at the original image size.
 func encoderInput(img image.Image) (engine.Tensor, error) {
-	b := img.Bounds()
-	if b.Dx() <= 0 || b.Dy() <= 0 {
-		return engine.Tensor{}, fmt.Errorf("empty image (%dx%d)", b.Dx(), b.Dy())
-	}
-	// Empty mean/std → plain pixel/255 in [0,1], RGB planes.
-	return imageproc.ImageToCHWFloat(img, nil, nil), nil
+	t, _, err := encoderSpec.Apply(img)
+	return t, err
 }

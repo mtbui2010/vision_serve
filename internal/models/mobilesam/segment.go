@@ -31,7 +31,10 @@ func Segment(
 	origH := img.Bounds().Dy()
 
 	// 1) Encoder: image → embedding. scale maps original coords → 1024 input space.
-	encIn, scale := encoderInput(img)
+	encIn, scale, err := encoderInput(img)
+	if err != nil {
+		return nil, err
+	}
 	encOuts, err := encRun(map[string]engine.Tensor{encInputName: encIn})
 	if err != nil {
 		return nil, fmt.Errorf("mobilesam: encoder failed: %w", err)

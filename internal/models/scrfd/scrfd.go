@@ -34,6 +34,9 @@ func New(cfg models.Config) (models.Base, error) {
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return nil, fmt.Errorf("scrfd: invalid input dimensions %dx%d", cfg.Width, cfg.Height)
 	}
+	if _, err := spec(cfg); err != nil {
+		return nil, err
+	}
 	return &scrfdModel{cfg: cfg}, nil
 }
 

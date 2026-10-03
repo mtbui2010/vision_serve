@@ -28,7 +28,10 @@ func TestDetPreprocess_ShapeAndMeta(t *testing.T) {
 		{2000, 1000, 480, 960, 0.48}, // long side -> 960
 	}
 	for _, c := range cases {
-		tns, meta := detPreprocess(solid(c.w, c.h), detMaxSide)
+		tns, meta, err := detPreprocess(solid(c.w, c.h), detMaxSide)
+		if err != nil {
+			t.Fatal(err)
+		}
 		want := []int64{1, 3, c.wantH, c.wantW}
 		for i := range want {
 			if tns.Shape[i] != want[i] {
@@ -50,7 +53,10 @@ func TestDetPreprocess_ShapeAndMeta(t *testing.T) {
 
 // Boxes from the det map map back to ORIGINAL coordinates (BBox rule) and are clamped.
 func TestMapBoxToOriginal(t *testing.T) {
-	_, meta := detPreprocess(solid(2000, 1000), detMaxSide) // scale 0.48
+	_, meta, err := detPreprocess(solid(2000, 1000), detMaxSide) // scale 0.48
+	if err != nil {
+		t.Fatal(err)
+	}
 	got := mapBoxToOriginal([4]float64{48, 96, 480, 48}, meta)
 	want := [4]float64{100, 200, 1000, 100}
 	for i := range want {

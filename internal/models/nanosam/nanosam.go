@@ -84,7 +84,10 @@ func (m *nanoSAM) Infer(img image.Image, prompt models.Prompt, runner models.Run
 
 	// 1) Encoder: image → embedding.
 	// scale maps original-image coordinates into the 1024 space the decoder expects.
-	encIn, scale := encoderInput(img)
+	encIn, scale, err := encoderInput(img)
+	if err != nil {
+		return models.Result{}, err
+	}
 
 	// Encoder input tensor is named "image" — confirmed from export_image_encoder_onnx.py
 	// in github.com/NVIDIA-AI-IOT/nanosam (input_names=["image"]).

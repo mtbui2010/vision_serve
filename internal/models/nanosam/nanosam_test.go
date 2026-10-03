@@ -131,7 +131,10 @@ func TestEncoderInput_RealShapeAndPadding(t *testing.T) {
 			img.SetNRGBA(x, y, color.NRGBA{R: 255, G: 128, B: 0, A: 255})
 		}
 	}
-	tensor, scale := encoderInput(img)
+	tensor, scale, err := encoderInput(img)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []int64{1, 3, 1024, 1024}
 	for i, d := range want {
 		if tensor.Dim(i) != d {

@@ -1,6 +1,7 @@
 package paddleocr
 
 import (
+	"fmt"
 	"image"
 	"math"
 
@@ -8,6 +9,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/preprocess"
 )
 
 // detNormMean and detNormStd are the ImageNet-style normalization constants for DBNet++.
@@ -36,68 +38,34 @@ type detPreprocessMeta struct {
 	detW, detH int
 }
 
-// detPreprocess resizes img so the longer side <= maxSide (cfg.Width or detMaxSide),
-// pads width and height up to multiples of 32, normalizes NCHW float32.
-// Returns the tensor, and a meta struct for mapping boxes back to original coordinates.
-func detPreprocess(img image.Image, maxSide int) (engine.Tensor, detPreprocessMeta) {
+// detSpec is the DBNet++ det input: the longer side scaled to <= maxSide (never upscaled),
+// ImageNet-normalised, then zero-padded at the bottom/right (in the NORMALISED tensor) up to the
+// next multiples of 32. maxSide is the manifest's input.width (detMaxSide when unset); the rest
+// is fixed by the export.
+func detSpec(maxSide int) preprocess.Spec {
 	if maxSide <= 0 {
 		maxSide = detMaxSide
 	}
-
-	b := img.Bounds()
-	origW := b.Dx()
-	origH := b.Dy()
-
-	// Scale so the longer side <= maxSide.
-	scaleX := float64(maxSide) / float64(origW)
-	scaleY := float64(maxSide) / float64(origH)
-	scale := math.Min(scaleX, scaleY)
-	if scale > 1.0 {
-		scale = 1.0 // never upscale
+	return preprocess.Spec{
+		Resize:     preprocess.LongSidePad,
+		Width:      maxSide,
+		Height:     maxSide,
+		MultipleOf: detGridSize,
+		NoUpscale:  true,
+		Mean:       detNormMean[:],
+		Std:        detNormStd[:],
 	}
+}
 
-	newW := int(math.Round(float64(origW) * scale))
-	newH := int(math.Round(float64(origH) * scale))
-	if newW < 1 {
-		newW = 1
+// detPreprocess resizes img so the longer side <= maxSide (cfg.Width or detMaxSide),
+// pads width and height up to multiples of 32, normalizes NCHW float32 (detSpec).
+// Returns the tensor, and a meta struct for mapping boxes back to original coordinates.
+func detPreprocess(img image.Image, maxSide int) (engine.Tensor, detPreprocessMeta, error) {
+	t, meta, err := detSpec(maxSide).Apply(img)
+	if err != nil {
+		return engine.Tensor{}, detPreprocessMeta{}, fmt.Errorf("paddleocr: %w", err)
 	}
-	if newH < 1 {
-		newH = 1
-	}
-
-	// Pad to multiples of detGridSize.
-	padW := ((newW + detGridSize - 1) / detGridSize) * detGridSize
-	padH := ((newH + detGridSize - 1) / detGridSize) * detGridSize
-
-	resized := imaging.Resize(img, newW, newH, imaging.Linear) // *image.NRGBA
-
-	plane := padW * padH
-	data := make([]float32, 3*plane) // zero-padded by default
-
-	for y := 0; y < newH; y++ {
-		for x := 0; x < newW; x++ {
-			c := resized.NRGBAAt(resized.Bounds().Min.X+x, resized.Bounds().Min.Y+y)
-			idx := y*padW + x
-			data[idx] = (float32(c.R)/255.0 - detNormMean[0]) / detNormStd[0]
-			data[plane+idx] = (float32(c.G)/255.0 - detNormMean[1]) / detNormStd[1]
-			data[2*plane+idx] = (float32(c.B)/255.0 - detNormMean[2]) / detNormStd[2]
-		}
-	}
-
-	meta := detPreprocessMeta{
-		PreprocessMeta: models.PreprocessMeta{
-			OrigWidth:  origW,
-			OrigHeight: origH,
-			ScaleX:     scale,
-			ScaleY:     scale,
-			PadX:       0,
-			PadY:       0,
-		},
-		detW: padW,
-		detH: padH,
-	}
-
-	return engine.F32(data, 1, 3, int64(padH), int64(padW)), meta
+	return t, detPreprocessMeta{PreprocessMeta: meta, detW: int(t.Shape[3]), detH: int(t.Shape[2])}, nil
 }
 
 // recPreprocess crops the text region [bbox = x,y,w,h in original image coords] from img,
@@ -142,19 +110,15 @@ func recPreprocess(img image.Image, bbox [4]float64) (engine.Tensor, int) {
 	// Crop and resize.
 	cropped := imaging.Crop(img, image.Rect(x0, y0, x1, y1))
 	resized := imaging.Resize(cropped, targetW, recHeight, imaging.Linear)
-
-	plane := recHeight * targetW
-	data := make([]float32, 3*plane)
-
-	for y := 0; y < recHeight; y++ {
-		for x := 0; x < targetW; x++ {
-			c := resized.NRGBAAt(resized.Bounds().Min.X+x, resized.Bounds().Min.Y+y)
-			idx := y*targetW + x
-			data[idx] = (float32(c.R)/255.0 - recNormMean[0]) / recNormStd[0]
-			data[plane+idx] = (float32(c.G)/255.0 - recNormMean[1]) / recNormStd[1]
-			data[2*plane+idx] = (float32(c.B)/255.0 - recNormMean[2]) / recNormStd[2]
-		}
+	if resized.Rect.Dx() != targetW || resized.Rect.Dy() != recHeight {
+		// A box entirely past the image edge crops to nothing and imaging returns an empty
+		// image; the rec input is then all zero pixels (it always was), never a 0-wide tensor.
+		resized = image.NewNRGBA(image.Rect(0, 0, targetW, recHeight))
 	}
 
-	return engine.F32(data, 1, 3, recHeight, int64(targetW)), targetW
+	return recNorm.Tensor(resized), targetW
 }
+
+// recNorm is the SVTR-tiny normalisation ((p/255 - 0.5) / 0.5, NCHW) of a text-line crop. The
+// crop + height-48 resize stays model-specific; the pixels → tensor step is the shared one.
+var recNorm = preprocess.Spec{Mean: recNormMean[:], Std: recNormStd[:]}

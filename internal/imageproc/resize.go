@@ -4,6 +4,8 @@ import (
 	"image"
 
 	"github.com/disintegration/imaging"
+
+	"visionserve/internal/vision/preprocess"
 )
 
 // Resize resizes the image to exactly WxH (does NOT preserve aspect ratio). For models without letterboxing.
@@ -37,25 +39,13 @@ func ResizeScale(origW, origH, dstW, dstH int) (scaleX, scaleY float64) {
 //
 // It returns the crop, the per-axis resize scale and the crop offset in RESIZED pixels, so
 // input = orig * scale - offset on each axis.
+//
+// The geometry is preprocess.CoverSize (the center_crop resize mode).
 func ResizeShortCenterCrop(src image.Image, w, h int) (*image.NRGBA, float64, float64, int, int) {
 	b := src.Bounds()
 	ow, oh := b.Dx(), b.Dy()
-	var rw, rh int
-	if ow <= oh { // width is the short side
-		rw = w
-		rh = int(float64(w) * float64(oh) / float64(ow))
-	} else {
-		rh = h
-		rw = int(float64(h) * float64(ow) / float64(oh))
-	}
-	if rw < w {
-		rw = w
-	}
-	if rh < h {
-		rh = h
-	}
+	rw, rh, offX, offY := preprocess.CoverSize(ow, oh, w, h)
 	resized := imaging.Resize(src, rw, rh, imaging.CatmullRom)
-	offX, offY := (rw-w)/2, (rh-h)/2
 	crop := imaging.Crop(resized, image.Rect(offX, offY, offX+w, offY+h))
 	return crop, float64(rw) / float64(ow), float64(rh) / float64(oh), offX, offY
 }

@@ -33,6 +33,9 @@ func New(cfg models.Config) (models.Base, error) {
 	if len(cfg.Labels) == 0 {
 		// Labels are optional at model creation; class indices are returned as fallback.
 	}
+	if _, err := arch.Resolve(cfg.PreprocessSpec()); err != nil {
+		return nil, err
+	}
 	return &classificationModel{cfg: cfg}, nil
 }
 

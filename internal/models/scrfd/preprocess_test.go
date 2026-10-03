@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"visionserve/internal/models"
+	prep "visionserve/internal/vision/preprocess"
 )
 
 // TestFitTopLeft mirrors InsightFace's resize arithmetic (int() truncation, one scale).
@@ -21,7 +22,7 @@ func TestFitTopLeft(t *testing.T) {
 		{1000, 3000, 213, 640, 640.0 / 3000}, // int(640/3) = 213
 	}
 	for _, c := range cases {
-		nw, nh, s := fitTopLeft(c.w, c.h, 640, 640)
+		nw, nh, s := prep.TopLeftSize(c.w, c.h, 640, 640)
 		if nw != c.nw || nh != c.nh || math.Abs(s-c.scale) > 1e-12 {
 			t.Errorf("%dx%d: got %dx%d scale %v, want %dx%d scale %v", c.w, c.h, nw, nh, s, c.nw, c.nh, c.scale)
 		}

@@ -53,8 +53,12 @@ func newDETR(cfg models.Config, v variant) (models.Base, error) {
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return nil, fmt.Errorf("%s: invalid input width/height (%dx%d)", v.prefix, cfg.Width, cfg.Height)
 	}
+	m := &detr{cfg: cfg, v: v}
+	if _, err := m.spec(); err != nil { // a declared preprocessing this decoder cannot map back
+		return nil, err
+	}
 	// Labels are optional: without them classes are reported as class_<id>.
-	return &detr{cfg: cfg, v: v}, nil
+	return m, nil
 }
 
 func (m *detr) Name() string      { return m.cfg.Name }

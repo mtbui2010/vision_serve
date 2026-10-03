@@ -89,7 +89,10 @@ func (m *paddleOCR) Infer(img image.Image, _ models.Prompt, r models.Runner) (mo
 		maxSide = detMaxSide
 	}
 
-	detTensor, detMeta := detPreprocess(img, maxSide)
+	detTensor, detMeta, err := detPreprocess(img, maxSide)
+	if err != nil {
+		return models.Result{}, err
+	}
 
 	// Run detection session.
 	detInputName := firstName(r.InputNames(roleDet), "x")
