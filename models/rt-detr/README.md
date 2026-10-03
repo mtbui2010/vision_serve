@@ -60,7 +60,7 @@ curl -s -F model=rt-detr -F image=@photo.jpg \
 ## Architecture note
 
 RT-DETR is NMS-free (DETR-style set prediction). Do NOT apply post-hoc NMS — the
-postprocess in `internal/models/rtdetr/postprocess.go` intentionally omits it. Only
+postprocess in `internal/models/detr/postprocess.go` (shared with RF-DETR) intentionally omits it. Only
 confidence filtering + top-K sorting are applied.
 
 ## Performance

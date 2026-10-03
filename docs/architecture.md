@@ -110,7 +110,7 @@ the new `internal/roi` package, applied identically by the HTTP predict handler 
 shifted into the crop before inference; on the way out, detection/mask bboxes and grasp
 centres are offset by the ROI origin, and each mask is **re-embedded** (decode at crop
 size → paste at the ROI offset → re-encode at full size via the `pkg/api` column-major
-RLE codec `EncodeMaskRLE` / `DecodeMaskRLE`).
+RLE codec `EncodeMaskRLE` / `DecodeMaskRLE`, thin wrappers over `internal/vision/mask`).
 
 ### Multi-session lifecycle
 
@@ -194,7 +194,8 @@ Open-vocab detection populates `Detections` (text → boxes); Grounded-SAM popul
 | `lifecycle` | load/unload, idle reaper, role→`engine.Session`, `Runner` | **every ONNX session goes through here** (simple and pipeline) |
 | `engine` | wraps ONNX Runtime | EP fallback chain (shipped default CUDA→CPU; TensorRT opt-in per manifest); supported EPs: tensorrt, cuda, coreml, directml, openvino, cpu; `Run` thread-safe |
 | `models/*` | per-architecture pre/postprocess (`Model`) or `Infer` orchestration (`PipelineModel`) | implement interface + `Register()` |
-| `imageproc` | letterbox/resize/nms/tensor/RLE/draw | pure Go, no cgo |
+| `imageproc` | letterbox/resize/tensor/draw | pure Go, no cgo |
+| `vision/geom`, `vision/mask`, `vision/nms` | shared decode code: box geometry, mask threshold/RLE/upsample, NMS | pure Go; the ONE implementation each model uses |
 | `extension` | community extension hooks | no-op by default |
 
 ## Invariants
