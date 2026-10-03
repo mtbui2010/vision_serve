@@ -67,6 +67,10 @@ const (
 	autoFinalWorkers = 4    // final-pass callers: one per decoder session, each owning one full-res buffer
 )
 
+// allocScratch allocates the final pass's per-worker logit buffers (allocLogits); tests swap it
+// to check that every buffer is freed, on every path, only after no decoder run can write it.
+var allocScratch = allocLogits
+
 // decodeFunc runs the decoder with its inputs bound by name. into, when non-nil, names outputs
 // to write into caller-owned buffers (models.IntoRunner); a decodeFunc that cannot do that
 // ignores it and returns fresh tensors with the same values.
@@ -238,7 +242,7 @@ func autoSegmentAs[T any](
 		var into map[string]engine.Tensor
 		if intoOK {
 			if logits[w] == nil {
-				logits[w], frees[w] = allocLogits(nch * origH * origW)
+				logits[w], frees[w] = allocScratch(nch * origH * origW)
 			}
 			into = map[string]engine.Tensor{maskName: engine.F32(logits[w], 1, int64(nch), int64(origH), int64(origW))}
 		}
