@@ -109,6 +109,13 @@ func (g Grasp) Infer(c Call) (models.Result, error) {
 	}
 
 	boxes := c.Prompt.Boxes // nil: automatic masks over the whole image
+	if len(boxes) == 0 {
+		if es, ok := g.Segmenter.(EachBitmapSegmenter); ok {
+			if res, ok, err := g.automaskEach(c, es, res, w, h); ok || err != nil {
+				return res, err
+			}
+		}
+	}
 	masks, bitmaps, err := g.Segmenter.SegmentBitmaps(c, boxes)
 	if err != nil {
 		return models.Result{}, err
@@ -121,6 +128,57 @@ func (g Grasp) Infer(c Call) (models.Result, error) {
 	}
 	res.Masks = masks
 	return res, nil
+}
+
+// automaskEach is the automask branch of Infer on a streaming segmenter: each mask is size-
+// filtered and planned as soon as it is final, and its bitmap dropped, instead of every
+// full-resolution bitmap being held until the last one is decoded. The result is exactly the
+// non-streaming branch's — same masks, same filter, the same planner on the same bitmaps, in
+// the same order. ok=false: the segmenter cannot stream after all.
+func (g Grasp) automaskEach(c Call, es EachBitmapSegmenter, res models.Result, w, h int) (models.Result, bool, error) {
+	type planned struct {
+		m      models.Mask
+		grasps []api.Grasp
+		keep   bool
+	}
+	keep := sizeFilter(c.Prompt, w, h)
+	outs, ok, err := es.SegmentEach(c, nil, func(m models.Mask, b mask.Bitmap) any {
+		if !keep(m) {
+			return planned{}
+		}
+		return planned{m: m, grasps: g.Planner.Plan(b, c.Prompt), keep: true}
+	})
+	if !ok || err != nil {
+		return models.Result{}, ok, err
+	}
+	masks := make([]models.Mask, 0, len(outs))
+	for _, o := range outs {
+		p := o.(planned)
+		if !p.keep {
+			continue
+		}
+		masks = append(masks, p.m)
+		res.Grasps = append(res.Grasps, p.grasps...)
+	}
+	res.Masks = masks
+	return res, true, nil
+}
+
+// sizeFilter is filterMasksBitmaps' test for one mask: whether its bbox area is inside the
+// request's min_size/max_size percentages of the w×h image.
+func sizeFilter(p models.Prompt, w, h int) func(models.Mask) bool {
+	area := float64(w * h)
+	var minAbs, maxAbs float64
+	if p.MinSize > 0 {
+		minAbs = p.MinSize / 100.0 * area
+	}
+	if p.MaxSize > 0 {
+		maxAbs = p.MaxSize / 100.0 * area
+	}
+	return func(m models.Mask) bool {
+		a := m.BBox[2] * m.BBox[3]
+		return !(minAbs > 0 && a < minAbs) && !(maxAbs > 0 && a > maxAbs)
+	}
 }
 
 func filterDetections(dets []models.Detection, p models.Prompt, w, h int) []models.Detection {
@@ -136,22 +194,11 @@ func filterMasksBitmaps(masks []models.Mask, bitmaps []mask.Bitmap, p models.Pro
 	if p.MinSize <= 0 && p.MaxSize <= 0 {
 		return masks, bitmaps
 	}
-	area := float64(w * h)
-	var minAbs, maxAbs float64
-	if p.MinSize > 0 {
-		minAbs = p.MinSize / 100.0 * area
-	}
-	if p.MaxSize > 0 {
-		maxAbs = p.MaxSize / 100.0 * area
-	}
+	keep := sizeFilter(p, w, h)
 	outM := make([]models.Mask, 0, len(masks))
 	outB := make([]mask.Bitmap, 0, len(bitmaps))
 	for i := range masks {
-		a := masks[i].BBox[2] * masks[i].BBox[3]
-		if minAbs > 0 && a < minAbs {
-			continue
-		}
-		if maxAbs > 0 && a > maxAbs {
+		if !keep(masks[i]) {
 			continue
 		}
 		outM = append(outM, masks[i])
