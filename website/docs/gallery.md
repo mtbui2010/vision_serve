@@ -150,6 +150,13 @@ the raw numbers are in [`figures.json`](assets/img/figures.json).
 
 <p style="text-align:center;font-size:.75rem;opacity:.8">background (method=sam): the supporting surface, and what is left on it</p>
 
+## Explaining a detection
+
+<figure markdown="span">
+  ![/api/explain: where RF-DETR looked for detection 0 (the cat) and detection 1 (the laptop)](assets/img/explain-rfdetr-177015.jpg){ loading=lazy }
+  <figcaption>/api/explain: where RF-DETR looked for detection 0 (the cat) and detection 1 (the laptop)<br/><code>rfdetr-small</code> · format='numpy', detection_idx=[0, 1] · 23 ms on gpu:0 · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+</figure>
+
 ## Preprocessing
 
 <figure markdown="span">

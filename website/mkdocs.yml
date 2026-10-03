@@ -97,3 +97,4 @@ nav:
       - HTTP API: reference/api.md
       - Configuration: reference/configuration.md
       - Manifest format: reference/manifest.md
+      - Engineering rules: https://github.com/mtbui2010/vision_serve/blob/main/docs/engineering-rules.md
