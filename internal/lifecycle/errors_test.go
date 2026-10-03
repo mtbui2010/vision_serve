@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"errors"
 	"image"
 	"os"
@@ -62,21 +63,21 @@ func TestTypedErrors(t *testing.T) {
 	m.SetTemplateStore(templates.New())
 	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
 
-	_, predictUnknown := m.Predict("nope", img)
-	_, badTemplate := m.PredictPrompt("pipe", img, models.Prompt{TemplateName: "never-registered"})
-	_, tensorOnPipeline := m.InferTensor("pipe", engine.F32([]float32{1}, 1, 1))
-	_, explainUnsupported := m.Explain("pipe", img, ExplainRequest{})
-	_, explainNegative := m.Explain("pipe", img, ExplainRequest{DetectionIdx: -1})
-	_, preprocessNoImage := m.Preprocess("plain", nil, models.Prompt{})
-	_, preprocessUnknown := m.Preprocess("nope", img, models.Prompt{})
+	_, predictUnknown := m.Predict(context.Background(), "nope", img)
+	_, badTemplate := m.PredictPrompt(context.Background(), "pipe", img, models.Prompt{TemplateName: "never-registered"})
+	_, tensorOnPipeline := m.InferTensor(context.Background(), "pipe", engine.F32([]float32{1}, 1, 1))
+	_, explainUnsupported := m.Explain(context.Background(), "pipe", img, ExplainRequest{})
+	_, explainNegative := m.Explain(context.Background(), "pipe", img, ExplainRequest{DetectionIdx: -1})
+	_, preprocessNoImage := m.Preprocess(context.Background(), "plain", nil, models.Prompt{})
+	_, preprocessUnknown := m.Preprocess(context.Background(), "nope", img, models.Prompt{})
 
 	for _, c := range []struct {
 		name string
 		err  error
 		want error
 	}{
-		{"load: not in the registry", m.Load("nope"), ErrModelNotFound},
-		{"load: weights missing on disk", m.Load("gone"), ErrModelNotFound},
+		{"load: not in the registry", m.Load(context.Background(), "nope"), ErrModelNotFound},
+		{"load: weights missing on disk", m.Load(context.Background(), "gone"), ErrModelNotFound},
 		{"predict: not in the registry", predictUnknown, ErrModelNotFound},
 		{"predict: unknown template", badTemplate, ErrInvalidRequest},
 		{"tensor-in on a pipeline model", tensorOnPipeline, ErrInvalidRequest},

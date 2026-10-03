@@ -1,6 +1,7 @@
 package groundingdino
 
 import (
+	"context"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -54,7 +55,7 @@ func TestTextLimitRealORT(t *testing.T) {
 		ones[i] = 1
 	}
 	L := int64(len(ids))
-	_, err = sess.RunNamed(map[string]engine.Tensor{
+	_, err = sess.RunNamed(context.Background(), map[string]engine.Tensor{
 		"pixel_values": pv, "pixel_mask": pm,
 		"input_ids":      engine.I64(ids, 1, L),
 		"attention_mask": engine.I64(ones, 1, L),
@@ -77,7 +78,7 @@ func TestTextLimitRealORT(t *testing.T) {
 	passes := 0
 	run := func(in map[string]engine.Tensor) ([]engine.Tensor, error) {
 		passes++
-		return sess.RunNamed(in)
+		return sess.RunNamed(context.Background(), in)
 	}
 	dets, err := Detect(img, prompt, tok, run, sess.OutputNames(), 0.3, 0.25, WithJointTextPass(true))
 	if err != nil {

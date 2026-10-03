@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"image"
 	"image/color"
 	"math"
@@ -80,11 +81,11 @@ func TestPreprocessBlockMatchesLegacyManifest(t *testing.T) {
 		writeSingleModel(t, root, "legacy", p.arch, p.legacy)
 		writeSingleModel(t, root, "block", p.arch, p.block)
 		m, _ := newFakeManager(t, scanRegistry(t, root))
-		a, err := m.Preprocess("legacy", img, models.Prompt{})
+		a, err := m.Preprocess(context.Background(), "legacy", img, models.Prompt{})
 		if err != nil {
 			t.Fatalf("%d %s legacy: %v", i, p.arch, err)
 		}
-		b, err := m.Preprocess("block", img, models.Prompt{})
+		b, err := m.Preprocess(context.Background(), "block", img, models.Prompt{})
 		if err != nil {
 			t.Fatalf("%d %s block: %v", i, p.arch, err)
 		}
@@ -119,14 +120,14 @@ func TestPreprocessBlockUnsupportedModeFailsLoad(t *testing.T) {
 	img := specTestImage(31, 17)
 	for name, want := range map[string]string{"detr-ka": `rfdetr does not support resize "keep_aspect" (supported: squash, letterbox)`,
 		"scrfd-lb": `does not support resize "letterbox"`} {
-		if _, err := m.Preprocess(name, img, models.Prompt{}); err == nil || !strings.Contains(err.Error(), want) {
+		if _, err := m.Preprocess(context.Background(), name, img, models.Prompt{}); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: err = %v, want %q", name, err, want)
 		}
-		if err := m.Load(name); err == nil {
+		if err := m.Load(context.Background(), name); err == nil {
 			t.Errorf("%s: Load succeeded", name)
 		}
 	}
-	if _, err := m.Preprocess("scrfd-legacy", img, models.Prompt{}); err != nil {
+	if _, err := m.Preprocess(context.Background(), "scrfd-legacy", img, models.Prompt{}); err != nil {
 		t.Fatalf("legacy scrfd: %v", err)
 	}
 }

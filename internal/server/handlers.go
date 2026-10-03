@@ -67,7 +67,8 @@ func decodeLoadRequest(r *http.Request) (string, error) {
 func (s *Server) handleLoad(w http.ResponseWriter, r *http.Request) {
 	model, err := decodeLoadRequest(r)
 	if err == nil {
-		err = s.mgr.Load(model)
+		// A client that leaves stops waiting; the load itself carries on (lifecycle.Manager.Load).
+		err = orClientGone(r.Context(), s.mgr.Load(r.Context(), model))
 	}
 	if err != nil {
 		writeError(w, err)
@@ -304,8 +305,8 @@ func (s *Server) inferTensor(w http.ResponseWriter, r *http.Request) (api.Result
 	if r.Context().Err() != nil {
 		return api.Result{}, "", errClientGone
 	}
-	res, err := s.mgr.InferTensor(model, engine.Tensor{Data: data, Shape: shape, Dtype: "f32"})
-	return res, enc, err
+	res, err := s.mgr.InferTensor(r.Context(), model, engine.Tensor{Data: data, Shape: shape, Dtype: "f32"})
+	return res, enc, orClientGone(r.Context(), err)
 }
 
 // parseShape parses "N,C,H,W" into positive int64 dims.

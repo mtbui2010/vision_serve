@@ -1,6 +1,7 @@
 package mobilesam
 
 import (
+	"context"
 	"image"
 	_ "image/jpeg"
 	"os"
@@ -75,7 +76,7 @@ func TestEncoderBitwiseRepeatableOnGPU(t *testing.T) {
 		t.Fatal(err)
 	}
 	feed := map[string]engine.Tensor{enc.InputNames()[0]: in}
-	ref, err := enc.RunNamed(feed)
+	ref, err := enc.RunNamed(context.Background(), feed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +92,7 @@ func TestEncoderBitwiseRepeatableOnGPU(t *testing.T) {
 				return
 			default:
 			}
-			if _, err := sessions[1].RunNamed(feed); err != nil {
+			if _, err := sessions[1].RunNamed(context.Background(), feed); err != nil {
 				t.Error(err)
 				return
 			}
@@ -101,7 +102,7 @@ func TestEncoderBitwiseRepeatableOnGPU(t *testing.T) {
 
 	bad := 0
 	for k := 0; k < runs; k++ {
-		out, err := enc.RunNamed(feed)
+		out, err := enc.RunNamed(context.Background(), feed)
 		if err != nil {
 			t.Fatal(err)
 		}

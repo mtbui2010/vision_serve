@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -40,11 +41,11 @@ func TestUnloadDuringLoadRetiresTheNewSession(t *testing.T) {
 	gate := testHooks.gate(t, "race")
 
 	leader := make(chan error, 1)
-	go func() { leader <- m.Load("race") }()
+	go func() { leader <- m.Load(context.Background(), "race") }()
 	<-gate.started // the leader is building the model
 
 	waiter := make(chan error, 1)
-	go func() { waiter <- m.Load("race") }()
+	go func() { waiter <- m.Load(context.Background(), "race") }()
 	waitFor(t, "the second request to wait on the load", func() bool { return m.waitersFor("race") == 1 })
 
 	if err := m.Unload("race"); err != nil {
@@ -70,7 +71,7 @@ func TestUnloadDuringLoadRetiresTheNewSession(t *testing.T) {
 	}
 
 	// A request that arrives AFTER the unload is a new request: it loads normally.
-	if err := m.Load("race"); err != nil {
+	if err := m.Load(context.Background(), "race"); err != nil {
 		t.Fatalf("load after unload: %v", err)
 	}
 	if !m.IsLoaded("race") {
@@ -89,13 +90,13 @@ func TestLoadAfterUnloadDuringLoadLoadsAgain(t *testing.T) {
 	gate := testHooks.gate(t, "again")
 
 	leader := make(chan error, 1)
-	go func() { leader <- m.Load("again") }()
+	go func() { leader <- m.Load(context.Background(), "again") }()
 	<-gate.started
 	if err := m.Unload("again"); err != nil {
 		t.Fatal(err)
 	}
 	after := make(chan error, 1)
-	go func() { after <- m.Load("again") }()
+	go func() { after <- m.Load(context.Background(), "again") }()
 	waitFor(t, "the late request to wait on the cancelled load", func() bool { return m.waitersFor("again") == 1 })
 	if n := len(op.engines()); n != 0 {
 		t.Fatalf("%d engines built while the cancelled load still runs, want 0 (no overlapping build)", n)
@@ -126,7 +127,7 @@ func TestCloseDuringLoadDropsTheNewSession(t *testing.T) {
 	gate := testHooks.gate(t, "late")
 
 	leader := make(chan error, 1)
-	go func() { leader <- m.Load("late") }()
+	go func() { leader <- m.Load(context.Background(), "late") }()
 	<-gate.started
 	m.Close()
 	close(gate.proceed)
@@ -140,7 +141,7 @@ func TestCloseDuringLoadDropsTheNewSession(t *testing.T) {
 	if engs := op.engines(); len(engs) != 1 || !engs[0].closed.Load() {
 		t.Fatalf("the session built during shutdown was not closed: %d engines", len(engs))
 	}
-	if err := m.Load("late"); err == nil {
+	if err := m.Load(context.Background(), "late"); err == nil {
 		t.Fatal("Load after Close succeeded")
 	}
 }
@@ -160,11 +161,11 @@ func TestPanickingBuildDoesNotWedgeTheModel(t *testing.T) {
 		return &fakeEngine{}, nil
 	}
 
-	if err := m.Load("boom"); err == nil {
+	if err := m.Load(context.Background(), "boom"); err == nil {
 		t.Fatal("a load that panicked reported success")
 	}
 	done := make(chan error, 1)
-	go func() { done <- m.Load("boom") }()
+	go func() { done <- m.Load(context.Background(), "boom") }()
 	select {
 	case err := <-done:
 		if err != nil {

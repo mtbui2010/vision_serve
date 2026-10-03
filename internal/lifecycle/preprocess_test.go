@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"errors"
 	"image"
 	"testing"
@@ -59,11 +60,11 @@ func TestPreprocessModelRefusalIsInvalidRequest(t *testing.T) {
 	refusal := errors.New("picky requires a text prompt")
 	testHooks.setInfer(t, "picky", func(models.Runner) (models.Result, error) { return models.Result{}, refusal })
 
-	_, err := m.Preprocess("picky", image.NewRGBA(image.Rect(0, 0, 4, 4)), models.Prompt{})
+	_, err := m.Preprocess(context.Background(), "picky", image.NewRGBA(image.Rect(0, 0, 4, 4)), models.Prompt{})
 	if !errors.Is(err, ErrInvalidRequest) || !errors.Is(err, refusal) {
 		t.Fatalf("Preprocess error = %v, want ErrInvalidRequest wrapping the model's refusal", err)
 	}
-	if _, err := m.Preprocess("no-such-model", nil, models.Prompt{}); !errors.Is(err, ErrModelNotFound) {
+	if _, err := m.Preprocess(context.Background(), "no-such-model", nil, models.Prompt{}); !errors.Is(err, ErrModelNotFound) {
 		t.Fatalf("unknown model: %v, want ErrModelNotFound", err)
 	}
 }
@@ -84,10 +85,10 @@ func TestPreprocessResolvesTemplateName(t *testing.T) {
 		return models.Result{}, err
 	})
 	img := image.NewRGBA(image.Rect(0, 0, 4, 4))
-	if _, err := m.Preprocess("inst", img, models.Prompt{TemplateName: "nope"}); !errors.Is(err, ErrInvalidRequest) {
+	if _, err := m.Preprocess(context.Background(), "inst", img, models.Prompt{TemplateName: "nope"}); !errors.Is(err, ErrInvalidRequest) {
 		t.Fatalf("unknown template: %v, want ErrInvalidRequest", err)
 	}
-	if _, err := m.Preprocess("inst", img, models.Prompt{TemplateName: "mug"}); err != nil {
+	if _, err := m.Preprocess(context.Background(), "inst", img, models.Prompt{TemplateName: "mug"}); err != nil {
 		t.Fatalf("registered template: %v", err)
 	}
 }

@@ -1,12 +1,20 @@
 package engine
 
-import "sync"
+import (
+	"context"
+	"sync"
+)
 
 // Runnable is satisfied by both *Session and *SessionPool, so lifecycle can hold
 // either behind the same interface without knowing which is which.
+//
+// ctx bounds the WAIT for the session, not the inference: a call whose ctx is done before it gets
+// the session (the worker thread of a single session, a free member of a pool) returns an error
+// wrapping ctx.Err() and runs nothing. Once ONNX Runtime has the job it runs to the end (a Run
+// cannot be interrupted) and the call returns its result.
 type Runnable interface {
-	Run(inputs []Tensor) ([]Tensor, error)
-	RunNamed(inputs map[string]Tensor) ([]Tensor, error)
+	Run(ctx context.Context, inputs []Tensor) ([]Tensor, error)
+	RunNamed(ctx context.Context, inputs map[string]Tensor) ([]Tensor, error)
 	InputNames() []string
 	OutputNames() []string
 	ActiveEP() Provider
@@ -50,37 +58,43 @@ func NewSessionPool(sessions []*Session) *SessionPool {
 	return p
 }
 
-func (p *SessionPool) Run(inputs []Tensor) ([]Tensor, error) {
-	s, err := p.take()
+func (p *SessionPool) Run(ctx context.Context, inputs []Tensor) ([]Tensor, error) {
+	s, err := p.take(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { p.ch <- s }()
-	return s.Run(inputs)
+	return s.Run(ctx, inputs)
 }
 
-func (p *SessionPool) RunNamed(inputs map[string]Tensor) ([]Tensor, error) {
-	s, err := p.take()
+func (p *SessionPool) RunNamed(ctx context.Context, inputs map[string]Tensor) ([]Tensor, error) {
+	s, err := p.take(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { p.ch <- s }()
-	return s.RunNamed(inputs)
+	return s.RunNamed(ctx, inputs)
 }
 
-// take borrows a free session, or fails once the pool is closed. Without the done case a call
-// waiting for a slot while Close drained the pool blocked forever.
-func (p *SessionPool) take() (*Session, error) {
+// take borrows a free session, or fails once the pool is closed or ctx is done. Without the done
+// case a call waiting for a slot while Close drained the pool blocked forever; without the ctx case
+// a request whose client had left kept its place in the queue and then ran.
+func (p *SessionPool) take(ctx context.Context) (*Session, error) {
 	select {
 	case <-p.done:
 		return nil, ErrClosed
 	default:
+	}
+	if err := ctx.Err(); err != nil { // a free member must not win over a ctx already done
+		return nil, gaveUp(err)
 	}
 	select {
 	case s := <-p.ch:
 		return s, nil
 	case <-p.done:
 		return nil, ErrClosed
+	case <-ctx.Done():
+		return nil, gaveUp(ctx.Err())
 	}
 }
 

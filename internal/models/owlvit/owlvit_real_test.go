@@ -10,6 +10,7 @@ package owlvit
 //	  go test -run TestRealWeights ./internal/models/owlvit/
 
 import (
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"image"
@@ -28,7 +29,7 @@ import (
 type sessionRunner struct{ s *engine.Session }
 
 func (r sessionRunner) Run(_ string, in map[string]engine.Tensor) ([]engine.Tensor, error) {
-	return r.s.RunNamed(in)
+	return r.s.RunNamed(context.Background(), in)
 }
 func (r sessionRunner) InputNames(string) []string  { return r.s.InputNames() }
 func (r sessionRunner) OutputNames(string) []string { return r.s.OutputNames() }

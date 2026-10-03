@@ -1,6 +1,7 @@
 package background
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"os"
@@ -114,7 +115,7 @@ func BenchmarkBackgroundSAMRealORT(b *testing.B) {
 type sessRunner struct{ s map[string]*engine.Session }
 
 func (r *sessRunner) Run(role string, in map[string]engine.Tensor) ([]engine.Tensor, error) {
-	return r.s[role].RunNamed(in)
+	return r.s[role].RunNamed(context.Background(), in)
 }
 func (r *sessRunner) InputNames(role string) []string  { return r.s[role].InputNames() }
 func (r *sessRunner) OutputNames(role string) []string { return r.s[role].OutputNames() }

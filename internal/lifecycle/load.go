@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -31,11 +32,20 @@ type loadCall struct {
 
 // Load loads a model into memory (idempotent: returns immediately if already loaded).
 // This is where models.Model is built from the manifest and engine.Session is created.
-func (m *Manager) Load(name string) error {
+//
+// ctx bounds only this caller's WAIT. The load itself runs on its own goroutine, owned by no
+// request: when ctx ends first, Load returns an error wrapping ctx.Err() and the load carries on —
+// the model goes live for the requests still waiting and for the next one (the idle reaper unloads
+// it if nobody comes). Cancelling one waiter, the one that started the load included, never
+// cancels the load for the others; only Unload and Close do.
+func (m *Manager) Load(ctx context.Context, name string) error {
 	// One load per name at a time (singleflight). Two first requests used to both hash the
 	// weights and build every ONNX session — twice the VRAM at peak — and throw one copy away.
-	// Waiters re-check after the leader finishes; if it failed, the next one retries the load.
+	// Waiters re-check after the load finishes; if it failed, the next one retries the load.
 	for {
+		if err := ctx.Err(); err != nil {
+			return gaveUp(name, err)
+		}
 		m.mu.Lock()
 		if m.closed {
 			m.mu.Unlock()
@@ -53,7 +63,11 @@ func (m *Manager) Load(name string) error {
 			}
 			m.loading[name] = call
 			m.mu.Unlock()
-			return m.lead(name, call)
+			go func() { _ = m.lead(name, call) }() // lead publishes its result in call.err
+			if err := m.waitLoad(ctx, name, call); err != nil {
+				return err
+			}
+			return call.err // this caller started the load: its result, success or failure
 		}
 		// A request that arrives after an Unload already cancelled this load did not ask for it:
 		// it waits for the cancelled load to finish (two builds of one model must not overlap)
@@ -61,8 +75,13 @@ func (m *Manager) Load(name string) error {
 		joinedCancelled := call.cancelled
 		call.waiters++
 		m.mu.Unlock()
-		<-call.done
-		// Nothing writes call after done is closed (it has left m.loading), so no lock is needed.
+		if err := m.waitLoad(ctx, name, call); err != nil {
+			m.mu.Lock()
+			call.waiters--
+			m.mu.Unlock()
+			return err
+		}
+		// Nothing writes call.err or call.cancelled after done is closed (it has left m.loading).
 		if call.cancelled && !joinedCancelled {
 			// Unloaded while it was loading. This request asked for THAT load; loading the model
 			// again for it would undo the unload the moment it returned.
@@ -71,8 +90,19 @@ func (m *Manager) Load(name string) error {
 	}
 }
 
-// lead runs the load for the request that started it and publishes the result: the session goes
-// live, unless an Unload or Close arrived meanwhile — then it is closed and the load fails.
+// waitLoad waits for call to finish, or for ctx to end (then it returns gaveUp, and the load goes
+// on without this caller).
+func (m *Manager) waitLoad(ctx context.Context, name string, call *loadCall) error {
+	select {
+	case <-call.done:
+		return nil
+	case <-ctx.Done():
+		return gaveUp(name, ctx.Err())
+	}
+}
+
+// lead runs a load, on its own goroutine (see Load), and publishes the result in call: the session
+// goes live, unless an Unload or Close arrived meanwhile — then it is closed and the load fails.
 // A panic while building (a model factory, a binding) becomes an error: it used to leave the
 // name in m.loading forever, so every later request for that model hung.
 func (m *Manager) lead(name string, call *loadCall) (err error) {

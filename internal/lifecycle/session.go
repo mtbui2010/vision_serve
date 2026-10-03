@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"sort"
@@ -39,10 +40,11 @@ type Session struct {
 	pipeline models.PipelineModel       // pipeline mode
 	engines  map[string]engine.Runnable // pipeline mode (role → session or pool)
 	// exclusive (pipeline mode): the model implements models.Exclusive and asked for it, so its
-	// Infer runs under inferMu — one request at a time on THIS loaded model, other models and
-	// other models' sessions unaffected. Decided once at load.
+	// Infer runs holding inferLock — one request at a time on THIS loaded model, other models and
+	// other models' sessions unaffected. Decided once at load. inferLock is a 1-slot semaphore
+	// rather than a sync.Mutex so a request waiting for it can give up when its client leaves.
 	exclusive bool
-	inferMu   sync.Mutex
+	inferLock chan struct{}
 
 	// explainEngine is the same ONNX file loaded with all outputs including explain tensors.
 	// nil until the first /api/explain call (lazy load). Lifecycle owns it.
@@ -79,6 +81,7 @@ func newPipelineSession(name string, task api.Task, p models.PipelineModel, engs
 		pipeline:    p,
 		engines:     engs,
 		exclusive:   ok && ex.Exclusive(),
+		inferLock:   make(chan struct{}, 1),
 		idleTimeout: idle,
 		lastUsed:    now,
 	}
@@ -113,17 +116,34 @@ func pipelineDevice(engs map[string]engine.Runnable) string {
 }
 
 // inferPipeline runs the pipeline model's Infer, under the session's lock when it is Exclusive.
-func (s *Session) inferPipeline(img image.Image, prompt models.Prompt) (api.Result, error) {
+// Waiting for the lock follows ctx; so does every session call the model makes through the runner,
+// so a request whose client leaves mid-pipeline stops before its next stage instead of running it.
+func (s *Session) inferPipeline(ctx context.Context, img image.Image, prompt models.Prompt) (api.Result, error) {
 	if s.exclusive {
-		s.inferMu.Lock()
-		defer s.inferMu.Unlock()
+		if err := ctx.Err(); err != nil { // a free lock must not win over a ctx already done
+			return api.Result{}, gaveUp(s.name, err)
+		}
+		select {
+		case s.inferLock <- struct{}{}:
+			defer func() { <-s.inferLock }()
+		case <-ctx.Done():
+			return api.Result{}, gaveUp(s.name, ctx.Err())
+		}
 	}
-	return s.pipeline.Infer(img, prompt, runner{s.engines})
+	return s.pipeline.Infer(img, prompt, runner{ctx: ctx, engines: s.engines})
+}
+
+// gaveUp is the error of a request that stopped waiting (for a load, a session, the model's lock)
+// because its context ended. It wraps the ctx error: the server tells it from a failure with
+// errors.Is(err, ctx.Err()).
+func gaveUp(name string, ctxErr error) error {
+	return fmt.Errorf("lifecycle: %q: the request is gone, nothing was run for it: %w", name, ctxErr)
 }
 
 // Predict runs the full pipeline: preprocess → infer (ORT) → postprocess (simple), or
-// model-driven multi-stage inference (pipeline). prompt is ignored by simple models.
-func (s *Session) Predict(img image.Image, prompt models.Prompt, now time.Time) (api.Result, error) {
+// model-driven multi-stage inference (pipeline). prompt is ignored by simple models. ctx bounds
+// every wait for a session (see engine.Runnable); an inference already running is not interrupted.
+func (s *Session) Predict(ctx context.Context, img image.Image, prompt models.Prompt, now time.Time) (api.Result, error) {
 	start := now
 
 	var (
@@ -131,9 +151,9 @@ func (s *Session) Predict(img image.Image, prompt models.Prompt, now time.Time) 
 		err error
 	)
 	if s.pipeline != nil {
-		res, err = s.inferPipeline(img, prompt)
+		res, err = s.inferPipeline(ctx, img, prompt)
 	} else {
-		res, err = s.predictSimple(img)
+		res, err = s.predictSimple(ctx, img)
 	}
 	if err != nil {
 		return api.Result{}, err
@@ -159,12 +179,12 @@ func (s *Session) Predict(img image.Image, prompt models.Prompt, now time.Time) 
 // Simple (single-session) models only. Any Detection coordinates are in MODEL-INPUT space — there
 // is no original image to map back to — so the tensor-in path is intended for classification /
 // embedding (no coordinate mapping) or callers that map coordinates themselves.
-func (s *Session) PredictTensor(in engine.Tensor, now time.Time) (api.Result, error) {
+func (s *Session) PredictTensor(ctx context.Context, in engine.Tensor, now time.Time) (api.Result, error) {
 	if s.pipeline != nil {
 		return api.Result{}, fmt.Errorf("%w: tensor-in not supported for multi-session model %q", ErrInvalidRequest, s.name)
 	}
 	start := now
-	outs, err := s.engine.Run([]engine.Tensor{in})
+	outs, err := s.engine.Run(ctx, []engine.Tensor{in})
 	if err != nil {
 		return api.Result{}, err
 	}
@@ -188,12 +208,12 @@ func (s *Session) PredictTensor(in engine.Tensor, now time.Time) (api.Result, er
 }
 
 // predictSimple is the classic single-session pre→infer→post path.
-func (s *Session) predictSimple(img image.Image) (api.Result, error) {
+func (s *Session) predictSimple(ctx context.Context, img image.Image) (api.Result, error) {
 	in, meta, err := s.model.Preprocess(img)
 	if err != nil {
 		return api.Result{}, err
 	}
-	outs, err := s.engine.Run([]engine.Tensor{in})
+	outs, err := s.engine.Run(ctx, []engine.Tensor{in})
 	if err != nil {
 		return api.Result{}, err
 	}
@@ -223,8 +243,10 @@ func runnableSlots(r engine.Runnable) int {
 }
 
 // runner is the lifecycle-backed implementation of models.Runner: it exposes the
-// loaded sessions to a PipelineModel by role, without giving away ownership.
+// loaded sessions to a PipelineModel by role, without giving away ownership. ctx is the request's:
+// each call waits for its session only while the request is still wanted.
 type runner struct {
+	ctx     context.Context
 	engines map[string]engine.Runnable
 }
 
@@ -233,7 +255,7 @@ func (r runner) Run(role string, inputs map[string]engine.Tensor) ([]engine.Tens
 	if !ok {
 		return nil, fmt.Errorf("lifecycle: no ONNX session for role %q", role)
 	}
-	return s.RunNamed(inputs)
+	return s.RunNamed(r.ctx, inputs)
 }
 
 func (r runner) InputNames(role string) []string {

@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"log"
 	"os"
@@ -154,7 +155,7 @@ func TestLoadPassesManifestThreadsPerRole(t *testing.T) {
 		mu.Unlock()
 		return &fakeEngine{}, nil
 	}
-	if err := m.Load("threaded"); err != nil {
+	if err := m.Load(context.Background(), "threaded"); err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 2 || got["head"] != 1 || got["det"] != -1 {

@@ -10,6 +10,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -448,17 +449,19 @@ func applyProvider(opts *ort.SessionOptions, p Provider, modelPath string) error
 //
 // Inputs may be float32 (default) or int64 (Dtype=="i64", e.g. GroundingDINO text
 // tokens). Outputs are read back as float32 (all current models output float32).
-func (s *Session) Run(inputs []Tensor) ([]Tensor, error) {
+//
+// ctx bounds only the wait for the session's worker (see Runnable).
+func (s *Session) Run(ctx context.Context, inputs []Tensor) ([]Tensor, error) {
 	if len(inputs) != len(s.inputNames) {
 		return nil, fmt.Errorf("engine: input count %d != model input count %d", len(inputs), len(s.inputNames))
 	}
-	return s.submit(func() ([]Tensor, error) { return s.runOnThread(inputs) })
+	return s.submit(ctx, func() ([]Tensor, error) { return s.runOnThread(inputs) })
 }
 
 // RunNamed runs inference binding inputs BY NAME (robust when a model has many inputs
 // whose ONNX order is not obvious, e.g. the SAM decoder's 6 inputs). Every input name
 // the session declares must be present in the map.
-func (s *Session) RunNamed(inputs map[string]Tensor) ([]Tensor, error) {
+func (s *Session) RunNamed(ctx context.Context, inputs map[string]Tensor) ([]Tensor, error) {
 	ordered := make([]Tensor, 0, len(s.inputNames))
 	for _, name := range s.inputNames {
 		t, ok := inputs[name]
@@ -467,16 +470,23 @@ func (s *Session) RunNamed(inputs map[string]Tensor) ([]Tensor, error) {
 		}
 		ordered = append(ordered, t)
 	}
-	return s.submit(func() ([]Tensor, error) { return s.runOnThread(ordered) })
+	return s.submit(ctx, func() ([]Tensor, error) { return s.runOnThread(ordered) })
 }
 
 // submit funnels one unit of inference work onto the session's dedicated OS thread and waits
 // for its result. The worker processes jobs serially, so this also serializes concurrent
 // callers (replacing the old mutex) while guaranteeing the ORT call runs on the pinned thread.
-func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
+//
+// The hand-over is where a caller queues behind the job running now, so that wait follows ctx: a
+// caller whose ctx is done before the worker takes its job gives up, and the job never runs. Once
+// the worker has it, submit waits for the result whatever ctx does: ORT cannot be interrupted.
+func (s *Session) submit(ctx context.Context, work func() ([]Tensor, error)) ([]Tensor, error) {
 	type result struct {
 		outs []Tensor
 		err  error
+	}
+	if err := ctx.Err(); err != nil { // an idle worker must not win over a ctx already done
+		return nil, gaveUp(err)
 	}
 	ch := make(chan result, 1)
 	s.jobsMu.RLock()
@@ -484,7 +494,7 @@ func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
 		s.jobsMu.RUnlock()
 		return nil, ErrClosed
 	}
-	s.jobs <- func() {
+	job := func() {
 		var r result
 		// A panic in the job must not unwind the worker (it would kill the process, and with it
 		// every other session). The session stays usable: the panic is in Go code around the ORT
@@ -497,6 +507,12 @@ func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
 			ch <- r
 		}()
 		r.outs, r.err = work()
+	}
+	select {
+	case s.jobs <- job:
+	case <-ctx.Done():
+		s.jobsMu.RUnlock()
+		return nil, gaveUp(ctx.Err())
 	}
 	s.jobsMu.RUnlock()
 	// Work accepted before Close still runs: the worker drains jobs before destroying the session.
@@ -567,6 +583,12 @@ func (s *Session) Close() error {
 		err = <-s.closeErr
 	})
 	return err
+}
+
+// gaveUp is the error of a call that stopped waiting for a session because its ctx ended. It wraps
+// the ctx error, so a caller can tell it from an inference failure with errors.Is.
+func gaveUp(ctxErr error) error {
+	return fmt.Errorf("engine: stopped waiting for the session, nothing was run: %w", ctxErr)
 }
 
 func destroyValues(vals []ort.Value) {

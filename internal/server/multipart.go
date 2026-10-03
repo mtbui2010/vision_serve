@@ -25,6 +25,13 @@ import (
 // as the server's ReadTimeout. The cost is a race: a slot that frees during the upload may be taken
 // by the time it ends, and that request is then refused after its upload, as before.
 //
+// The probe also comes before the form is validated, so under overload a malformed form (a bad
+// option, a missing or broken part after the image) is answered 503 rather than 400; its retry
+// gets the 400. That is deliberate: most malformations sit in or after the image part, so seeing
+// them means reading the upload the probe exists to skip, and checking the few fields that came
+// before the image would copy each endpoint's validation in here to change which error a broken
+// client sees first.
+//
 // Field order is up to the client. When a kept file part arrives before the model name is known,
 // it is stored as ParseMultipartForm stored it — in memory up to the form's memory budget, the
 // rest in a temporary file — and nothing is probed. The bounds

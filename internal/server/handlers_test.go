@@ -278,6 +278,70 @@ func TestCanceledRequestSkipsInference(t *testing.T) {
 	}
 }
 
+// A client that leaves while its admitted request waits inside the runtime (for the model to load,
+// a session, a model's lock) gets 499 — not the 500 a runtime error would give — and the request
+// gives its admission slot back. (A form naming its model before its image has admission probed
+// first: the leading admit:m release.)
+func TestClientGoneWhileWaitingInRuntime(t *testing.T) {
+	png := pngBytes(t, 8, 8)
+	for _, c := range []struct {
+		req  func() *http.Request
+		want []string
+	}{
+		{func() *http.Request {
+			return multipartRequest(t, "/api/predict", map[string]string{"model": "m"}, part{"image", "i.png", png})
+		}, []string{"admit:m", "release", "admit:m", "predict:m", "release"}},
+		{func() *http.Request {
+			return multipartRequest(t, "/api/explain", map[string]string{"model": "m"}, part{"image", "i.png", png})
+		}, []string{"admit:m", "release", "admit:m", "explain:m", "release"}},
+		{func() *http.Request {
+			return multipartRequest(t, "/api/preprocess", map[string]string{"model": "m", "prompt": "cat"})
+		}, []string{"admit:m", "preprocess:m", "release"}},
+		{func() *http.Request {
+			return httptest.NewRequest("POST", "/api/infer_tensor?model=m&shape=1", bytes.NewReader([]byte{0, 0, 128, 63}))
+		}, []string{"admit:m", "tensor:m", "release"}},
+		{func() *http.Request {
+			return jsonRequest("/api/load", []byte(`{"model":"m"}`))
+		}, []string{"load:m"}},
+	} {
+		f := &fakeRuntime{runWait: make(chan struct{}), runEntered: make(chan struct{})}
+		_, h := newTestServer(f)
+		ctx, cancel := context.WithCancel(context.Background())
+		req := c.req().WithContext(ctx)
+		done := make(chan *httptest.ResponseRecorder, 1)
+		go func() { done <- do(h, req) }()
+		<-f.runEntered // the request is waiting inside the runtime
+		cancel()
+		select {
+		case rec := <-done:
+			if rec.Code != statusClientClosedRequest {
+				t.Errorf("%s: status %d %s, want 499", req.URL, rec.Code, rec.Body)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s: handler still waiting after its client left", req.URL)
+		}
+		if got := strings.Join(f.Events(), " "); got != strings.Join(c.want, " ") {
+			t.Errorf("%s: events %q, want %q", req.URL, got, strings.Join(c.want, " "))
+		}
+	}
+}
+
+// A runtime error that merely mentions context.Canceled while the client is still there is not a
+// 499: only the request's own context ending is.
+func TestCanceledErrorWithLiveClientIsNotClientGone(t *testing.T) {
+	if err := orClientGone(context.Background(), fmt.Errorf("x: %w", context.Canceled)); errors.Is(err, errClientGone) {
+		t.Fatalf("live request mapped to errClientGone: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := orClientGone(ctx, errors.New("model failed")); errors.Is(err, errClientGone) {
+		t.Fatalf("an unrelated failure of a gone request mapped to errClientGone: %v", err)
+	}
+	if err := orClientGone(ctx, fmt.Errorf("lifecycle: gave up: %w", context.Canceled)); !errors.Is(err, errClientGone) {
+		t.Fatalf("gone request: %v, want errClientGone", err)
+	}
+}
+
 // Predict checks the context after the (possibly slow) decode, right before inference.
 func TestPredictChecksContextBeforeInference(t *testing.T) {
 	f := &fakeRuntime{}

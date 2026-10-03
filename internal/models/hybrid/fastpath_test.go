@@ -1,6 +1,7 @@
 package hybrid
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -371,7 +372,9 @@ func TestHeadONNXMatchesGoORT(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer sess.Close()
-			r := &headRunner{in: sess.InputNames(), out: sess.OutputNames(), run: sess.RunNamed}
+			r := &headRunner{in: sess.InputNames(), out: sess.OutputNames(), run: func(in map[string]engine.Tensor) ([]engine.Tensor, error) {
+				return sess.RunNamed(context.Background(), in)
+			}}
 
 			const q, n = 300, 5
 			feats, text := tinyInputs(q, proj.DFeat, n, proj.DText)

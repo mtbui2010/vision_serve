@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -17,8 +18,19 @@ const retryAfterSeconds = 1
 // reads the response; the code is for the access log.
 const statusClientClosedRequest = 499
 
-// errClientGone: the client disconnected before inference started, so it was not run.
+// errClientGone: the client disconnected before inference started, so it was not run (or, for a
+// multi-stage pipeline, its remaining stages were not).
 var errClientGone = errors.New("client disconnected before inference started")
+
+// orClientGone returns errClientGone when err is the runtime giving up on a request because ctx
+// ended — its client left while it waited for the model to load, for a session or for a model's
+// lock — and err unchanged otherwise.
+func orClientGone(ctx context.Context, err error) error {
+	if err != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		return errClientGone
+	}
+	return err
+}
 
 // requestError marks a malformed request (a form or JSON body that does not parse, a missing
 // field, a bad prompt or depth map). It keeps the message as written — clients match on it — and

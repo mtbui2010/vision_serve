@@ -80,7 +80,7 @@ func runServe(args []string) error {
 			}
 			go func(n string) {
 				log.Printf("preloading %s ...", n)
-				if err := mgr.Load(n); err != nil {
+				if err := mgr.Load(context.Background(), n); err != nil {
 					log.Printf("preload %s failed: %v", n, err)
 				} else {
 					log.Printf("preloaded: %s", n)
