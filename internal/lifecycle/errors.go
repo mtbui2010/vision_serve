@@ -13,3 +13,14 @@ var (
 	// ErrOverloaded: admission control refused the request (too many waiting for this model).
 	ErrOverloaded = errors.New("model overloaded")
 )
+
+// Admit reserves a slot for one request on model name BEFORE the server decodes the upload, so
+// memory does not grow with the number of requests queued behind a busy model. The caller must
+// call release when the request is done. It returns an error wrapping ErrOverloaded when the
+// model's queue is full.
+//
+// CONTRACT STUB (refactor wave 1): always admits. The runtime stream replaces the body with a
+// real per-model bound; the HTTP stream already calls it. Keep the signature.
+func (m *Manager) Admit(name string) (release func(), err error) {
+	return func() {}, nil
+}
