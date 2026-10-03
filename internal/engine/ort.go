@@ -294,6 +294,23 @@ func createSession(modelPath string, inputNames, outputNames []string, providers
 				return nil, activeEP, fmt.Errorf("engine: set %d intra-op threads: %w", so.IntraOpThreads, err)
 			}
 		}
+		// The CPU session runs without ORT's memory pattern (the CPU arena stays on). With both on,
+		// the first Run allocates its tensors one by one from the arena, and the second plans one
+		// block for all of them — which the fragmented first-run chunks cannot hold, so the arena
+		// grows a new region and keeps both: measured on CPU (fresh server, 5–10 identical
+		// requests, VmHWM) grounding-dino 2.24 → 3.47 GB from the 2nd request on, rf-detr 0.32 →
+		// 0.48 GB, MobileSAM automask 0.65 → 0.98 GB (640×480), and more for every new input shape
+		// or orig_im_size. Off, each stays at its first-request peak; latency did not move
+		// (rf-detr 0.15 s, grounding-dino 1.8 s, automask ~4 s, within run-to-run noise), and the
+		// pattern only places buffers, so outputs are bit-identical. Turning the arena off instead
+		// was worse on both counts (automask +15 % memory and +15–20 % latency). GPU EPs keep
+		// ORT's defaults: not measured there.
+		if ep == ProviderCPU {
+			if err := opts.SetMemPattern(false); err != nil {
+				opts.Destroy()
+				return nil, activeEP, fmt.Errorf("engine: disable the memory pattern: %w", err)
+			}
+		}
 		var s *ort.DynamicAdvancedSession
 		// An EP this ORT build does not ship (CUDA on the CPU-only wheel or the CPU Docker image)
 		// fails HERE, at append time. The session would still be created — on CPU — so this EP
@@ -456,13 +473,29 @@ func (s *Session) Run(ctx context.Context, inputs []Tensor) ([]Tensor, error) {
 	if len(inputs) != len(s.inputNames) {
 		return nil, fmt.Errorf("engine: input count %d != model input count %d", len(inputs), len(s.inputNames))
 	}
-	return s.submit(ctx, func() ([]Tensor, error) { return s.runOnThread(inputs) })
+	return s.submit(ctx, func() ([]Tensor, error) { return s.runOnThread(inputs, nil) })
 }
 
 // RunNamed runs inference binding inputs BY NAME (robust when a model has many inputs
 // whose ONNX order is not obvious, e.g. the SAM decoder's 6 inputs). Every input name
 // the session declares must be present in the map.
 func (s *Session) RunNamed(ctx context.Context, inputs map[string]Tensor) ([]Tensor, error) {
+	return s.RunNamedInto(ctx, inputs, nil)
+}
+
+// RunNamedInto is RunNamed with caller-owned buffers for some outputs: ONNX Runtime writes each
+// output named in into straight into that tensor's Data (float32, and its Shape must be exactly
+// the shape the run produces, or Run fails), and the returned tensor for that output aliases it.
+// The other outputs are allocated by ORT and copied out as in RunNamed.
+//
+// It is for large outputs a caller consumes and drops at once (MobileSAM's full-resolution
+// mask logits, 30 MB at 3200×2400): the caller reuses one buffer across calls, where RunNamed
+// costs an ORT arena allocation plus a Go copy per call. The values are the same either way.
+//
+// ctx follows RunNamed's contract (submit): a done ctx never starts the run, and once the worker
+// has taken it RunNamedInto returns only after ORT has finished. So when it returns — result,
+// error or ctx — nothing writes into the buffers any more, and the caller may free them.
+func (s *Session) RunNamedInto(ctx context.Context, inputs, into map[string]Tensor) ([]Tensor, error) {
 	ordered := make([]Tensor, 0, len(s.inputNames))
 	for _, name := range s.inputNames {
 		t, ok := inputs[name]
@@ -471,7 +504,33 @@ func (s *Session) RunNamed(ctx context.Context, inputs map[string]Tensor) ([]Ten
 		}
 		ordered = append(ordered, t)
 	}
-	return s.submit(ctx, func() ([]Tensor, error) { return s.runOnThread(ordered) })
+	var outs []Tensor
+	if len(into) > 0 {
+		outs = make([]Tensor, len(s.outputNames))
+		n := 0
+		for i, name := range s.outputNames {
+			if t, ok := into[name]; ok {
+				if t.isI64() || len(t.Data) == 0 {
+					return nil, fmt.Errorf("engine: output buffer %q must be a non-empty float32 tensor", name)
+				}
+				outs[i] = t
+				n++
+			}
+		}
+		if n != len(into) {
+			return nil, fmt.Errorf("engine: output buffers %v name an output the model does not have (outputs %v)",
+				mapKeys(into), s.outputNames)
+		}
+	}
+	return s.submit(ctx, func() ([]Tensor, error) { return s.runOnThread(ordered, outs) })
+}
+
+func mapKeys(m map[string]Tensor) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // submit funnels one unit of inference work onto the session's dedicated OS thread and waits
@@ -523,7 +582,10 @@ func (s *Session) submit(ctx context.Context, work func() ([]Tensor, error)) ([]
 
 // runOnThread is the shared inference core; it ONLY ever executes on the worker's locked OS
 // thread (via submit), so it touches s.sess without further locking.
-func (s *Session) runOnThread(inputs []Tensor) ([]Tensor, error) {
+//
+// into, when non-nil, is index-aligned with the outputs: an entry with Data is a caller-owned
+// buffer ORT writes that output into (see RunNamedInto); a zero entry lets ORT allocate.
+func (s *Session) runOnThread(inputs, into []Tensor) ([]Tensor, error) {
 	inVals := make([]ort.Value, 0, len(inputs))
 	for i, t := range inputs {
 		var (
@@ -543,12 +605,23 @@ func (s *Session) runOnThread(inputs []Tensor) ([]Tensor, error) {
 	}
 	defer destroyValues(inVals)
 
-	// nil outputs -> ORT allocates; we read them back after Run.
+	// nil outputs -> ORT allocates; we read them back after Run. A caller buffer is wrapped
+	// as-is, so ORT writes that output straight into Go memory.
 	outVals := make([]ort.Value, len(s.outputNames))
+	defer destroyValues(outVals)
+	for i := range into {
+		if into[i].Data == nil {
+			continue
+		}
+		v, err := ort.NewTensor(ort.NewShape(into[i].Shape...), into[i].Data)
+		if err != nil {
+			return nil, fmt.Errorf("engine: failed to wrap output buffer %q: %w", s.outputNames[i], err)
+		}
+		outVals[i] = v
+	}
 	if err := s.sess.Run(inVals, outVals); err != nil {
 		return nil, fmt.Errorf("engine: Run failed: %w", err)
 	}
-	defer destroyValues(outVals)
 
 	outs := make([]Tensor, 0, len(outVals))
 	for i, v := range outVals {
@@ -557,9 +630,14 @@ func (s *Session) runOnThread(inputs []Tensor) ([]Tensor, error) {
 			return nil, fmt.Errorf("engine: output %q is not float32 (unsupported dtype)", s.outputNames[i])
 		}
 		data := ft.GetData()
+		shape := append([]int64(nil), ft.GetShape()...)
+		if i < len(into) && into[i].Data != nil {
+			outs = append(outs, Tensor{Data: data, Shape: shape}) // the caller's buffer: no copy
+			continue
+		}
 		cp := make([]float32, len(data))
 		copy(cp, data) // copy because the value is Destroyed in defer
-		outs = append(outs, Tensor{Data: cp, Shape: append([]int64(nil), ft.GetShape()...)})
+		outs = append(outs, Tensor{Data: cp, Shape: shape})
 	}
 	return outs, nil
 }

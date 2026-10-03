@@ -21,6 +21,18 @@ type Runnable interface {
 	Close() error
 }
 
+// IntoRunnable is a Runnable that can write chosen outputs into caller-owned buffers
+// (Session.RunNamedInto), under RunNamed's ctx contract. Both *Session and *SessionPool
+// implement it.
+type IntoRunnable interface {
+	RunNamedInto(ctx context.Context, inputs, into map[string]Tensor) ([]Tensor, error)
+}
+
+var (
+	_ IntoRunnable = (*Session)(nil)
+	_ IntoRunnable = (*SessionPool)(nil)
+)
+
 // SessionPool wraps N identical ONNX sessions as a bounded concurrency pool.
 // A caller that calls RunNamed blocks only when all N sessions are busy, then
 // runs as soon as one becomes free. The pool is goroutine-safe.
@@ -74,6 +86,17 @@ func (p *SessionPool) RunNamed(ctx context.Context, inputs map[string]Tensor) ([
 	}
 	defer func() { p.ch <- s }()
 	return s.RunNamed(ctx, inputs)
+}
+
+// RunNamedInto is Session.RunNamedInto on a free member of the pool, with the same ctx contract
+// as RunNamed: a call whose ctx ends before it gets a member runs nothing.
+func (p *SessionPool) RunNamedInto(ctx context.Context, inputs, into map[string]Tensor) ([]Tensor, error) {
+	s, err := p.take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { p.ch <- s }()
+	return s.RunNamedInto(ctx, inputs, into)
 }
 
 // take borrows a free session, or fails once the pool is closed or ctx is done. Without the done
