@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -91,8 +93,18 @@ func TestManifestThreadsCapped(t *testing.T) {
 }
 
 // A pool's sessions get the capped thread count; a lone session keeps ORT's default.
+// setPoolThreadsUnderCap sets VISIONSERVE_POOL_THREADS to a value the NumCPU cap leaves alone on
+// this host (3, or fewer on a smaller one) and returns it. A fixed 5 was capped to 4 on the 4-CPU
+// CI runner.
+func setPoolThreadsUnderCap(t *testing.T) int {
+	t.Helper()
+	n := min(3, runtime.NumCPU())
+	t.Setenv("VISIONSERVE_POOL_THREADS", strconv.Itoa(n))
+	return n
+}
+
 func TestNewRunnableThreadsOnlyForPools(t *testing.T) {
-	t.Setenv("VISIONSERVE_POOL_THREADS", "5")
+	envThreads := setPoolThreadsUnderCap(t)
 	stop := errors.New("captured")
 	var got []engine.SessionOptions
 	prev := newEngineSession
@@ -107,15 +119,15 @@ func TestNewRunnableThreadsOnlyForPools(t *testing.T) {
 			t.Fatalf("n=%d: err = %v, want the creation error", n, err)
 		}
 	}
-	if len(got) != 2 || got[0].IntraOpThreads != 0 || got[1].IntraOpThreads != 5 {
-		t.Fatalf("sessions created with %+v, want [{0} {5}]", got)
+	if len(got) != 2 || got[0].IntraOpThreads != 0 || got[1].IntraOpThreads != envThreads {
+		t.Fatalf("sessions created with %+v, want [{0} {%d}]", got, envThreads)
 	}
 }
 
 // runtime.threads replaces the default for every session newRunnable creates: a lone session's ORT
 // default and a pool's cap alike. threads < 0 (the manifest sets nothing) changes nothing.
 func TestNewRunnableManifestThreadsOverride(t *testing.T) {
-	t.Setenv("VISIONSERVE_POOL_THREADS", "5")
+	envThreads := setPoolThreadsUnderCap(t)
 	stop := errors.New("captured")
 	var got []int
 	prev := newEngineSession
@@ -126,11 +138,11 @@ func TestNewRunnableManifestThreadsOverride(t *testing.T) {
 	defer func() { newEngineSession = prev }()
 
 	cases := []struct{ n, threads, want int }{
-		{1, -1, 0}, // unset, lone session: ORT default
-		{1, 1, 1},  // lone session pinned to one thread
-		{4, -1, 5}, // unset, pool: the pool cap (env)
-		{4, 2, 2},  // the manifest wins over the pool cap
-		{4, 0, 0},  // 0 = ORT default, explicitly, even in a pool
+		{1, -1, 0},          // unset, lone session: ORT default
+		{1, 1, 1},           // lone session pinned to one thread
+		{4, -1, envThreads}, // unset, pool: the pool cap (env)
+		{4, 2, 2},           // the manifest wins over the pool cap
+		{4, 0, 0},           // 0 = ORT default, explicitly, even in a pool
 	}
 	for _, c := range cases {
 		got = got[:0]
