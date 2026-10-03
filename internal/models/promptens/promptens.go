@@ -17,9 +17,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"math"
 	"os"
 	"strings"
+
+	"visionserve/internal/vision/util"
 )
 
 // Placeholder is what Apply substitutes the class name for.
@@ -91,7 +92,7 @@ func Average(embs [][]float32, nClasses, nTemplates int) ([][]float32, error) {
 				acc[j] += v
 			}
 		}
-		out[c] = normalize(acc)
+		out[c] = util.L2NormalizeInPlace(acc)
 	}
 	return out, nil
 }
@@ -112,20 +113,4 @@ func Key(templates, classes []string) string {
 		_, _ = h.Write([]byte{0})
 	}
 	return hex.EncodeToString(h.Sum(nil))
-}
-
-// normalize scales v to unit length in place and returns it (a zero vector is left alone).
-func normalize(v []float32) []float32 {
-	var sum float64
-	for _, x := range v {
-		sum += float64(x) * float64(x)
-	}
-	if sum == 0 {
-		return v
-	}
-	inv := float32(1 / math.Sqrt(sum))
-	for i := range v {
-		v[i] *= inv
-	}
-	return v
 }

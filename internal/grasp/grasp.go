@@ -18,15 +18,13 @@ import (
 	"math"
 	"slices"
 
+	"visionserve/internal/vision/mask"
 	"visionserve/pkg/api"
 )
 
-// Bitmap is a binary mask. Data is row-major, length W*H; a pixel is "set" when
-// the corresponding entry is true.
-type Bitmap struct {
-	W, H int
-	Data []bool
-}
+// Bitmap is a binary mask: row-major Data of length W*H, true = set. It IS the shared
+// vision/mask bitmap, so a segmenter's mask feeds the search with no conversion.
+type Bitmap = mask.Bitmap
 
 // Params configures the analytic grasp search. Use DefaultParams for sane values.
 type Params struct {
@@ -71,32 +69,6 @@ type boundaryPoint struct {
 // normalRadius is the Sobel-like kernel radius (matches utils.mask2normalmap r=2).
 const normalRadius = 2
 
-// boundingBox returns the tight inclusive bbox [x0,y0]..[x1,y1] of the set pixels.
-// ok is false when the mask is empty.
-func boundingBox(b Bitmap) (x0, y0, x1, y1 int, ok bool) {
-	x0, y0, x1, y1 = b.W, b.H, -1, -1
-	for y := 0; y < b.H; y++ {
-		row := y * b.W
-		for x := 0; x < b.W; x++ {
-			if b.Data[row+x] {
-				if x < x0 {
-					x0 = x
-				}
-				if x > x1 {
-					x1 = x
-				}
-				if y < y0 {
-					y0 = y
-				}
-				if y > y1 {
-					y1 = y
-				}
-			}
-		}
-	}
-	return x0, y0, x1, y1, x1 >= 0
-}
-
 // collectBoundary returns the nonzero-normal boundary pixels as unit-normal
 // contacts (no decimation yet). Equivalent to the torch.nonzero(normalmap_norm)
 // step in mask2grasps, using the same separable Sobel-like kernels as
@@ -119,10 +91,11 @@ func boundingBox(b Bitmap) (x0, y0, x1, y1 int, ok bool) {
 func collectBoundary(b Bitmap) []boundaryPoint {
 	const eps = 1e-10
 	const r = normalRadius
-	bx0, by0, bx1, by1, ok := boundingBox(b)
-	if !ok {
+	ext := b.Extent() // tight inclusive bbox of the set pixels
+	if ext.Empty() {
 		return nil
 	}
+	bx0, by0, bx1, by1 := ext.MinX, ext.MinY, ext.MaxX, ext.MaxY
 
 	// Summed-area table over the TIGHT bbox: sat[(j+1)*stride+(i+1)] = number of set
 	// pixels in the local rectangle [0..i]×[0..j]. Set pixels exist only inside the

@@ -3,11 +3,11 @@ package siglip
 import (
 	"fmt"
 	"image"
-	"math"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/models/clip"
+	"visionserve/internal/vision/util"
 )
 
 func init() {
@@ -123,26 +123,7 @@ func decodeTextEmbeddings(outs []engine.Tensor, n int) ([][]float32, error) {
 	}
 	embs := make([][]float32, n)
 	for i := 0; i < n; i++ {
-		embs[i] = l2Normalize(t.Data[i*dim : (i+1)*dim])
+		embs[i] = util.L2Normalized(t.Data[i*dim : (i+1)*dim])
 	}
 	return embs, nil
-}
-
-// l2Normalize returns a normalised COPY of v (a zero vector is returned unchanged).
-func l2Normalize(v []float32) []float32 {
-	var sumSq float64
-	for _, x := range v {
-		sumSq += float64(x) * float64(x)
-	}
-	out := make([]float32, len(v))
-	norm := math.Sqrt(sumSq)
-	if norm == 0 {
-		copy(out, v)
-		return out
-	}
-	inv := float32(1.0 / norm)
-	for i, x := range v {
-		out[i] = x * inv
-	}
-	return out
 }

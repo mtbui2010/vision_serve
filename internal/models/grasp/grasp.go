@@ -22,8 +22,6 @@ package grasp
 import (
 	"fmt"
 	"image"
-	"path/filepath"
-	"strconv"
 	"strings"
 
 	"visionserve/internal/engine"
@@ -31,6 +29,7 @@ import (
 	"visionserve/internal/models"
 	"visionserve/internal/models/groundingdino"
 	"visionserve/internal/models/mobilesam"
+	"visionserve/internal/vision/util"
 	"visionserve/pkg/api"
 )
 
@@ -44,11 +43,7 @@ const (
 	roleDecoder = "decoder"
 )
 
-const (
-	defaultSegmenter  = "mobile-sam"
-	defaultBoxThresh  = 0.3
-	defaultTextThresh = 0.25
-)
+const defaultSegmenter = "mobile-sam"
 
 // defaultMaxGraspsPerMask caps the grasps returned for EACH mask (the best-quality ones). It is
 // deliberately separate from the manifest's max_detections, which is the DETECTOR's cap (300 on
@@ -67,9 +62,9 @@ type detector interface {
 // graspModel is the composed pipeline.
 type graspModel struct {
 	cfg     models.Config
-	sam     models.PipelineModel // segmenter (MobileSAM)
-	det     detector             // optional; nil => class-agnostic
-	gripMin float64              // manifest gripper defaults (px); 0 => core default
+	sam     bitmapSegmenter // segmenter (MobileSAM)
+	det     detector        // optional; nil => class-agnostic
+	gripMin float64         // manifest gripper defaults (px); 0 => core default
 	gripMax float64
 	// serialize is true only for the GroundingDINO detector variant (grasp-gd), which must
 	// run one whole pipeline at a time (see groundingdino.PipelineMu). grasp-rfdetr and the
@@ -95,9 +90,9 @@ func New(cfg models.Config) (models.Base, error) {
 	if err != nil {
 		return nil, fmt.Errorf("grasp: segmenter: %w", err)
 	}
-	sam, ok := samBase.(models.PipelineModel)
+	sam, ok := samBase.(bitmapSegmenter)
 	if !ok {
-		return nil, fmt.Errorf("grasp: segmenter is not a PipelineModel")
+		return nil, fmt.Errorf("grasp: segmenter does not expose its mask bitmaps")
 	}
 
 	g := &graspModel{cfg: cfg, sam: sam, gripMin: cfg.GripperMin, gripMax: cfg.GripperMax}
@@ -123,19 +118,12 @@ func New(cfg models.Config) (models.Base, error) {
 // else must be a registered plain Model driven via its Preprocess/Postprocess.
 func newDetector(name string, cfg models.Config) (detector, error) {
 	if name == "grounding-dino" {
-		tok, err := groundingdino.LoadTokenizer(resolveVocab(cfg))
+		tok, err := groundingdino.LoadTokenizer(groundingdino.VocabPath(cfg.Files[roleDet], cfg.Dir))
 		if err != nil {
 			return nil, fmt.Errorf("grasp: detector grounding-dino: %w", err)
 		}
-		box, text := cfg.ConfThresh, cfg.TextThresh
-		if box <= 0 {
-			box = defaultBoxThresh
-		}
-		if text <= 0 {
-			text = defaultTextThresh
-		}
 		return &gdinoDetector{
-			tok: tok, box: box, text: text,
+			tok: tok, box: cfg.ConfThresh, text: cfg.TextThresh,
 			joint: groundingdino.JointTextPassOrSafe(cfg.Files[roleDet]),
 		}, nil
 	}
@@ -170,11 +158,12 @@ func (g *graspModel) PoolSizes() map[string]int {
 	return nil
 }
 
-// bitmapSegmenter is the fast seam: a segmenter that hands back the raw mask
-// bitmaps (original-image resolution) alongside the RLE-encoded masks, so the grasp
-// search runs on the bitmap directly instead of decoding the RLE straight back.
-// MobileSAM implements it; any segmenter that does not falls back to RLE decode.
+// bitmapSegmenter is the segmenter seam: a PipelineModel that also hands back the raw mask
+// bitmaps (original-image resolution) alongside the RLE-encoded masks, so the grasp search runs
+// on the bitmap directly instead of decoding the RLE straight back. MobileSAM — the only
+// segmenter New accepts — implements it, and New refuses one that does not.
 type bitmapSegmenter interface {
+	models.PipelineModel
 	InferMasks(img image.Image, prompt models.Prompt, r models.Runner) ([]models.Mask, []mobilesam.MaskBitmap, error)
 }
 
@@ -256,38 +245,18 @@ func (g *graspModel) Infer(img image.Image, prompt models.Prompt, r models.Runne
 	return res, nil
 }
 
-// segment runs the segmenter and returns the RLE masks (for the API response) plus
-// the index-aligned raw bitmaps (for the grasp search). It prefers the bitmapSegmenter
-// seam — one RLE encode, ZERO decode — and falls back to Infer + RLE decode for any
-// segmenter that does not expose bitmaps.
+// segment runs the segmenter and returns the RLE masks (for the API response) plus the
+// index-aligned raw bitmaps (for the grasp search): one RLE encode, ZERO decode.
 func (g *graspModel) segment(img image.Image, prompt models.Prompt, r models.Runner) ([]models.Mask, []graspcore.Bitmap, error) {
-	if bs, ok := g.sam.(bitmapSegmenter); ok {
-		masks, bms, err := bs.InferMasks(img, prompt, r)
-		if err != nil {
-			return nil, nil, err
-		}
-		bitmaps := make([]graspcore.Bitmap, len(bms))
-		for i := range bms {
-			bitmaps[i] = graspcore.Bitmap{W: bms[i].W, H: bms[i].H, Data: bms[i].Data}
-		}
-		return masks, bitmaps, nil
-	}
-
-	// Fallback: encode→decode round-trip (defensive; mobile-sam implements the seam).
-	w, h := img.Bounds().Dx(), img.Bounds().Dy()
-	segRes, err := g.sam.Infer(img, prompt, r)
+	masks, bms, err := g.sam.InferMasks(img, prompt, r)
 	if err != nil {
 		return nil, nil, err
 	}
-	bitmaps := make([]graspcore.Bitmap, len(segRes.Masks))
-	for i := range segRes.Masks {
-		bm, err := decodeRLEColumnMajor(segRes.Masks[i].RLE, w, h)
-		if err != nil {
-			return nil, nil, fmt.Errorf("grasp: decode mask RLE: %w", err)
-		}
-		bitmaps[i] = bm
+	bitmaps := make([]graspcore.Bitmap, len(bms))
+	for i := range bms {
+		bitmaps[i] = graspcore.Bitmap{W: bms[i].W, H: bms[i].H, Data: bms[i].Data}
 	}
-	return segRes.Masks, bitmaps, nil
+	return masks, bitmaps, nil
 }
 
 // graspParams resolves the gripper opening bounds: core defaults, overridden by
@@ -363,7 +332,7 @@ func (d *modelDetector) detect(img image.Image, _ models.Prompt, r models.Runner
 	if err != nil {
 		return nil, fmt.Errorf("grasp: detector preprocess: %w", err)
 	}
-	inName := firstName(r.InputNames(roleDet), "")
+	inName := util.FirstName(r.InputNames(roleDet), "")
 	if inName == "" {
 		return nil, fmt.Errorf("grasp: detector session %q has no input name", roleDet)
 	}
@@ -381,8 +350,8 @@ func (d *modelDetector) detect(img image.Image, _ models.Prompt, r models.Runner
 // gdinoDetector runs GroundingDINO (text-prompted) for boxes + labels.
 type gdinoDetector struct {
 	tok       *groundingdino.Tokenizer
-	box, text float64
-	joint     bool // gdino weights take the whole prompt in ONE pass
+	box, text float64 // the manifest's thresholds (0 = built-in default)
+	joint     bool    // gdino weights take the whole prompt in ONE pass
 }
 
 func (d *gdinoDetector) detect(img image.Image, prompt models.Prompt, r models.Runner) ([]models.Detection, error) {
@@ -392,65 +361,8 @@ func (d *gdinoDetector) detect(img image.Image, prompt models.Prompt, r models.R
 	run := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
 		return r.Run(roleDet, inputs)
 	}
-	// Per-request threshold overrides (>0) take precedence over the manifest-derived defaults.
-	box, text := d.box, d.text
-	if prompt.BoxThresh > 0 {
-		box = prompt.BoxThresh
-	}
-	if prompt.TextThresh > 0 {
-		text = prompt.TextThresh
-	}
+	// Per-request threshold overrides (>0) take precedence over the manifest, then the default.
+	box, text := groundingdino.Thresholds(d.box, d.text, prompt)
 	return groundingdino.Detect(img, prompt.Text, d.tok, run, r.OutputNames(roleDet), box, text,
 		groundingdino.WithJointTextPass(d.joint))
-}
-
-// --- helpers ---
-
-// resolveVocab finds vocab.txt for GroundingDINO: prefer the directory of the
-// detector weights (files.det, typically "../grounding-dino/model.onnx"), fall
-// back to the model directory.
-func resolveVocab(cfg models.Config) string {
-	if det := cfg.Files[roleDet]; det != "" {
-		return filepath.Join(filepath.Dir(det), "vocab.txt")
-	}
-	return filepath.Join(cfg.Dir, "vocab.txt")
-}
-
-func firstName(names []string, fallback string) string {
-	if len(names) > 0 {
-		return names[0]
-	}
-	return fallback
-}
-
-// decodeRLEColumnMajor inverts the column-major RLE produced by the SAM models'
-// encodeRLEColumnMajor: space-separated run lengths over a column-major (x outer,
-// y inner) traversal of a w×h grid, alternating runs that START with background
-// (false). The reconstructed Bitmap is row-major (Data[y*w+x]). Empty => all-false.
-func decodeRLEColumnMajor(rle string, w, h int) (graspcore.Bitmap, error) {
-	data := make([]bool, w*h)
-	bm := graspcore.Bitmap{W: w, H: h, Data: data}
-	if rle == "" || w <= 0 || h <= 0 {
-		return bm, nil
-	}
-	val := false
-	idx := 0
-	total := w * h
-	for _, f := range strings.Fields(rle) {
-		n, err := strconv.Atoi(f)
-		if err != nil {
-			return graspcore.Bitmap{}, fmt.Errorf("bad run length %q: %w", f, err)
-		}
-		if n < 0 {
-			return graspcore.Bitmap{}, fmt.Errorf("negative run length %d", n)
-		}
-		for k := 0; k < n && idx < total; k++ {
-			x := idx / h
-			y := idx % h
-			data[y*w+x] = val
-			idx++
-		}
-		val = !val
-	}
-	return bm, nil
 }

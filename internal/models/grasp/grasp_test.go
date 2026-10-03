@@ -2,8 +2,6 @@ package grasp
 
 import (
 	"path/filepath"
-	"strconv"
-	"strings"
 	"testing"
 
 	graspcore "visionserve/internal/grasp"
@@ -15,66 +13,6 @@ import (
 func TestRegistered(t *testing.T) {
 	if !models.IsRegistered("grasp") {
 		t.Fatalf("grasp not registered; registered = %v", models.Registered())
-	}
-}
-
-// encodeRLEColumnMajor mirrors the SAM models' encoder so the test asserts
-// decodeRLEColumnMajor is its exact inverse.
-func encodeRLEColumnMajor(bin []bool, h, w int) string {
-	if len(bin) == 0 {
-		return ""
-	}
-	var counts []int
-	prev := false
-	run := 0
-	for x := 0; x < w; x++ {
-		for y := 0; y < h; y++ {
-			if bin[y*w+x] == prev {
-				run++
-			} else {
-				counts = append(counts, run)
-				prev = bin[y*w+x]
-				run = 1
-			}
-		}
-	}
-	counts = append(counts, run)
-	parts := make([]string, len(counts))
-	for i, c := range counts {
-		parts[i] = strconv.Itoa(c)
-	}
-	return strings.Join(parts, " ")
-}
-
-func TestDecodeRoundTrip(t *testing.T) {
-	cases := []struct {
-		name string
-		w, h int
-		set  func(x, y int) bool
-	}{
-		{"empty", 8, 6, func(x, y int) bool { return false }},
-		{"full", 8, 6, func(x, y int) bool { return true }},
-		{"rect", 12, 10, func(x, y int) bool { return x >= 3 && x <= 8 && y >= 2 && y <= 6 }},
-		{"single_col", 7, 7, func(x, y int) bool { return x == 3 }},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			orig := make([]bool, c.w*c.h)
-			for y := 0; y < c.h; y++ {
-				for x := 0; x < c.w; x++ {
-					orig[y*c.w+x] = c.set(x, y)
-				}
-			}
-			bm, err := decodeRLEColumnMajor(encodeRLEColumnMajor(orig, c.h, c.w), c.w, c.h)
-			if err != nil {
-				t.Fatalf("decode error: %v", err)
-			}
-			for i := range orig {
-				if bm.Data[i] != orig[i] {
-					t.Fatalf("pixel %d (x=%d y=%d): got %v want %v", i, i%c.w, i/c.w, bm.Data[i], orig[i])
-				}
-			}
-		})
 	}
 }
 

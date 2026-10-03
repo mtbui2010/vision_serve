@@ -4,6 +4,7 @@ import (
 	"image"
 
 	"visionserve/internal/models"
+	"visionserve/internal/vision/mask"
 )
 
 // backgroundAutomask runs MobileSAM's Automatic Mask Generator over the whole image and
@@ -30,7 +31,7 @@ func (m *backgroundModel) backgroundAutomask(img image.Image, prompt models.Prom
 		if !isBackgroundMask(bitmapArea(bm.Data), imgArea, touchesBorder(bm.Data, w, h), bgMaxPct, minPct) {
 			continue
 		}
-		orInto(union, bm.Data)
+		mask.Or(union, bm.Data)
 		any = true
 	}
 	if !any {

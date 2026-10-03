@@ -24,6 +24,7 @@ import (
 	"visionserve/internal/models"
 	"visionserve/internal/models/groundingdino"
 	"visionserve/internal/models/mobilesam"
+	"visionserve/internal/vision/util"
 )
 
 func init() {
@@ -36,14 +37,6 @@ const (
 	roleGDINO   = "gdino"
 	roleEncoder = "encoder"
 	roleDecoder = "decoder"
-)
-
-// GroundingDINO box/text thresholds when neither the request nor a sensible default applies.
-// (RF-DETR uses its own conf_threshold from the manifest via its Postprocess; we deliberately
-// do NOT reuse it for the GroundingDINO path — the two scores are on different scales.)
-const (
-	defaultBoxThresh  = 0.3
-	defaultTextThresh = 0.25
 )
 
 type hybrid struct {
@@ -114,7 +107,7 @@ func NewGDINOSigLIP(cfg models.Config) (models.Base, error) {
 // build is the part both architectures share once the closed-set detector (or its absence) is
 // decided.
 func build(cfg models.Config, rf models.Model) (*hybrid, error) {
-	tok, err := groundingdino.LoadTokenizer(resolveVocab(cfg))
+	tok, err := groundingdino.LoadTokenizer(groundingdino.VocabPath(cfg.Files[roleGDINO], cfg.Dir))
 	if err != nil {
 		return nil, fmt.Errorf("hybrid: load tokenizer: %w", err)
 	}
@@ -148,15 +141,6 @@ func build(cfg models.Config, rf models.Model) (*hybrid, error) {
 		cfg: cfg, rf: rf, tok: tok, vocab: vocab, withSAM: withSAM, rs: rs, fp: fp,
 		joint: groundingdino.JointTextPassOrSafe(cfg.Files[roleGDINO]),
 	}, nil
-}
-
-// resolveVocab finds vocab.txt next to the GroundingDINO weights (files.gdino is typically
-// "../grounding-dino/model.onnx"); falls back to <cfg.Dir>/vocab.txt.
-func resolveVocab(cfg models.Config) string {
-	if g := cfg.Files[roleGDINO]; g != "" {
-		return filepath.Join(filepath.Dir(g), "vocab.txt")
-	}
-	return filepath.Join(cfg.Dir, "vocab.txt")
 }
 
 func (m *hybrid) Name() string      { return m.cfg.Name }
@@ -295,7 +279,7 @@ func (m *hybrid) Infer(img image.Image, prompt models.Prompt, r models.Runner) (
 	encRun := func(in map[string]engine.Tensor) ([]engine.Tensor, error) { return r.Run(roleEncoder, in) }
 	decRun := func(in map[string]engine.Tensor) ([]engine.Tensor, error) { return r.Run(roleDecoder, in) }
 	masks, err := mobilesam.Segment(img, boxes, encRun, decRun,
-		firstName(r.InputNames(roleEncoder), "input_image"), r.OutputNames(roleDecoder))
+		util.FirstName(r.InputNames(roleEncoder), "input_image"), r.OutputNames(roleDecoder))
 	if err != nil {
 		return models.Result{}, err
 	}
@@ -393,7 +377,7 @@ func (m *hybrid) detectRFDETRWithFeats(img image.Image, r models.Runner) (
 	if err != nil {
 		return nil, boxes, feats, meta, err
 	}
-	inName := firstName(r.InputNames(roleRFDETR), m.rf.InputName())
+	inName := util.FirstName(r.InputNames(roleRFDETR), m.rf.InputName())
 	if inName == "" {
 		return nil, boxes, feats, meta, fmt.Errorf("hybrid: rf-detr session %q has no input name", roleRFDETR)
 	}
@@ -424,15 +408,10 @@ func (m *hybrid) detectRFDETRWithFeats(img image.Image, r models.Runner) (
 }
 
 // detectGDINO runs GroundingDINO (text-prompted) for boxes + labels. It uses GroundingDINO's
-// own thresholds (request override → built-in default), never RF-DETR's conf_threshold.
+// own thresholds (request override → built-in default), never the manifest's: conf_threshold
+// there is RF-DETR's, on a different scale.
 func (m *hybrid) detectGDINO(img image.Image, prompt models.Prompt, r models.Runner) ([]models.Detection, error) {
-	box, text := defaultBoxThresh, defaultTextThresh
-	if prompt.BoxThresh > 0 {
-		box = prompt.BoxThresh
-	}
-	if prompt.TextThresh > 0 {
-		text = prompt.TextThresh
-	}
+	box, text := groundingdino.Thresholds(0, 0, prompt)
 	run := func(in map[string]engine.Tensor) ([]engine.Tensor, error) { return r.Run(roleGDINO, in) }
 	return groundingdino.Detect(img, prompt.Text, m.tok, run, r.OutputNames(roleGDINO), box, text,
 		groundingdino.WithJointTextPass(m.joint))
@@ -446,13 +425,6 @@ func (m *hybrid) ExplainPreprocess(img image.Image) (engine.Tensor, models.Prepr
 		return engine.Tensor{}, models.PreprocessMeta{}, fmt.Errorf("%s: no RF-DETR session to explain", m.cfg.Name)
 	}
 	return m.rf.Preprocess(img)
-}
-
-func firstName(names []string, fallback string) string {
-	if len(names) > 0 {
-		return names[0]
-	}
-	return fallback
 }
 
 // hasHead reports whether a distilled head is configured, as an ONNX role or as head.bin.

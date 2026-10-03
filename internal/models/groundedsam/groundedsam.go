@@ -11,13 +11,13 @@ package groundedsam
 import (
 	"fmt"
 	"image"
-	"path/filepath"
 	"strings"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/models/groundingdino"
 	"visionserve/internal/models/mobilesam"
+	"visionserve/internal/vision/util"
 )
 
 func init() {
@@ -28,12 +28,6 @@ const (
 	roleGDINO   = "gdino"
 	roleEncoder = "encoder"
 	roleDecoder = "decoder"
-)
-
-// Default thresholds when the manifest leaves them unset.
-const (
-	defaultBoxThresh  = 0.3
-	defaultTextThresh = 0.25
 )
 
 type groundedSAM struct {
@@ -51,8 +45,7 @@ func New(cfg models.Config) (models.Base, error) {
 			return nil, fmt.Errorf("grounded-sam: manifest must declare files.%s", role)
 		}
 	}
-	vocabPath := resolveVocab(cfg)
-	tok, err := groundingdino.LoadTokenizer(vocabPath)
+	tok, err := groundingdino.LoadTokenizer(groundingdino.VocabPath(cfg.Files[roleGDINO], cfg.Dir))
 	if err != nil {
 		return nil, err
 	}
@@ -61,15 +54,6 @@ func New(cfg models.Config) (models.Base, error) {
 		tok:   tok,
 		joint: groundingdino.JointTextPassOrSafe(cfg.Files[roleGDINO]),
 	}, nil
-}
-
-// resolveVocab finds vocab.txt robustly: prefer the directory of the gdino weights
-// (files.gdino is typically "../grounding-dino/model.onnx"); fall back to cfg.Dir.
-func resolveVocab(cfg models.Config) string {
-	if gdino := cfg.Files[roleGDINO]; gdino != "" {
-		return filepath.Join(filepath.Dir(gdino), "vocab.txt")
-	}
-	return filepath.Join(cfg.Dir, "vocab.txt")
 }
 
 func (m *groundedSAM) Name() string      { return m.cfg.Name }
@@ -90,7 +74,7 @@ func (m *groundedSAM) Infer(img image.Image, prompt models.Prompt, r models.Runn
 	if strings.TrimSpace(prompt.Text) == "" {
 		return models.Result{}, fmt.Errorf("grounded-sam requires a text prompt, e.g. --prompt \"cat. remote.\"")
 	}
-	boxThresh, textThresh := m.thresholds(prompt)
+	boxThresh, textThresh := groundingdino.Thresholds(m.cfg.ConfThresh, m.cfg.TextThresh, prompt)
 
 	// 1) Open-vocab detection (GroundingDINO).
 	gdinoRun := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
@@ -116,7 +100,7 @@ func (m *groundedSAM) Infer(img image.Image, prompt models.Prompt, r models.Runn
 	decRun := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
 		return r.Run(roleDecoder, inputs)
 	}
-	encInName := firstName(r.InputNames(roleEncoder), "input_image")
+	encInName := util.FirstName(r.InputNames(roleEncoder), "input_image")
 	masks, err := mobilesam.Segment(img, boxes, encRun, decRun, encInName, r.OutputNames(roleDecoder))
 	if err != nil {
 		return models.Result{}, err
@@ -132,30 +116,4 @@ func (m *groundedSAM) Infer(img image.Image, prompt models.Prompt, r models.Runn
 	}
 
 	return models.Result{Detections: dets, Masks: masks}, nil
-}
-
-// thresholds resolves box/text thresholds with this precedence: per-request prompt
-// override (>0) → manifest config (>0) → built-in default.
-func (m *groundedSAM) thresholds(p models.Prompt) (box, text float64) {
-	box, text = m.cfg.ConfThresh, m.cfg.TextThresh
-	if box <= 0 {
-		box = defaultBoxThresh
-	}
-	if text <= 0 {
-		text = defaultTextThresh
-	}
-	if p.BoxThresh > 0 {
-		box = p.BoxThresh
-	}
-	if p.TextThresh > 0 {
-		text = p.TextThresh
-	}
-	return box, text
-}
-
-func firstName(names []string, fallback string) string {
-	if len(names) > 0 {
-		return names[0]
-	}
-	return fallback
 }

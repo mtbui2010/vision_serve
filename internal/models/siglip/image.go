@@ -9,6 +9,8 @@ import (
 
 	"visionserve/internal/imageproc"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/geom"
+	"visionserve/internal/vision/util"
 )
 
 func init() {
@@ -127,32 +129,23 @@ func UsableBox(img image.Image, b [4]float64) bool {
 	return err == nil
 }
 
-// clampBox turns an [x,y,w,h] float box into an integer rectangle inside bounds.
+// clampBox turns an [x,y,w,h] float box into an integer rectangle inside bounds: the corner and
+// the size are rounded to whole pixels FIRST (int(v+0.5)), and that integer box is clamped to the
+// image with geom.Clamp (a corner off the top-left moves onto the border keeping the far edge,
+// an extent past the bottom-right is cut). Fewer than one pixel left on either axis is an error.
 func clampBox(b [4]float64, bounds image.Rectangle) (image.Rectangle, error) {
-	x0 := bounds.Min.X + int(b[0]+0.5)
-	y0 := bounds.Min.Y + int(b[1]+0.5)
-	x1 := x0 + int(b[2]+0.5)
-	y1 := y0 + int(b[3]+0.5)
-
-	if x0 < bounds.Min.X {
-		x0 = bounds.Min.X
-	}
-	if y0 < bounds.Min.Y {
-		y0 = bounds.Min.Y
-	}
-	if x1 > bounds.Max.X {
-		x1 = bounds.Max.X
-	}
-	if y1 > bounds.Max.Y {
-		y1 = bounds.Max.Y
-	}
-	if x1-x0 < 1 || y1-y0 < 1 {
+	r := geom.Clamp([4]float64{
+		float64(int(b[0] + 0.5)), float64(int(b[1] + 0.5)),
+		float64(int(b[2] + 0.5)), float64(int(b[3] + 0.5)),
+	}, bounds.Dx(), bounds.Dy())
+	if r[2] < 1 || r[3] < 1 {
 		return image.Rectangle{}, fmt.Errorf(
 			"box [%.1f %.1f %.1f %.1f] is empty after clamping to the %dx%d image — the "+
 				"coordinates are probably not in original-image space",
 			b[0], b[1], b[2], b[3], bounds.Dx(), bounds.Dy())
 	}
-	return image.Rect(x0, y0, x1, y1), nil
+	x0, y0 := bounds.Min.X+int(r[0]), bounds.Min.Y+int(r[1])
+	return image.Rect(x0, y0, x0+int(r[2]), y0+int(r[3])), nil
 }
 
 // EmbedCrops crops, preprocesses and embeds every usable box in ONE session call. It returns one
@@ -212,7 +205,7 @@ func DecodeImageEmbeddings(outs []engine.Tensor, n int) ([][]float32, error) {
 	}
 	embs := make([][]float32, n)
 	for i := 0; i < n; i++ {
-		embs[i] = l2Normalize(t.Data[i*dim : (i+1)*dim])
+		embs[i] = util.L2Normalized(t.Data[i*dim : (i+1)*dim])
 	}
 	return embs, nil
 }

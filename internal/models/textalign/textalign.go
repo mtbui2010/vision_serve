@@ -67,6 +67,7 @@ import (
 	"visionserve/internal/models"
 	"visionserve/internal/models/clip"
 	"visionserve/internal/models/promptens"
+	"visionserve/internal/vision/util"
 )
 
 func init() {
@@ -273,7 +274,7 @@ func (m *textAlign) Infer(img image.Image, prompt models.Prompt, r models.Runner
 	if err != nil {
 		return models.Result{}, err
 	}
-	inName := firstName(r.InputNames(roleDetector), m.base.InputName())
+	inName := util.FirstName(r.InputNames(roleDetector), m.base.InputName())
 	if inName == "" {
 		return models.Result{}, fmt.Errorf("textalign: detector session %q has no input name", roleDetector)
 	}
@@ -478,11 +479,4 @@ func (m *textAlign) embedVocab(classes []string, r models.Runner) ([][]float32, 
 		embs[i] = l2Normalize(row)
 	}
 	return averageTemplates(embs, len(classes), len(m.tmpl))
-}
-
-func firstName(names []string, fallback string) string {
-	if len(names) > 0 {
-		return names[0]
-	}
-	return fallback
 }

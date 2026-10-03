@@ -67,13 +67,14 @@ package groundingdino
 import (
 	"fmt"
 	"image"
-	"math"
 	"path/filepath"
 	"strings"
 	"sync"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/geom"
+	"visionserve/internal/vision/util"
 	"visionserve/pkg/api"
 )
 
@@ -94,12 +95,6 @@ func init() {
 var PipelineMu sync.Mutex
 
 const roleModel = "model"
-
-// Default thresholds when the manifest leaves them unset.
-const (
-	defaultBoxThresh  = 0.3
-	defaultTextThresh = 0.25
-)
 
 type groundingDINO struct {
 	cfg models.Config
@@ -135,7 +130,7 @@ func (m *groundingDINO) Infer(img image.Image, prompt models.Prompt, r models.Ru
 	if strings.TrimSpace(prompt.Text) == "" {
 		return models.Result{}, fmt.Errorf("grounding-dino requires a text prompt, e.g. --prompt \"cat. remote.\"")
 	}
-	boxThresh, textThresh := m.thresholds(prompt)
+	boxThresh, textThresh := Thresholds(m.cfg.ConfThresh, m.cfg.TextThresh, prompt)
 
 	run := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
 		return r.Run(roleModel, inputs)
@@ -146,25 +141,6 @@ func (m *groundingDINO) Infer(img image.Image, prompt models.Prompt, r models.Ru
 		return models.Result{}, err
 	}
 	return models.Result{Detections: dets}, nil
-}
-
-// thresholds resolves box/text thresholds with this precedence: per-request prompt
-// override (>0) → manifest config (>0) → built-in default.
-func (m *groundingDINO) thresholds(p models.Prompt) (box, text float64) {
-	box, text = m.cfg.ConfThresh, m.cfg.TextThresh
-	if box <= 0 {
-		box = defaultBoxThresh
-	}
-	if text <= 0 {
-		text = defaultTextThresh
-	}
-	if p.BoxThresh > 0 {
-		box = p.BoxThresh
-	}
-	if p.TextThresh > 0 {
-		text = p.TextThresh
-	}
-	return box, text
 }
 
 // Option tunes Detect. It is variadic so the existing call sites (grounded-sam, grasp,
@@ -359,7 +335,7 @@ func detectPass(
 
 	logits, boxes := pickLogitsAndBoxes(outNames, outs)
 	if logits == nil || boxes == nil {
-		return nil, fmt.Errorf("grounding-dino: could not identify logits/pred_boxes among outputs (shapes %v)", shapesOf(outs))
+		return nil, fmt.Errorf("grounding-dino: could not identify logits/pred_boxes among outputs (shapes %v)", util.ShapesOf(outs))
 	}
 
 	return postprocess(logits, boxes, enc.InputIDs, tok, labels, origW, origH, boxThresh, textThresh)
@@ -452,7 +428,7 @@ func postprocess(
 		for si, sp := range spans {
 			s := 0.0
 			for i := sp.start; i < sp.end; i++ {
-				if p := sigmoid(logits.Data[base+i]); p > s {
+				if p := geom.Sigmoid(float64(logits.Data[base+i])); p > s {
 					s = p
 				}
 			}
@@ -465,14 +441,8 @@ func postprocess(
 		}
 		phrase := spans[best].text
 
-		// cxcywh normalized → xywh in ORIGINAL pixels (plain squash, so multiply by W/H),
-		// clamped to the image like RF-DETR's boxes. A box already inside is bit-identical.
-		bb := boxes.Data[q*4 : q*4+4]
-		cx, cy, w, h := float64(bb[0]), float64(bb[1]), float64(bb[2]), float64(bb[3])
-		x, bw := clampSpan((cx-w/2)*float64(origW), w*float64(origW), float64(origW))
-		y, bh := clampSpan((cy-h/2)*float64(origH), h*float64(origH), float64(origH))
 		dets = append(dets, api.Detection{
-			BBox:  [4]float64{x, y, bw, bh},
+			BBox:  pixelBox(boxes.Data[q*4:q*4+4], origW, origH),
 			Class: phrase,
 			Conf:  score,
 		})
@@ -480,22 +450,15 @@ func postprocess(
 	return dets, nil
 }
 
-// clampSpan clamps the 1-D interval [x, x+w] to [0, max] and returns its new start and length.
-func clampSpan(x, w, max float64) (float64, float64) {
-	if x < 0 {
-		w += x
-		x = 0
-	}
-	if x > max {
-		x = max
-	}
-	if x+w > max {
-		w = max - x
-	}
-	if w < 0 {
-		w = 0
-	}
-	return x, w
+// pixelBox maps one normalized cxcywh pred_box to [x, y, w, h] in ORIGINAL pixels (plain squash,
+// so multiply by W/H), clamped to the image like RF-DETR's boxes; a box already inside is
+// bit-identical. The corner is computed as (c - size/2)·W — that rounding is part of every
+// measured number — and min() moves a corner past the far edge onto it, which geom.Clamp alone
+// would leave in place.
+func pixelBox(bb []float32, origW, origH int) [4]float64 {
+	cx, cy, w, h := float64(bb[0]), float64(bb[1]), float64(bb[2]), float64(bb[3])
+	fw, fh := float64(origW), float64(origH)
+	return geom.Clamp([4]float64{min((cx-w/2)*fw, fw), min((cy-h/2)*fh, fh), w * fw, h * fh}, origW, origH)
 }
 
 // phraseSpan is the half-open token-index range [start,end) of one prompt phrase, with
@@ -542,16 +505,4 @@ func phraseSpans(inputIDs []int64, tok *Tokenizer, labels []string) []phraseSpan
 		}
 	}
 	return spans
-}
-
-func sigmoid(x float32) float64 {
-	return 1.0 / (1.0 + math.Exp(-float64(x)))
-}
-
-func shapesOf(ts []engine.Tensor) [][]int64 {
-	out := make([][]int64, len(ts))
-	for i, t := range ts {
-		out[i] = t.Shape
-	}
-	return out
 }

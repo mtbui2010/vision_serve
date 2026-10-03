@@ -30,6 +30,8 @@ import (
 	"visionserve/internal/imageproc"
 	"visionserve/internal/models"
 	"visionserve/internal/models/mobilesam"
+	"visionserve/internal/vision/mask"
+	"visionserve/internal/vision/util"
 )
 
 func init() {
@@ -239,7 +241,7 @@ func (m *backgroundModel) runDepth(img image.Image, prompt models.Prompt, r mode
 	}
 	resized := imageproc.Resize(img, sz, sz)
 	in := imageproc.ImageToCHWFloat(resized, imagenetMean, imagenetStd)
-	inName := firstName(r.InputNames(roleDepth), "")
+	inName := util.FirstName(r.InputNames(roleDepth), "")
 	outs, err := r.Run(roleDepth, map[string]engine.Tensor{inName: in})
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("background: depth inference: %w", err)
@@ -276,21 +278,7 @@ func depthMapDims(t engine.Tensor) (w, h int, err error) {
 // resizeDepthNearest nearest-neighbor resizes a float depth map sw×sh → dw×dh (row-major).
 // Nearest sampling preserves NaN (invalid) markers without blending them into valid depth.
 func resizeDepthNearest(src []float32, sw, sh, dw, dh int) []float32 {
-	out := make([]float32, dw*dh)
-	for y := 0; y < dh; y++ {
-		sy := y * sh / dh
-		if sy >= sh {
-			sy = sh - 1
-		}
-		for x := 0; x < dw; x++ {
-			sx := x * sw / dw
-			if sx >= sw {
-				sx = sw - 1
-			}
-			out[y*dw+x] = src[sy*sw+sx]
-		}
-	}
-	return out
+	return mask.UpsampleNearest(src, sh, sw, dh, dw)
 }
 
 // bgThresholds resolves the area thresholds (percent of image) for the mask-classifying
@@ -359,70 +347,14 @@ func touchesBorder(data []bool, w, h int) bool {
 	return false
 }
 
-// orInto ORs src into dst (both row-major len w*h).
-func orInto(dst, src []bool) {
-	for i, v := range src {
-		if v {
-			dst[i] = true
-		}
-	}
-}
-
-// upsampleMask nearest-neighbor resizes a sw×sh bool mask to dw×dh (row-major).
-func upsampleMask(src []bool, sw, sh, dw, dh int) []bool {
-	if sw == dw && sh == dh {
-		return src
-	}
-	out := make([]bool, dw*dh)
-	for y := 0; y < dh; y++ {
-		sy := y * sh / dh
-		if sy >= sh {
-			sy = sh - 1
-		}
-		for x := 0; x < dw; x++ {
-			sx := x * sw / dw
-			if sx >= sw {
-				sx = sw - 1
-			}
-			out[y*dw+x] = src[sy*sw+sx]
-		}
-	}
-	return out
-}
-
 // unionBitmap wraps a row-major mask into a MaskBitmap with its tight bbox (Conf=1) so it
 // can be encoded to the public models.Mask (column-major RLE) via ToMask.
 func unionBitmap(data []bool, w, h int) mobilesam.MaskBitmap {
-	minX, minY, maxX, maxY := w, h, -1, -1
-	for y := 0; y < h; y++ {
-		row := y * w
-		for x := 0; x < w; x++ {
-			if data[row+x] {
-				if x < minX {
-					minX = x
-				}
-				if x > maxX {
-					maxX = x
-				}
-				if y < minY {
-					minY = y
-				}
-				if y > maxY {
-					maxY = y
-				}
-			}
-		}
-	}
-	var bbox [4]float64
-	if maxX >= 0 {
-		bbox = [4]float64{float64(minX), float64(minY), float64(maxX - minX + 1), float64(maxY - minY + 1)}
-	}
-	return mobilesam.MaskBitmap{Data: data, W: w, H: h, BBox: bbox, Conf: 1.0}
+	return mobilesam.MaskBitmap{Data: data, W: w, H: h, BBox: mask.Bitmap{Data: data, W: w, H: h}.BBox(), Conf: 1.0}
 }
 
-func firstName(names []string, fallback string) string {
-	if len(names) > 0 {
-		return names[0]
-	}
-	return fallback
+// upsampleMask nearest-neighbor resizes a sw×sh bool mask to dw×dh (row-major); the same
+// slice comes back when the size is unchanged.
+func upsampleMask(src []bool, sw, sh, dw, dh int) []bool {
+	return mask.ResizeNearest(mask.Bitmap{Data: src, W: sw, H: sh}, dh, dw).Data
 }

@@ -27,22 +27,12 @@ func samSeedPoints(w, h int) []models.Point {
 	pts := make([]models.Point, 0, len(samSeedColsX)*len(samSeedRowsY))
 	for _, fy := range samSeedRowsY {
 		for _, fx := range samSeedColsX {
-			x := clampF(fx*fw, 0, fw-1)
-			y := clampF(fy*fh, 0, fh-1)
+			x := min(max(fx*fw, 0), fw-1)
+			y := min(max(fy*fh, 0), fh-1)
 			pts = append(pts, models.Point{X: x, Y: y, Label: 1})
 		}
 	}
 	return pts
-}
-
-func clampF(v, lo, hi float64) float64 {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
 }
 
 // backgroundSAM (method=sam) returns the support-surface (background) mask by prompting
