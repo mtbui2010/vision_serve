@@ -20,6 +20,10 @@ import (
 	"visionserve/internal/models"
 )
 
+// Compile-time checks of the interfaces lifecycle type-asserts at load: a signature drift
+// fails the build instead of silently changing how the model is run.
+var _ models.Model = (*clipModel)(nil)
+
 func init() {
 	models.Register("clip", New)
 }

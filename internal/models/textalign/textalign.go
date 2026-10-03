@@ -73,6 +73,13 @@ import (
 	"visionserve/internal/vision/util"
 )
 
+// Compile-time checks of the interfaces lifecycle type-asserts at load: a signature drift
+// fails the build instead of silently changing how the model is run.
+var (
+	_ models.PipelineModel       = (*textAlign)(nil)
+	_ models.ExplainPreprocessor = (*textAlign)(nil)
+)
+
 func init() {
 	models.Register("rfdetr-textalign", New)
 }
