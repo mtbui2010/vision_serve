@@ -37,6 +37,7 @@ import (
 	"sync"
 
 	"visionserve/internal/engine"
+	"visionserve/internal/vision/mask"
 )
 
 const (
@@ -58,12 +59,9 @@ var zeroMaskInput = make([]float32, 256*256)
 func zeroMaskTensor() engine.Tensor { return engine.F32(zeroMaskInput, 1, 1, 256, 256) }
 
 type aCandidate struct {
-	bin  []bool // h×w binary mask (row-major) in the frame it was decoded at
+	bm   mask.Bitmap // binary mask in the frame it was decoded at
+	ext  mask.Extent // its inclusive pixel extent + area
 	conf float64
-	area int
-	// box is the tight inclusive pixel bbox [minX,minY,maxX,maxY] in that frame.
-	box  [4]int
-	h, w int
 	// px, py: the grid point prompt in the decoder's resized-1024 space (re-used by the
 	// final pass), idx: grid index (deterministic tie-break).
 	px, py float32
@@ -138,7 +136,7 @@ func autoSegment(
 			results[idx] = amgResult{err: fmt.Errorf("mobilesam: amg decoder at (%d,%d): %w", i, j, err)}
 			return
 		}
-		if !ok || c.conf < autoMinIoU || c.area < minArea || c.area > maxArea {
+		if !ok || c.conf < autoMinIoU || c.ext.Area < minArea || c.ext.Area > maxArea {
 			return
 		}
 		c.idx = idx
@@ -179,7 +177,7 @@ func autoSegment(
 			return
 		}
 		// Same area gate as the filter pass, now on the exact full-res mask.
-		if !ok || c.area < fullMin || c.area > fullMax {
+		if !ok || c.ext.Area < fullMin || c.ext.Area > fullMax {
 			return
 		}
 		c.conf = kept[k].conf // identical prompt → identical iou_predictions; keep the ranking value
@@ -248,7 +246,7 @@ func decodePoint(
 	}
 	c := thresholdBest(maskT, iouT)
 	c.px, c.py = px, py
-	return c, c.area > 0, nil
+	return c, c.ext.Area > 0, nil
 }
 
 // thresholdBest binarizes the best-IoU channel of a [1,M,H,W] mask-logit tensor.
@@ -256,44 +254,13 @@ func thresholdBest(maskT, iouT *engine.Tensor) aCandidate {
 	bestCh, conf := bestChannel(maskT, iouT)
 	mh := int(maskT.Dim(2))
 	mw := int(maskT.Dim(3))
-	off := bestCh * mh * mw
-	bin := make([]bool, mh*mw)
-	area := 0
-	minX, minY, maxX, maxY := mw, mh, -1, -1
-	for y := 0; y < mh; y++ {
-		row := maskT.Data[off+y*mw : off+(y+1)*mw]
-		for x, v := range row {
-			if v > 0 {
-				bin[y*mw+x] = true
-				area++
-				if x < minX {
-					minX = x
-				}
-				if x > maxX {
-					maxX = x
-				}
-				if y < minY {
-					minY = y
-				}
-				if y > maxY {
-					maxY = y
-				}
-			}
-		}
-	}
-	return aCandidate{bin: bin, conf: conf, area: area, box: [4]int{minX, minY, maxX, maxY}, h: mh, w: mw}
+	bm, ext := mask.ThresholdExtent(maskT.Data, bestCh*mh*mw, mh, mw, 0)
+	return aCandidate{bm: bm, ext: ext, conf: conf}
 }
 
 // bitmap converts a candidate to the public MaskBitmap ([x,y,w,h] bbox in its frame).
 func (c aCandidate) bitmap() MaskBitmap {
-	var bbox [4]float64
-	if c.area > 0 {
-		bbox = [4]float64{
-			float64(c.box[0]), float64(c.box[1]),
-			float64(c.box[2] - c.box[0] + 1), float64(c.box[3] - c.box[1] + 1),
-		}
-	}
-	return MaskBitmap{Data: c.bin, W: c.w, H: c.h, BBox: bbox, Conf: c.conf}
+	return MaskBitmap{Data: c.bm.Data, W: c.bm.W, H: c.bm.H, BBox: c.ext.XYWH(), Conf: c.conf}
 }
 
 // nmsCandidates keeps higher-confidence candidates and suppresses any later one whose
@@ -315,53 +282,14 @@ func nmsCandidates(cands []aCandidate, thresh float64) []aCandidate {
 		}
 		kept = append(kept, cands[i])
 		for j := i + 1; j < len(cands); j++ {
-			if !suppressed[j] && iouMayExceed(&cands[i], &cands[j], thresh) &&
-				candIoU(&cands[i], &cands[j]) > thresh {
+			a, b := &cands[i], &cands[j]
+			if !suppressed[j] && mask.IoUMayExceed(a.ext, b.ext, thresh) &&
+				mask.PixelIoU(a.bm, a.ext, b.bm, b.ext) > thresh {
 				suppressed[j] = true
 			}
 		}
 	}
 	return kept
-}
-
-// iouMayExceed is a cheap upper bound on the pixel IoU of a and b: the intersection is
-// at most min(areaA, areaB, bbox-overlap area). False means the pair can be skipped.
-func iouMayExceed(a, b *aCandidate, thresh float64) bool {
-	ow := min(a.box[2], b.box[2]) - max(a.box[0], b.box[0]) + 1
-	oh := min(a.box[3], b.box[3]) - max(a.box[1], b.box[1]) + 1
-	if ow <= 0 || oh <= 0 {
-		return false
-	}
-	ub := min(a.area, b.area, ow*oh)
-	return float64(ub)/float64(a.area+b.area-ub) > thresh
-}
-
-// candIoU is the exact pixel IoU of two same-frame candidates, counting the
-// intersection only inside their bbox overlap.
-func candIoU(a, b *aCandidate) float64 {
-	if a.w != b.w || a.h != b.h || a.area == 0 || b.area == 0 {
-		return 0
-	}
-	x0, y0 := max(a.box[0], b.box[0]), max(a.box[1], b.box[1])
-	x1, y1 := min(a.box[2], b.box[2]), min(a.box[3], b.box[3])
-	if x0 > x1 || y0 > y1 {
-		return 0
-	}
-	inter := 0
-	for y := y0; y <= y1; y++ {
-		ra := a.bin[y*a.w+x0 : y*a.w+x1+1]
-		rb := b.bin[y*b.w+x0 : y*b.w+x1+1]
-		for x := range ra {
-			if ra[x] && rb[x] {
-				inter++
-			}
-		}
-	}
-	union := a.area + b.area - inter
-	if union <= 0 {
-		return 0
-	}
-	return float64(inter) / float64(union)
 }
 
 // bestChannel returns the index and predicted IoU of the best mask channel.

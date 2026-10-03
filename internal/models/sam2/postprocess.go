@@ -2,11 +2,11 @@ package sam2
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/mask"
 )
 
 // pointSet is one prompt for a single decoder run: point coordinates in ORIGINAL
@@ -189,7 +189,7 @@ func runDecoder(
 
 // findMaskAndIoU selects the masks and iou_predictions tensors from decoder outputs.
 // Matches by name first; falls back to shape (4-D = masks, 2-D = iou).
-func findMaskAndIoU(names []string, outs []engine.Tensor) (mask, iou *engine.Tensor) {
+func findMaskAndIoU(names []string, outs []engine.Tensor) (maskT, iouT *engine.Tensor) {
 	for i := range outs {
 		name := ""
 		if i < len(names) {
@@ -197,33 +197,33 @@ func findMaskAndIoU(names []string, outs []engine.Tensor) (mask, iou *engine.Ten
 		}
 		switch {
 		case strings.Contains(name, "iou"):
-			iou = &outs[i]
+			iouT = &outs[i]
 		case name == "masks" || (strings.Contains(name, "mask") && !strings.Contains(name, "low_res")):
-			mask = &outs[i]
+			maskT = &outs[i]
 		}
 	}
 	// Shape-based fallback.
-	if mask == nil {
+	if maskT == nil {
 		var bestArea int64 = -1
 		for i := range outs {
 			if len(outs[i].Shape) == 4 {
 				area := outs[i].Dim(2) * outs[i].Dim(3)
 				if area > bestArea {
 					bestArea = area
-					mask = &outs[i]
+					maskT = &outs[i]
 				}
 			}
 		}
 	}
-	if iou == nil {
+	if iouT == nil {
 		for i := range outs {
 			if len(outs[i].Shape) == 2 {
-				iou = &outs[i]
+				iouT = &outs[i]
 				break
 			}
 		}
 	}
-	return mask, iou
+	return maskT, iouT
 }
 
 // pickBestMask selects the best mask channel from the SAM2 decoder output, upsamples its
@@ -277,129 +277,13 @@ func pickBestMask(maskTensor, iouTensor engine.Tensor, origW, origH int) (models
 
 	// Upsample the chosen low-res logits to (origH, origW) and threshold at 0.
 	off := best * h * w
-	bin := upsampleThreshold(maskTensor.Data[off:off+h*w], h, w, origH, origW)
-
-	minX, minY := origW, origH
-	maxX, maxY := -1, -1
-	for y := 0; y < origH; y++ {
-		row := bin[y*origW : (y+1)*origW]
-		for x, v := range row {
-			if !v {
-				continue
-			}
-			if x < minX {
-				minX = x
-			}
-			if x > maxX {
-				maxX = x
-			}
-			if y < minY {
-				minY = y
-			}
-			if y > maxY {
-				maxY = y
-			}
-		}
-	}
-
-	var bbox [4]float64
-	if maxX >= 0 {
-		bbox = [4]float64{
-			float64(minX),
-			float64(minY),
-			float64(maxX - minX + 1),
-			float64(maxY - minY + 1),
-		}
-	}
+	bm := mask.UpsampleBilinearThreshold(maskTensor.Data[off:off+h*w], w, h, w, origH, origW, 0)
 
 	return models.Mask{
-		RLE:  encodeRLEColumnMajor(bin, origH, origW),
-		BBox: bbox,
+		RLE:  mask.EncodeRLE(bm),
+		BBox: bm.BBox(),
 		Conf: conf,
 	}, nil
-}
-
-// bilinearTaps returns, for each of dst output positions, the two source indices and the
-// weight of the second one, matching PyTorch F.interpolate(mode="bilinear",
-// align_corners=False): src = max((dst+0.5)·in/out − 0.5, 0), i0 = floor(src),
-// i1 = min(i0+1, in−1), λ = src − i0.
-func bilinearTaps(in, out int) (i0, i1 []int, lambda []float32) {
-	i0 = make([]int, out)
-	i1 = make([]int, out)
-	lambda = make([]float32, out)
-	scale := float64(in) / float64(out)
-	for d := 0; d < out; d++ {
-		src := (float64(d)+0.5)*scale - 0.5
-		if src < 0 {
-			src = 0
-		}
-		a := int(src)
-		if a > in-1 {
-			a = in - 1
-		}
-		b := a + 1
-		if b > in-1 {
-			b = in - 1
-		}
-		i0[d], i1[d], lambda[d] = a, b, float32(src-float64(a))
-	}
-	return i0, i1, lambda
-}
-
-// upsampleThreshold bilinearly resizes a row-major (sh×sw) logit map to (dh×dw) with
-// PyTorch align_corners=False semantics and returns the row-major binary mask logit > 0.
-func upsampleThreshold(src []float32, sh, sw, dh, dw int) []bool {
-	y0, y1, ly := bilinearTaps(sh, dh)
-	x0, x1, lx := bilinearTaps(sw, dw)
-	bin := make([]bool, dh*dw)
-	for y := 0; y < dh; y++ {
-		r0 := src[y0[y]*sw : (y0[y]+1)*sw]
-		r1 := src[y1[y]*sw : (y1[y]+1)*sw]
-		wy := ly[y]
-		out := bin[y*dw : (y+1)*dw]
-		for x := 0; x < dw; x++ {
-			a, b, wx := x0[x], x1[x], lx[x]
-			top := r0[a] + (r0[b]-r0[a])*wx
-			bot := r1[a] + (r1[b]-r1[a])*wx
-			out[x] = top+(bot-top)*wy > 0
-		}
-	}
-	return bin
-}
-
-// encodeRLEColumnMajor encodes a binary mask as COCO-style uncompressed RLE: counts of
-// alternating runs read in COLUMN-major (Fortran) order, always starting with a
-// background (0) run. Serialized as space-separated decimal counts.
-// This matches the MobileSAM convention exactly.
-func encodeRLEColumnMajor(bin []bool, h, w int) string {
-	if len(bin) == 0 {
-		return ""
-	}
-	var counts []int
-	prev := false // runs start with background
-	run := 0
-	for x := 0; x < w; x++ {
-		for y := 0; y < h; y++ {
-			v := bin[y*w+x]
-			if v == prev {
-				run++
-			} else {
-				counts = append(counts, run)
-				prev = v
-				run = 1
-			}
-		}
-	}
-	counts = append(counts, run)
-
-	var sb strings.Builder
-	for i, c := range counts {
-		if i > 0 {
-			sb.WriteByte(' ')
-		}
-		sb.WriteString(strconv.Itoa(c))
-	}
-	return sb.String()
 }
 
 func shapesOf(ts []engine.Tensor) [][]int64 {

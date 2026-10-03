@@ -75,48 +75,6 @@ func TestScaledPrompt_PerAxis(t *testing.T) {
 	}
 }
 
-// bilinearTaps must reproduce torch F.interpolate(mode="bilinear", align_corners=False).
-// Expected values generated with torch 2.10 on the 3×4 grid below.
-func TestBilinearTaps_MatchesTorch(t *testing.T) {
-	src := []float32{-3, 1, 2, -1, 0.5, -2, 4, 1, 2, 2, -5, 0}
-	const sh, sw = 3, 4
-	cases := []struct {
-		h, w int
-		want [][]float64
-	}{
-		{7, 9, [][]float64{
-			{-3.0, -2.333333, -0.555556, 1.055556, 1.5, 1.944444, 0.833333, -0.5, -1.0},
-			{-2.5, -1.988095, -0.623016, 0.666667, 1.428571, 2.190476, 1.119048, -0.214285, -0.714286},
-			{-1.0, -0.952381, -0.825397, -0.5, 1.214286, 2.928571, 1.976191, 0.642857, 0.142857},
-			{0.5, 0.083333, -1.027778, -1.666667, 1.0, 3.666667, 2.833333, 1.5, 1.0},
-			{1.142857, 0.904762, 0.269841, -0.261905, -0.071429, 0.119047, 0.309524, 0.5, 0.571429},
-			{1.785714, 1.726191, 1.567461, 1.142857, -1.142857, -3.428572, -2.214286, -0.5, 0.142857},
-			{2.0, 2.0, 2.0, 1.611111, -1.5, -4.611111, -3.055556, -0.833334, 0.0},
-		}},
-		{2, 3, [][]float64{{-1.729167, 1.375, 0}, {1.520833, -0.875, -0.25}}}, // downsample
-	}
-	for _, tc := range cases {
-		y0, y1, ly := bilinearTaps(sh, tc.h)
-		x0, x1, lx := bilinearTaps(sw, tc.w)
-		bin := upsampleThreshold(src, sh, sw, tc.h, tc.w)
-		for y := 0; y < tc.h; y++ {
-			for x := 0; x < tc.w; x++ {
-				at := func(r, c int) float64 { return float64(src[r*sw+c]) }
-				top := at(y0[y], x0[x]) + (at(y0[y], x1[x])-at(y0[y], x0[x]))*float64(lx[x])
-				bot := at(y1[y], x0[x]) + (at(y1[y], x1[x])-at(y1[y], x0[x]))*float64(lx[x])
-				got := top + (bot-top)*float64(ly[y])
-				want := tc.want[y][x]
-				if math.Abs(got-want) > 1e-4 {
-					t.Errorf("%dx%d [%d,%d] = %v, want %v", tc.h, tc.w, y, x, got, want)
-				}
-				if math.Abs(want) > 1e-3 && bin[y*tc.w+x] != (want > 0) {
-					t.Errorf("%dx%d [%d,%d] threshold = %v, want %v", tc.h, tc.w, y, x, bin[y*tc.w+x], want > 0)
-				}
-			}
-		}
-	}
-}
-
 func decodeRLE(t *testing.T, rle string, h, w int) []bool {
 	t.Helper()
 	bin := make([]bool, h*w)

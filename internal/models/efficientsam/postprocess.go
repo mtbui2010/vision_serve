@@ -2,11 +2,11 @@ package efficientsam
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/mask"
 )
 
 // pointSet holds one decoder invocation's prompts in ORIGINAL image coordinates.
@@ -180,78 +180,14 @@ func maskToResult(plane []float32, mW, mH int, iou float64, origW, origH int) (m
 		return models.Mask{}, fmt.Errorf("efficientsam: invalid original size %dx%d", origW, origH)
 	}
 
-	bin := make([]bool, origH*origW)
-	minX, minY, maxX, maxY := origW, origH, -1, -1
-	for oy := 0; oy < origH; oy++ {
-		ly := oy
-		if mH != origH {
-			ly = oy * mH / origH
-		}
-		for ox := 0; ox < origW; ox++ {
-			lx := ox
-			if mW != origW {
-				lx = ox * mW / origW
-			}
-			if plane[ly*mW+lx] >= 0 {
-				bin[oy*origW+ox] = true
-				if ox < minX {
-					minX = ox
-				}
-				if ox > maxX {
-					maxX = ox
-				}
-				if oy < minY {
-					minY = oy
-				}
-				if oy > maxY {
-					maxY = oy
-				}
-			}
-		}
+	src := plane
+	if mW != origW || mH != origH {
+		src = mask.UpsampleNearest(plane, mH, mW, origH, origW)
 	}
-
-	var bbox [4]float64
-	if maxX >= 0 {
-		bbox = [4]float64{float64(minX), float64(minY), float64(maxX - minX + 1), float64(maxY - minY + 1)}
-	}
-
+	bm, bbox := mask.ThresholdGE(src, 0, origH, origW, 0)
 	return models.Mask{
-		RLE:  encodeRLEColumnMajor(bin, origH, origW),
+		RLE:  mask.EncodeRLE(bm),
 		BBox: bbox,
 		Conf: iou,
 	}, nil
-}
-
-// encodeRLEColumnMajor encodes a binary mask as COCO-style uncompressed RLE: counts of
-// alternating runs read in COLUMN-major (Fortran) order, always starting with a background
-// (0) run. Serialized as space-separated decimal counts.
-func encodeRLEColumnMajor(bin []bool, h, w int) string {
-	if len(bin) == 0 {
-		return ""
-	}
-	var counts []int
-	prev := false // runs start with background
-	run := 0
-	for x := 0; x < w; x++ {
-		for y := 0; y < h; y++ {
-			v := bin[y*w+x]
-			if v == prev {
-				run++
-			} else {
-				counts = append(counts, run)
-				prev = v
-				run = 1
-			}
-		}
-	}
-	counts = append(counts, run)
-
-	var sb strings.Builder
-	for i, c := range counts {
-		if i > 0 {
-			sb.WriteByte(' ')
-		}
-		sb.WriteString(strconv.Itoa(c))
-	}
-	return sb.String()
 }
