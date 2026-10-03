@@ -66,11 +66,11 @@ func TestApplyDeterministicOnlyOnGPU(t *testing.T) {
 // members setDeterministicCompute calls by index. struct OrtApi is a plain table of function
 // pointers, one per ';'-terminated member, which ORT only ever appends to.
 func TestOrtAPIIndices(t *testing.T) {
-	out, err := exec.Command("go", "list", "-mod=mod", "-m", "-f", "{{.Dir}}", "github.com/yalue/onnxruntime_go").Output()
+	dir, err := bindingModuleDir()
 	if err != nil {
 		t.Skipf("cannot locate the binding module: %v", err)
 	}
-	raw, err := os.ReadFile(filepath.Join(strings.TrimSpace(string(out)), "onnxruntime_c_api.h"))
+	raw, err := os.ReadFile(filepath.Join(dir, "onnxruntime_c_api.h"))
 	if err != nil {
 		t.Skipf("binding header not available: %v", err)
 	}
@@ -179,4 +179,32 @@ func TestSetDeterministicCompute(t *testing.T) {
 	if err := setDeterministicCompute(opts); err == nil || !strings.Contains(err.Error(), "not loaded") {
 		t.Errorf("unloaded library: err = %v, want a 'not loaded' error", err)
 	}
+}
+
+// bindingModuleDir returns the module-cache directory of the onnxruntime_go version go.mod
+// requires. It reads go.mod and `go env` only: `go list -m` (with GOFLAGS=-mod=mod, as this repo
+// is built) may add lines to go.sum, and a test must not modify the checkout.
+func bindingModuleDir() (string, error) {
+	const mod = "github.com/yalue/onnxruntime_go"
+	out, err := exec.Command("go", "env", "GOMODCACHE", "GOMOD").Output()
+	if err != nil {
+		return "", err
+	}
+	env := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(env) != 2 || env[0] == "" || env[1] == "" || env[1] == os.DevNull {
+		return "", errors.New("go env GOMODCACHE/GOMOD: no module cache or no go.mod")
+	}
+	gomod, err := os.ReadFile(strings.TrimSpace(env[1]))
+	if err != nil {
+		return "", err
+	}
+	if regexp.MustCompile(`(?m)^\s*replace\b.*` + regexp.QuoteMeta(mod)).Match(gomod) {
+		return "", errors.New(mod + " is replaced in go.mod")
+	}
+	m := regexp.MustCompile(`(?m)^\s*(?:require\s+)?` + regexp.QuoteMeta(mod) + `\s+(v\S+)`).FindSubmatch(gomod)
+	if m == nil {
+		return "", errors.New(mod + " is not required by go.mod")
+	}
+	// The module path has no upper-case letters, so its cache path needs no escaping.
+	return filepath.Join(strings.TrimSpace(env[0]), filepath.FromSlash(mod)+"@"+string(m[1])), nil
 }
