@@ -47,7 +47,7 @@ func (m *Manager) Preprocess(name string, img image.Image, prompt models.Prompt)
 		}
 		in, meta, err := mdl.Preprocess(img)
 		if err != nil {
-			return PreprocessResult{}, err
+			return PreprocessResult{}, fmt.Errorf("preprocess %s: %w: %w", name, ErrInvalidRequest, err)
 		}
 		inName := mdl.InputName()
 		if inName == "" {
@@ -67,9 +67,11 @@ func (m *Manager) Preprocess(name string, img image.Image, prompt models.Prompt)
 		_, inferErr := mdl.Infer(img, prompt, rec)
 		if rec.inputs == nil {
 			if inferErr == nil {
-				inferErr = errors.New("the model returned without calling any session")
+				return PreprocessResult{}, fmt.Errorf("preprocess %s: the model returned without calling any session", name)
 			}
-			return PreprocessResult{}, fmt.Errorf("preprocess %s: %w", name, inferErr)
+			// Nothing ran yet, so the model refused the request itself (a missing text prompt, an
+			// unknown template, ...): a 400, as this endpoint always answered.
+			return PreprocessResult{}, fmt.Errorf("preprocess %s: %w: %w", name, ErrInvalidRequest, inferErr)
 		}
 		res := PreprocessResult{Inputs: rec.named()}
 		// The hybrid router can also say how its RF-DETR stage maps boxes back.

@@ -47,3 +47,22 @@ func TestRecordingRunnerCapturesFirstCallAndStops(t *testing.T) {
 		t.Fatalf("captured values changed: %+v", got)
 	}
 }
+
+// A pipeline that refuses the request before calling any session (a missing text prompt, an
+// unknown template) is a 400 on /api/preprocess, as that endpoint always answered — the typed
+// error mapping briefly turned it into a 500.
+func TestPreprocessModelRefusalIsInvalidRequest(t *testing.T) {
+	root := t.TempDir()
+	writeTestModel(t, root, "picky", "test-pipe", "")
+	m, _ := newFakeManager(t, scanRegistry(t, root))
+	refusal := errors.New("picky requires a text prompt")
+	testHooks.setInfer(t, "picky", func(models.Runner) (models.Result, error) { return models.Result{}, refusal })
+
+	_, err := m.Preprocess("picky", image.NewRGBA(image.Rect(0, 0, 4, 4)), models.Prompt{})
+	if !errors.Is(err, ErrInvalidRequest) || !errors.Is(err, refusal) {
+		t.Fatalf("Preprocess error = %v, want ErrInvalidRequest wrapping the model's refusal", err)
+	}
+	if _, err := m.Preprocess("no-such-model", nil, models.Prompt{}); !errors.Is(err, ErrModelNotFound) {
+		t.Fatalf("unknown model: %v, want ErrModelNotFound", err)
+	}
+}
