@@ -144,6 +144,19 @@ model admits at most `VISIONSERVE_MAX_QUEUE` requests (running + waiting); unset
 `2 × the model's inference slots` (its largest session pool, 1 for a single session or an
 `Exclusive` pipeline) and never below 32. `VISIONSERVE_MAX_QUEUE=0` turns the bound off. A
 refused request fails at once with `lifecycle.ErrOverloaded` (HTTP 503); it never waits.
+Under overload a malformed multipart form can therefore get 503 before its malformation is read
+(the probe runs before the form is validated); its retry gets the 400.
+
+**Cancellation.** The inference entry points (`PredictPrompt`, `InferTensor`, `Explain`,
+`Preprocess`, and `Load`) take the request's `context.Context`, and every wait on the way to
+inference follows it: the model's load, an `Exclusive` model's lock, and the session itself
+(`engine.Runnable.Run(ctx, …)` gives up while it waits for a single session's worker or a free
+pool member). A request whose client has left stops waiting, runs nothing, and the server answers
+499 for the access log. A `Run` already inside ONNX Runtime is never interrupted, but a pipeline
+does not start its next stage (the `Runner` carries the request's context) and Score-CAM stops
+between channels. A load runs on its own goroutine, owned by no request: a waiter that gives up
+(the one that started it included) leaves the load running for the others, and the model goes
+live when it finishes; only `Unload` and `Close` cancel a load.
 
 **Intra-op threads.** ONNX Runtime gives every session its own spinning thread pool sized to the
 physical cores. A lone session keeps that default. Each session of an n-session pool (e.g.
