@@ -21,7 +21,8 @@ import (
 )
 
 // fakeRuntime stands in for lifecycle.Manager: it records the order of calls and what each
-// inference call received, and returns canned answers.
+// inference call received, and returns canned answers. mu guards events and every field an
+// inference call records (prompt, img, explain, tensor).
 type fakeRuntime struct {
 	mu     sync.Mutex
 	events []string
@@ -117,7 +118,9 @@ func (f *fakeRuntime) PredictPrompt(ctx context.Context, name string, img image.
 
 func (f *fakeRuntime) InferTensor(ctx context.Context, name string, in engine.Tensor) (api.Result, error) {
 	f.event("tensor:" + name)
+	f.mu.Lock()
 	f.tensor = in
+	f.mu.Unlock()
 	if err := f.wait(ctx); err != nil {
 		return api.Result{}, err
 	}
@@ -129,7 +132,9 @@ func (f *fakeRuntime) InferTensor(ctx context.Context, name string, in engine.Te
 
 func (f *fakeRuntime) Explain(ctx context.Context, name string, img image.Image, req lifecycle.ExplainRequest) (lifecycle.ExplainResult, error) {
 	f.event("explain:" + name)
+	f.mu.Lock()
 	f.explain, f.img = req, img
+	f.mu.Unlock()
 	if err := f.wait(ctx); err != nil {
 		return lifecycle.ExplainResult{}, err
 	}
@@ -141,7 +146,9 @@ func (f *fakeRuntime) Explain(ctx context.Context, name string, img image.Image,
 
 func (f *fakeRuntime) Preprocess(ctx context.Context, name string, img image.Image, p models.Prompt) (lifecycle.PreprocessResult, error) {
 	f.event("preprocess:" + name)
+	f.mu.Lock()
 	f.prompt, f.img = p, img
+	f.mu.Unlock()
 	if err := f.wait(ctx); err != nil {
 		return lifecycle.PreprocessResult{}, err
 	}
