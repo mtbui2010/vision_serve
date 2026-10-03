@@ -74,3 +74,8 @@ labels: /home/trung/trung_workdir/vision_serve/models/rfdetr-textalign-dec1-sigl
 runtime:
   prefer: [cuda, cpu]
   idle_unload_seconds: 0
+  # The head is a ~1 ms graph that runs between the detector's calls. With ORT's default thread
+  # pool (one spinning thread per core) it slowed CPU requests from ~1.83 s to ~2.30 s (median,
+  # 2026-10-04, 8 interleaved rounds); outputs are bit-identical either way.
+  threads:
+    head: 1

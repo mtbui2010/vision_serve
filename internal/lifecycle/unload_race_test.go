@@ -152,7 +152,7 @@ func TestPanickingBuildDoesNotWedgeTheModel(t *testing.T) {
 	writeTestModel(t, root, "boom", "test-pipe", "")
 	m, _ := newFakeManager(t, scanRegistry(t, root))
 	calls := 0
-	m.openRunnable = func(string, []string, []string, int, []engine.Provider) (engine.Runnable, error) {
+	m.openRunnable = func(string, []string, []string, int, int, []engine.Provider) (engine.Runnable, error) {
 		calls++
 		if calls == 1 {
 			panic("simulated crash while creating a session")

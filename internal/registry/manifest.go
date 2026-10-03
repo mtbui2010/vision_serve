@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"visionserve/internal/engine"
@@ -211,6 +212,11 @@ type Manifest struct {
 	Runtime struct {
 		Prefer            []string `yaml:"prefer"`
 		IdleUnloadSeconds int      `yaml:"idle_unload_seconds"`
+		// Threads (OPTIONAL): role → ONNX Runtime intra-op threads for that role's session(s),
+		// overriding lifecycle's default (ORT's own for a lone session, a capped share for each
+		// session of a pool). 0 = ORT's default. Keys must be roles of `files:`. See
+		// IntraOpThreads and docs/manifest-spec.md.
+		Threads map[string]wholeNumber `yaml:"threads"`
 	} `yaml:"runtime"`
 
 	// dir is the directory containing the manifest (filled at load time, not in the YAML).
@@ -313,6 +319,9 @@ func (m *Manifest) validate() error {
 	if _, err := engine.ResolveProviders(m.Runtime.Prefer); err != nil {
 		return err
 	}
+	if err := m.validateThreads(); err != nil {
+		return err
+	}
 	if m.Explain != nil {
 		if m.Explain.Type != "attention" && m.Explain.Type != "score_cam" {
 			return fmt.Errorf("explain.type %q is invalid (attention/score_cam)", m.Explain.Type)
@@ -349,6 +358,60 @@ func (m *Manifest) WeightsExist() bool {
 		return false
 	}
 	return true
+}
+
+// validateThreads checks runtime.threads: every key a role of files:, every value >= 0. A typo in
+// a role name would otherwise be silently ignored and the session would keep the default it was
+// meant to override.
+func (m *Manifest) validateThreads() error {
+	if len(m.Runtime.Threads) == 0 {
+		return nil
+	}
+	if len(m.Files) == 0 {
+		return fmt.Errorf("runtime.threads is keyed by the roles of 'files:', but this manifest has no 'files' map")
+	}
+	roles := make([]string, 0, len(m.Runtime.Threads))
+	for role := range m.Runtime.Threads {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles) // a deterministic error for a manifest with several bad keys
+	for _, role := range roles {
+		if _, ok := m.Files[role]; !ok {
+			known := make([]string, 0, len(m.Files))
+			for r := range m.Files {
+				known = append(known, r)
+			}
+			sort.Strings(known)
+			return fmt.Errorf("runtime.threads: %q is not a role of 'files:' (roles: %s)", role, strings.Join(known, ", "))
+		}
+		if n := m.Runtime.Threads[role]; n < 0 {
+			return fmt.Errorf("runtime.threads.%s must be >= 0 (0 = ONNX Runtime's default), got %d", role, n)
+		}
+	}
+	return nil
+}
+
+// IntraOpThreads returns the manifest's runtime.threads value for role, and whether it sets one.
+// 0 with ok = true means "ONNX Runtime's default", explicitly — it also lifts the pool cap.
+func (m *Manifest) IntraOpThreads(role string) (n int, ok bool) {
+	v, ok := m.Runtime.Threads[role]
+	return int(v), ok
+}
+
+// wholeNumber is an int that refuses a YAML float: yaml.v3 truncates `1.5` into an int field
+// silently, and a thread count of 1 written as 1.5 should be an error, not a guess.
+type wholeNumber int
+
+func (w *wholeNumber) UnmarshalYAML(n *yaml.Node) error {
+	if n.Kind != yaml.ScalarNode || n.ShortTag() != "!!int" {
+		return fmt.Errorf("line %d: %q is not an integer", n.Line, n.Value)
+	}
+	var v int
+	if err := n.Decode(&v); err != nil {
+		return err
+	}
+	*w = wholeNumber(v)
+	return nil
 }
 
 // FilesAbs returns a map role → absolute ONNX path (empty if not multi-session).

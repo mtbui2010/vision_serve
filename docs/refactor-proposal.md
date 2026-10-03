@@ -200,7 +200,7 @@ luồng song song (A–G); mỗi luồng chỉ được merge sau khi qua cổng
 | MobileSAM automask (không prompt) | **Xong**. Lọc + NMS ở khung 256 px, lọc trước bằng bbox, chỉ decode lại full-res cho mask được giữ: đã có từ efcf9de (3200×2400: 58 s / +3.7 GB → 19 s / +1.5 GB; 640×480 không đổi). Phần thời gian còn lại là do luồng ORT: 4 decoder trong pool, mỗi cái 24 luồng spin, khoảng 600 CPU-giây mỗi request. 5bea01e giới hạn mỗi session trong pool còn `NumCPU/(4n)` luồng (`VISIONSERVE_POOL_THREADS` để chỉnh). bbcf880 encode RLE ngay khi mỗi mask xong. Đo lại: 640×480: 14–15 s → **3.8 s**, peak RSS ~1.0 GB (0.63 GB là model đã load); 3200×2400: 17–18 s → **4.7–5.0 s**, peak 2.3 GB → **1.6–1.8 GB** |
 | Grasp search | **Xong**. Top-K + bỏ allocation từng candidate đã có từ efcf9de. bcf2571 bỏ bảng summed-area (8 byte mỗi pixel bbox) khi quét biên và kiểm tra độ mở tay kẹp trước force closure. Một mask lớn (ảnh 3200×2400): 105–170 ms / 41 MB → **60–100 ms / 7.7 MB**; 58 mask thật của một ảnh 3200×2400: 1.0–1.3 s / 256 MB → 0.8–1.0 s / 109 MB; mask ở ảnh 640 px tốn ≤ 30 ms. Cả request vẫn do SAM chi phối: `grasp-rfdetr` 3.7–5.8 s → 1.5–1.8 s nhờ 5bea01e |
 | Background `method=sam` | **Xong** từ efcf9de (`encoderOnce`). Đếm trên server thật: encoder chạy 6 → **1** lần mỗi request, decoder vẫn 6 lần. Thời gian: 14 s (trước efcf9de) → 2.8–3.9 s → **0.63–0.74 s** với 5bea01e |
-| textalign `exact` | **Xong, opt-in**: role `files.head: head.onnx` (sinh bằng `models/rfdetr-textalign-dec1-siglip/export_head_onnx.py`), Go là fallback khi không khai báo. ORT CPU so với Go: lệch tối đa 1.43e-6 logit. Đo cả request: GPU 62 → 25 ms; **CPU chậm hơn** (140 → 440 ms, xem "Còn mở"), nên manifest mặc định vẫn tắt |
+| textalign `exact` | **Xong, opt-in**: role `files.head: head.onnx` (sinh bằng `models/rfdetr-textalign-dec1-siglip/export_head_onnx.py`), Go là fallback khi không khai báo. ORT CPU so với Go: lệch tối đa 1.43e-6 logit. Đo cả request (median, 2026-10-04): CPU 134 ms (Go) → 121 ms với `runtime.threads: {head: 1}` (354 ms nếu để thread mặc định của ORT); GPU 73 → 41 ms. Manifest vẫn để tắt vì `head.onnx` không có trong bản weights phát hành (model pull về sẽ thiếu file) |
 
 Các số trên đo trên CPU (`CUDA_VISIBLE_DEVICES=`), chạy qua server, peak RSS lấy từ `VmHWM`. Máy dùng chung 48 luồng và đang tải nặng (load 25–95), nên thời gian ghi dạng khoảng. Output trùng từng byte với bản trước, và golden 43 case trùng từng bit. Còn có thể giảm thêm bộ nhớ automask 3200×2400 (khoảng +0.8 GB): giữ bitmap dạng gọn hơn `[]bool` toàn khung cho grasp/background, hoặc bớt worker ở lượt full-res. Chưa làm.
 
@@ -246,12 +246,15 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
 
 ### Còn mở
 
-- **Head ONNX trên CPU.** Head chỉ mất khoảng 1 ms, nhưng thêm một session ORT CPU với thread
-  pool mặc định (spinning) làm detector chậm đi khoảng 3 lần khi hai session chạy xen kẽ (đo
-  bằng Python ORT 1.26: head 1 thread thì detector không chậm). Cần cho phép đặt
-  `intra_op_num_threads` theo từng role trong `engine`/`lifecycle` (binding v1.13 có
-  `SetIntraOpNumThreads`, không có `allow_spinning`). Có lẽ fast-path head trên CPU cũng bị như
-  vậy (chưa đo).
+- **Head ONNX trên CPU.** **Đã sửa (701b336).** Head chỉ mất khoảng 1 ms, nhưng một session ORT
+  CPU với thread pool mặc định (spinning) làm detector chậm đi khoảng 3 lần khi hai session chạy
+  xen kẽ. Manifest giờ có `runtime.threads` (role → số intra-op thread, ghi đè mặc định của
+  lifecycle cho riêng role đó). Đo trên CPU (median cả request, các vòng xen kẽ):
+  - textalign `exact`: Go 134 ms, ORT mặc định 354 ms, ORT 1 thread 121 ms.
+  - fast-path (`rfdetr-gdino-fastpath`, head bật sẵn): 2.30 s → 1.83 s với `head: 1`. Manifest
+    này giờ đặt `threads: {head: 1}`. Kết quả không đổi: golden trùng từng bit, held-out trên CPU
+    89.70/47.76 (n=6526) ở cả hai cấu hình.
+  Binding v1.13 không có `allow_spinning`, nên 1 thread là cách duy nhất hiện có để tắt spinning.
 - **Mask MobileSAM trên GPU** lệch 1–43 pixel biên giữa các lần chạy. **Đã sửa (20d939b).**
   - Không phải race trong Go. Với cùng một embedding, 4 session decoder trong pool cho kết quả
     trùng từng bit, dù chạy tuần tự hay song song.

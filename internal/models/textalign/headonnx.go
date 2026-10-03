@@ -33,6 +33,20 @@ const roleHead = "head"
 //
 // Scale and Bias are initializers of the graph and applied there exactly once; callers pass the
 // text rows as the text embedder returns them and add nothing.
+//
+// THE DEGENERATE QUERY IS GUARDED DIFFERENTLY, ON PURPOSE. Go (head.go + ProjNorm) returns exactly
+// Bias when its Gram-form ‖P f‖² = fᵀ(PᵀP)f comes out <= 0; the graph computes ‖P f‖² as Σ z² (z =
+// P f), which cannot be negative, and divides by 1 instead of 0 when it is exactly 0 — where z = 0,
+// so the logits are again exactly Bias. Both give Bias for f = 0. They can only disagree when Go's
+// rounding drives a positive ‖P f‖² to <= 0, which needs ‖P f‖² below that rounding — and there
+// both answers are noise, since the cosine's denominator is. Matching Go's rule bit for bit would
+// mean reproducing its float32/float64 summation order inside ORT, which no EP guarantees.
+//
+// It is not reached on real features. Measured on 900 query features of the dec1 detector
+// (2026-10-04): min ‖P f‖²/‖f‖² is 2.7e-3 for every shipped textalign projection and 0.24 for the
+// fast-path head, while the Go form's relative rounding peaked at 1.2e-6 — no query came within
+// three orders of magnitude of the branch. (The smallest eigenvalue of PᵀP is 1e-6..1e-5 for the
+// textalign projections, so a CONSTRUCTED f can get there; a detector's features do not.)
 const (
 	HeadInFeats   = "query_feats"
 	HeadInText    = "text_embeds"

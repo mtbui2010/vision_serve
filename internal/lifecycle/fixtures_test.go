@@ -158,7 +158,7 @@ type fakeOpener struct {
 	made []*fakeEngine
 }
 
-func (o *fakeOpener) open(_ string, _, _ []string, _ int, _ []engine.Provider) (engine.Runnable, error) {
+func (o *fakeOpener) open(_ string, _, _ []string, _, _ int, _ []engine.Provider) (engine.Runnable, error) {
 	fe := &fakeEngine{}
 	o.mu.Lock()
 	o.made = append(o.made, fe)

@@ -52,15 +52,16 @@ files:
   rfdetr: detector.onnx
   text:   ../siglip-text/model.onnx
   # OPTIONAL, off by default: method "exact" (the default when a request names no method) on ONNX
-  # Runtime instead of scalar Go. Generate head.onnx from proj.bin, then uncomment the line:
+  # Runtime instead of scalar Go. Generate head.onnx from proj.bin, then uncomment this line AND
+  # the `threads:` block under runtime: below (one without the other is a load error / a slowdown):
   #
   #   python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py
   #
-  # Served on GPU (CUDA EP, whole request, 2026-10-03): ~62 ms -> ~25 ms median. On a CPU-only
-  # ORT it is SLOWER (~140 ms -> ~440 ms on a loaded 48-core host): the head itself is ~1 ms, but
-  # a third ORT session with its own default spinning thread pool slows the detector down.
-  # Enable it only where this manifest runs on a GPU. Outputs are identical on CPU (max |dconf|
-  # 4.9e-7). Re-export whenever proj.bin changes; a stale head.onnx is refused per request.
+  # Served, whole request, median: GPU (CUDA EP) ~62 -> ~25 ms. CPU ~134 ms (Go) -> ~121 ms with
+  # `threads: {head: 1}`, but ~354 ms with ORT's default threads: the head itself is ~1 ms, and a
+  # default spinning thread pool next to the detector's slows the detector ~3x. Outputs are
+  # identical on CPU (max |dconf| 4.9e-7). Re-export whenever proj.bin changes; a stale head.onnx
+  # is refused per request. Not on by default because head.onnx is not shipped with the weights.
   # head:   head.onnx
 
 input:
@@ -101,3 +102,7 @@ labels: labels.txt
 runtime:
   prefer: [cuda, cpu]
   idle_unload_seconds: 300
+  # Uncomment together with files.head (above). The head is ~1 ms on one thread; ORT's default
+  # pool for it slows the detector on CPU (see the files.head comment). No effect on outputs.
+  # threads:
+  #   head: 1

@@ -50,8 +50,9 @@ type Manager struct {
 	idleOverrideSec int
 
 	// openRunnable creates the ONNX session(s) for one weights file; nil means newRunnable. Tests
-	// replace it to load models without ONNX Runtime.
-	openRunnable func(path string, inputNames, outputNames []string, n int, providers []engine.Provider) (engine.Runnable, error)
+	// replace it to load models without ONNX Runtime. n is the pool size, threads the manifest's
+	// runtime.threads for the role (< 0 = not set).
+	openRunnable func(path string, inputNames, outputNames []string, n, threads int, providers []engine.Provider) (engine.Runnable, error)
 
 	stop chan struct{}
 	once sync.Once
