@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -407,9 +409,10 @@ func checkSourceAllowlist(sourceURL string) error {
 	return fmt.Errorf("source_url %q is not under any audited prefix in the verified-source allowlist", sourceURL)
 }
 
-// verifyFile computes a file's SHA-256 and compares it to the expected digest.
+// verifyFile computes a file's SHA-256 (cached while the file is unchanged, see digestCache) and
+// compares it to the expected digest.
 func verifyFile(path, want string) error {
-	got, err := fileSHA256(path)
+	got, err := weightDigests.sha256(path)
 	if err != nil {
 		return err
 	}
@@ -420,6 +423,103 @@ func verifyFile(path, want string) error {
 		)
 	}
 	return nil
+}
+
+// weightDigests is the process-wide digest cache VerifyWeights uses.
+var weightDigests = newDigestCache()
+
+// digestCache remembers the SHA-256 of weight files for the life of the process, so verifying an
+// unchanged file costs a stat instead of a full read. Without it every reload after the idle
+// reaper unloaded a model, and every /api/preprocess call, re-hashed every pinned file: 3-4 s for
+// a 695 MB model.
+//
+// An entry is keyed by the file's absolute path and is valid only while the file's identity is
+// unchanged: size, modification time, change time, device and inode (symlinks followed). A
+// rewrite changes size or mtime; one that restores both (same length, `touch -d`) still moves the
+// change time, which cannot be set back; a different file renamed into place has another inode.
+//
+// Two more rules keep it honest:
+//   - the file must have the same identity before and after hashing, or the digest (of bytes that
+//     were changing under the read) is used once and not remembered;
+//   - a file modified within racyWindow of the hash is not remembered either. Timestamps have a
+//     granularity (a kernel tick, up to 2 s on FAT), so a second rewrite in the same tick would
+//     leave the identity unchanged — the "racily clean" problem git solves the same way.
+//
+// On platforms without inode/change time (fileIDSupported == false) nothing is cached: the
+// previous behaviour, a full hash every time.
+type digestCache struct {
+	mu      sync.Mutex
+	entries map[string]cachedDigest
+
+	hash func(path string) (string, error) // fileSHA256; tests count the reads
+	now  func() time.Time
+}
+
+type cachedDigest struct {
+	id     fileID
+	digest string
+}
+
+// fileID is what must stay equal for a cached digest to be reused (see digestCache).
+type fileID struct {
+	size         int64
+	mtime, ctime int64 // nanoseconds since the epoch
+	dev, ino     uint64
+}
+
+// racyWindow bounds filesystem timestamp granularity (FAT: 2 s; ext4/xfs/apfs: a tick or finer).
+const racyWindow = 2 * time.Second
+
+func newDigestCache() *digestCache {
+	return &digestCache{entries: map[string]cachedDigest{}, hash: fileSHA256, now: time.Now}
+}
+
+// sha256 returns the file's digest, from the cache when the file is unchanged.
+func (c *digestCache) sha256(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		abs = filepath.Clean(path)
+	}
+	before, err := statFileID(abs)
+	if err != nil { // missing file, or no file identity on this platform: just hash (or fail) as before
+		c.forget(abs)
+		return c.hash(abs)
+	}
+	c.mu.Lock()
+	e, ok := c.entries[abs]
+	c.mu.Unlock()
+	if ok && e.id == before {
+		return e.digest, nil
+	}
+
+	start := c.now()
+	digest, err := c.hash(abs)
+	if err != nil {
+		c.forget(abs)
+		return "", err
+	}
+	after, err := statFileID(abs)
+	if err != nil || after != before || c.racy(before, start) {
+		c.forget(abs)
+		return digest, nil
+	}
+	c.mu.Lock()
+	c.entries[abs] = cachedDigest{id: before, digest: digest}
+	c.mu.Unlock()
+	return digest, nil
+}
+
+// racy reports whether the file changed too close to the hash for its timestamps to tell a later
+// rewrite apart (see digestCache).
+func (c *digestCache) racy(id fileID, hashStart time.Time) bool {
+	limit := hashStart.Add(-racyWindow).UnixNano()
+	return id.mtime >= limit || id.ctime >= limit
+}
+
+func (c *digestCache) forget(abs string) {
+	c.mu.Lock()
+	delete(c.entries, abs)
+	c.mu.Unlock()
 }
 
 // fileSHA256 streams a file through crypto/sha256 (never buffers it in RAM).
