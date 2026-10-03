@@ -107,9 +107,9 @@ runtime:
 | `preprocess` | **optional** — the preprocessing as data: `resize`, `size`/`width`/`height`, `multiple_of`, `no_upscale`, `resample`, `mean`, `std`, `rescale`, `layout`, `pad` (see [Preprocessing](#preprocessing)) |
 | `postprocess.type` | decode hint (`detr`, `sam`, ...) |
 | `postprocess.box_format` | `cxcywh` / `xyxy` |
-| `postprocess.conf_threshold` | confidence threshold (for GroundingDINO this is the **box** threshold) |
+| `postprocess.conf_threshold` | confidence threshold (for GroundingDINO this is the **box** threshold). Not read by classification (`efficientnet`, `mobilenet-v3`): it always returns the top K |
 | `postprocess.text_threshold` | **GroundingDINO only** — threshold for assigning text tokens to a detected box (open-vocab label gating) |
-| `postprocess.max_detections` | cap on returned detections |
+| `postprocess.max_detections` | cap on returned detections (classification: K of the top-K, default 5) |
 | `labels` | optional labels file (one class per line) |
 | `detector` / `segmenter` | **`grasp` architecture only** — composition: `segmenter` picks the mask backbone (default `mobile-sam`); `detector` is optional (e.g. `rf-detr`, `grounding-dino`) for class-aware grasps, omitted for class-agnostic ones. Their graphs are referenced by role in `files:` |
 | `grasp` | **`grasp` architecture only** — `gripper_min` / `gripper_max`: default jaw-opening bounds in original-image pixels (a request may override them) |
@@ -139,6 +139,13 @@ runtime:
 
 A manifest that is invalid in **structure** is **skipped** during scan (collected into a
 warning) and does not crash the server.
+
+A key that no field above reads (e.g. the typo `runtime.idle_unload_second`) is **not** an
+error — third-party manifests may carry extra keys — but the parser ignores it, so the intended
+setting keeps its default. The scan therefore loads the manifest and logs a warning naming each
+such key with its line: `registry: manifest …/manifest.yaml: unknown key(s) ignored, check for a
+typo: runtime.idle_unload_second (line 14)`. Keys *inside* maps (`files:` roles, `sha256:` roles,
+`sha256_files:` paths, `explain.outputs`, `runtime.threads`) are data and never reported.
 
 ## Preprocessing
 

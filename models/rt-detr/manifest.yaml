@@ -2,6 +2,10 @@ name: rt-detr
 architecture: rt-detr
 task: detection
 license: Apache-2.0
+# Weights are not tracked. The HF export this targets (onnx-community/RT-DETR-l-hf)
+# returns 401 since 2026-08-18, so `visionserve pull rt-detr` cannot fetch it; place a
+# manually obtained export here (see README.md). Until then the model lists as missing.
+model_file: model.onnx
 input:
   width: 640
   height: 640

@@ -30,6 +30,14 @@ import (
 	"visionserve/internal/pipeline"
 )
 
+// Compile-time checks of the interfaces lifecycle type-asserts at load: a signature drift
+// fails the build instead of silently changing how the model is run.
+var (
+	_ models.PipelineModel = (*graspModel)(nil)
+	_ models.PoolSizer     = (*graspModel)(nil)
+	_ models.Exclusive     = (*graspModel)(nil)
+)
+
 func init() {
 	models.Register("grasp", New)
 }

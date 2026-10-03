@@ -236,7 +236,16 @@ type Manifest struct {
 	// explicit `letterbox: false` can be told from an absent one. nil for a Manifest built in
 	// code: the non-zero fields count as declared.
 	inputKeys *legacyKeys `yaml:"-"`
+
+	// unknownKeys lists YAML keys no field reads (LoadManifest); see UnknownKeys.
+	unknownKeys []string `yaml:"-"`
 }
+
+// UnknownKeys returns the manifest's YAML keys that no field reads, as dotted paths with their
+// line (e.g. "runtime.idle_unload_second (line 14)"). They are ignored, so a typo silently
+// leaves the intended setting at its default; Registry.Scan reports them as warnings. nil for a
+// Manifest built in code.
+func (m *Manifest) UnknownKeys() []string { return m.unknownKeys }
 
 // LoadManifest reads + parses + validates a manifest.yaml file.
 func LoadManifest(path string) (*Manifest, error) {
@@ -253,6 +262,9 @@ func LoadManifest(path string) (*Manifest, error) {
 		return nil, fmt.Errorf("registry: failed to parse YAML %s: %w", path, err)
 	}
 	m.inputKeys = &keys
+	if m.unknownKeys, err = unknownManifestKeys(raw); err != nil {
+		return nil, fmt.Errorf("registry: failed to parse YAML %s: %w", path, err)
+	}
 	m.dir = filepath.Dir(path)
 	if err := m.validate(); err != nil {
 		return nil, fmt.Errorf("registry: invalid manifest %s: %w", path, err)

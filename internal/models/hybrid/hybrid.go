@@ -36,6 +36,14 @@ import (
 	"visionserve/internal/pipeline"
 )
 
+// Compile-time checks of the interfaces lifecycle type-asserts at load: a signature drift
+// fails the build instead of silently changing how the model is run.
+var (
+	_ models.PipelineModel       = (*hybrid)(nil)
+	_ models.PoolSizer           = (*hybrid)(nil)
+	_ models.ExplainPreprocessor = (*hybrid)(nil)
+)
+
 func init() {
 	models.Register("rfdetr-gdino", New)
 	models.Register("gdino-siglip", NewGDINOSigLIP)

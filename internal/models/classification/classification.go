@@ -4,6 +4,8 @@
 //
 // Both are plain Model implementations: engine+lifecycle drive the single ONNX session.
 // Output: single tensor [1, num_classes] float32 logits -> softmax -> top-K predictions.
+// K is postprocess.max_detections (default 5). postprocess.conf_threshold is NOT read: the top K
+// are always returned, whatever their probability (the shipped manifests do not set it).
 //
 // Registered via init() — no changes to core required.
 package classification
@@ -15,6 +17,10 @@ import (
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
 )
+
+// Compile-time checks of the interfaces lifecycle type-asserts at load: a signature drift
+// fails the build instead of silently changing how the model is run.
+var _ models.Model = (*classificationModel)(nil)
 
 func init() {
 	models.Register("efficientnet", New)
@@ -30,9 +36,7 @@ func New(cfg models.Config) (models.Base, error) {
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return nil, fmt.Errorf("classification: invalid input dimensions (%dx%d)", cfg.Width, cfg.Height)
 	}
-	if len(cfg.Labels) == 0 {
-		// Labels are optional at model creation; class indices are returned as fallback.
-	}
+	// Labels are optional: without a labels file a class is reported as "class_<index>".
 	if _, err := arch.Resolve(cfg.PreprocessSpec()); err != nil {
 		return nil, err
 	}

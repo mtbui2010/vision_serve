@@ -35,6 +35,13 @@ import (
 	"visionserve/internal/vision/util"
 )
 
+// Compile-time checks of the interfaces lifecycle type-asserts at load: a signature drift
+// fails the build instead of silently changing how the model is run.
+var (
+	_ models.PipelineModel = (*backgroundModel)(nil)
+	_ models.PoolSizer     = (*backgroundModel)(nil)
+)
+
 func init() {
 	models.Register("background", New)
 }

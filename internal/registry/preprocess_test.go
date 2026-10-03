@@ -188,8 +188,7 @@ func TestPreprocessSpecManifestInCode(t *testing.T) {
 }
 
 // Every shipped manifest that loads resolves its preprocessing; without a block, to a legacy
-// spec. (A manifest the registry already refuses for other reasons — rt-detr ships without a
-// model_file — is not this test's business.)
+// spec. (A manifest the registry refuses for other reasons is not this test's business.)
 func TestShippedManifestsResolveLegacy(t *testing.T) {
 	paths, err := filepath.Glob(filepath.Join("..", "..", "models", "*", "manifest.yaml"))
 	if err != nil || len(paths) == 0 {

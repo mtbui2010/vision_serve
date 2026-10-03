@@ -32,6 +32,10 @@ import (
 	"visionserve/pkg/api"
 )
 
+// Compile-time checks of the interfaces lifecycle type-asserts at load: a signature drift
+// fails the build instead of silently changing how the model is run.
+var _ models.PipelineModel = (*owlVIT)(nil)
+
 func init() {
 	models.Register("owlvit", New)
 }

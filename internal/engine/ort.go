@@ -571,9 +571,11 @@ func (s *Session) InputNames() []string { return s.inputNames }
 func (s *Session) OutputNames() []string { return s.outputNames }
 
 // Close releases the session (to avoid VRAM leaks). Must be called via lifecycle on unload.
-// It closes the job channel so the worker drains any in-flight jobs, destroys the session on
-// its own pinned thread (releasing that thread's CUDA per-thread context), then exits.
-// Idempotent and safe to call once; concurrent inference must have stopped first.
+// It marks the session closed (later calls get ErrClosed), closes the job channel so the
+// worker drains the jobs it already accepted (they still run), destroys the session on its
+// own pinned thread (releasing that thread's CUDA per-thread context), then exits.
+// Safe to call more than once and concurrently: the first call does the work and returns the
+// Destroy error; every other call waits for it to finish and returns nil.
 func (s *Session) Close() error {
 	var err error
 	s.closeOnce.Do(func() {

@@ -25,6 +25,13 @@ import (
 	"visionserve/internal/vision/preprocess"
 )
 
+// Compile-time checks of the interfaces lifecycle type-asserts at load: a signature drift
+// fails the build instead of silently changing how the model is run.
+var (
+	_ models.PipelineModel = (*mobileSAM)(nil)
+	_ models.PoolSizer     = (*mobileSAM)(nil)
+)
+
 func init() {
 	// The registered factory refuses a declared preprocess: block (fixed by the export); New
 	// itself does not, since composites build this model from manifests whose block belongs to

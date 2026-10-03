@@ -38,15 +38,20 @@ ARG L4T_ML_IMAGE=nvcr.io/nvidia/l4t-ml:r36.3.0
 ############################
 # Stage 1 — build the Go binary for arm64
 ############################
-# The yalue/onnxruntime_go binding uses cgo, so cross-building to arm64 needs
-# CGO_ENABLED=1 plus the aarch64 cross-compiler. With buildx --platform linux/arm64 this
-# stage runs natively under emulation and CC is the native gcc; the explicit cross
-# toolchain below keeps an amd64-host cross build working too.
+# The yalue/onnxruntime_go binding uses cgo, so building for arm64 needs CGO_ENABLED=1
+# and an aarch64 C compiler. `--platform=$BUILDPLATFORM` makes this stage run natively on
+# the build host (no QEMU emulation, even under `buildx --platform linux/arm64`); Go then
+# cross-compiles with the aarch64-linux-gnu-gcc toolchain installed below. The target is
+# always linux/arm64 (this Dockerfile only builds arm64 images), so GOARCH is fixed.
+# libc6-dev-arm64-cross (the arm64 libc headers) is only a Recommends of the compiler
+# package, so --no-install-recommends must name it or cgo fails on <bits/...> headers.
 FROM --platform=$BUILDPLATFORM golang:1.22-bookworm AS build
-ARG TARGETARCH
+# Global ARGs are only visible inside a stage that re-declares them; without this line
+# ${VERSION} below would be empty and the binary would report no version.
+ARG VERSION
 WORKDIR /src
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu && \
+    apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross && \
     rm -rf /var/lib/apt/lists/*
 COPY go.mod go.sum* ./
 RUN go mod download
