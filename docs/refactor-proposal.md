@@ -245,5 +245,11 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
 - **Mask MobileSAM trên GPU** lệch 1–5 pixel biên khi tải song song. Lỗi có từ trước; có thể
   thử `use_deterministic_compute` của ORT.
 - **`Admit`** chưa nhận ctx, và multipart vẫn được parse trước `Admit`.
-- **`top_left_pad`** (SCRFD) ánh xạ sai trục x với ảnh panorama cực đoan. Đây là hành vi giống
-  InsightFace gốc, không phải hồi quy.
+- **`top_left_pad`** (SCRFD): **đã sửa**. Trước đây Meta dùng một `det_scale = new_h / h` cho cả
+  hai trục, giống InsightFace gốc. Vì `new_w` và `new_h` bị cắt phần lẻ riêng, trục x lệch tới
+  1–2 pixel input ở mép xa với ảnh thường, và lệch hẳn với panorama cực đoan (10000×10 → 640×1:
+  x bị chia cho 0,1 thay vì 0,064). Nay Meta ghi đúng tỉ lệ của từng trục (`new_w / w`,
+  `new_h / h`), cả Go lẫn Python (`spec.py`, `geometry_sync.json`). Tensor và trục y không đổi.
+  Golden: 43 case vẫn trùng từng byte (hai ảnh SCRFD của golden có tỉ lệ đúng bằng 1). Đo thêm
+  trên 200 ảnh COCO val có mặt người (40 ảnh × 5 kích thước): 2012 mặt, số mặt và điểm số không
+  đổi, x lệch tối đa 3,96 px ảnh gốc (1,38 px input), trung vị 0,18 px.

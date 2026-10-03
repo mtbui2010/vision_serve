@@ -9,7 +9,8 @@ import (
 )
 
 // arch: SCRFD is fed the way InsightFace scrfd.py detect() feeds it — resize preserving aspect
-// ratio so the image fits width × height (new size truncated with int(), as upstream), paste it
+// ratio so the image fits width × height (new size truncated with int(), as upstream; the tensor
+// is upstream's, only the mapping back differs — see preprocess), paste it
 // at the TOP-LEFT corner of a black canvas (det_img[:nh, :nw] = resized — NOT a centred
 // letterbox), then normalise with SCRFD's non-ImageNet formula:
 //
@@ -33,8 +34,12 @@ func spec(cfg models.Config) (prep.Spec, error) {
 	return arch.Resolve(s)
 }
 
-// preprocess: original image -> NCHW [1,3,H,W] (see arch). PreprocessMeta carries one
-// det_scale for both axes, as upstream, and no pad offset (the image sits at the top-left).
+// preprocess: original image -> NCHW [1,3,H,W] (see arch). PreprocessMeta carries the scale the
+// resized content really has on each axis (new_w/w, new_h/h) and no pad offset (the image sits at
+// the top-left). This is where we depart from upstream: InsightFace divides both axes by one
+// det_scale = new_h/h, which is off on x by a pixel or two (input pixels, at the far edge)
+// because new_w and new_h are truncated separately, and maps an extreme panorama's x completely
+// wrong (see prep.TopLeftSize and TestPostprocess_ExtremePanoramaMapsBack).
 func preprocess(img image.Image, cfg models.Config) (engine.Tensor, models.PreprocessMeta, error) {
 	s, err := spec(cfg)
 	if err != nil {

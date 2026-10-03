@@ -170,7 +170,7 @@ With `rescale: false`: `v = p`, or `v = (p - mean[c]) / std[c]` with mean/std in
 | `keep_aspect` | HF DPTImageProcessor `keep_aspect_ratio`: both axes scaled by whichever of W/w, H/h is closer to 1, sides rounded (half to even) to `multiple_of`; no crop, no pad | varies per image (dynamic H/W graph) | bicubic |
 | `long_side` | scale `min(W/w, H/h)` (long side → target), sides rounded half away from zero, no pad (MobileSAM: the graph pads) | varies per image | bilinear |
 | `long_side_pad` | `long_side`, then the **normalised** tensor is padded bottom/right with `pad` (SAM: normalise, then zero-pad) to width×height, or up to multiples of `multiple_of` | width×height or multiples | bilinear |
-| `top_left_pad` | InsightFace SCRFD: fit by the aspect ratios (new size truncated), pasted at the top-left of a **pixel** `pad` canvas | width×height | bilinear |
+| `top_left_pad` | InsightFace SCRFD: fit by the aspect ratios (new size truncated), pasted at the top-left of a **pixel** `pad` canvas. Boxes map back by each axis's own scale (new_w/w, new_h/h), not upstream's single `det_scale` | width×height | bilinear |
 | `none` | the original image size (EfficientSAM: the graph resizes itself) | the image's | — |
 
 `multiple_of` is only valid with `keep_aspect` / `long_side_pad`, `no_upscale` only with

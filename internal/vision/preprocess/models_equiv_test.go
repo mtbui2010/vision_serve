@@ -53,9 +53,9 @@ func TestPlainModelsMatchFrozenCode(t *testing.T) {
 		{"clip", legacyCfg{Width: 224, Height: 224, Crop: "center", Mean: oldCLIPMean, Std: oldCLIPStd}, oldCLIP},
 		{"clip", legacyCfg{Width: 224, Height: 224}, oldCLIP},
 		{"clip", legacyCfg{Width: 224, Height: 224, Letterbox: true, Std: []float32{0.3, 0.3, 0.3}}, oldCLIP},
-		{"scrfd", legacyCfg{Width: 640, Height: 640, Letterbox: true, Mean: scrfdNorm.Mean, Std: scrfdNorm.Std}, oldSCRFD},
-		{"scrfd", legacyCfg{Width: 640, Height: 480, Mean: scrfdNorm.Mean, Std: scrfdNorm.Std}, oldSCRFD},
-		{"scrfd", legacyCfg{Width: 320, Height: 320}, oldSCRFD},
+		{"scrfd", legacyCfg{Width: 640, Height: 640, Letterbox: true, Mean: scrfdNorm.Mean, Std: scrfdNorm.Std}, oldSCRFDTrueScale},
+		{"scrfd", legacyCfg{Width: 640, Height: 480, Mean: scrfdNorm.Mean, Std: scrfdNorm.Std}, oldSCRFDTrueScale},
+		{"scrfd", legacyCfg{Width: 320, Height: 320}, oldSCRFDTrueScale},
 	}
 	ins, _ := sweep()
 	for _, c := range cases {
