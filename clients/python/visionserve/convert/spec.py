@@ -1,0 +1,416 @@
+"""The manifest's preprocessing as data — the Python twin of internal/vision/preprocess.
+
+A `Spec` says how an image becomes a model input (resize mode, size, multiple_of, no_upscale,
+resample, mean/std, rescale, layout, pad). The Go server has ONE implementation of it
+(vision/preprocess.Spec.Apply); this module re-implements the same semantics in numpy/PIL so the
+converter's tier B1 compares the server against the declared spec directly:
+
+  spec_from_manifest(doc)  a manifest dict -> Spec, with the Go registry's rules: the
+                           `preprocess:` block, the legacy input.* fields as aliases, a field
+                           declared on both sides must agree (registry.Manifest.PreprocessSpec);
+  spec_from_legacy(...)    the legacy fields alone (Spec.legacy = True);
+  apply_spec(pil, spec)    -> (tensor, meta), the geometry exactly as Go computes it.
+
+Both sides run the shared corpora internal/registry/testdata/preprocess_sync.json (resolution)
+and internal/vision/preprocess/testdata/geometry_sync.json (tensor shape + meta per mode); see
+tests/test_go_python_sync.py. Pixels differ from Go only by the resampler (PIL vs imaging, the
+same filters), which is what B1 measures.
+
+numpy + PIL only (PIL imported inside functions).
+"""
+from __future__ import annotations
+
+import dataclasses
+import math
+from typing import List, Optional
+
+import numpy as np
+
+MODES = ("squash", "letterbox", "center_crop", "keep_aspect", "long_side", "long_side_pad",
+         "top_left_pad", "none")
+PAD_MODES = ("letterbox", "top_left_pad", "long_side_pad")  # what legacy `letterbox: true` means
+LAYOUTS = ("NCHW", "NHWC", "HWC")
+
+
+@dataclasses.dataclass
+class Spec:
+    """vision/preprocess.Spec. resize "" = the architecture's default (the generic architectures
+    the converter writes all default to squash). mean/std are in [0,1] units, or in 0..255 units
+    when rescale is False. pad: letterbox / top_left_pad — a pixel gray level normalised like the
+    image; long_side_pad — the value written into the NORMALISED tensor (SAM)."""
+    resize: str = ""
+    width: int = 0
+    height: int = 0
+    multiple_of: int = 0
+    no_upscale: bool = False
+    resample: str = ""
+    mean: Optional[List[float]] = None
+    std: Optional[List[float]] = None
+    rescale: bool = True
+    layout: str = ""
+    pad: float = 0.0
+    legacy: bool = False  # mapped from the legacy input.* fields, not declared in a block
+
+    def to_block(self) -> dict:
+        """The `preprocess:` block declaring this spec (only the fields that differ from the
+        defaults)."""
+        d = {"resize": self.resize or "squash"}
+        if self.width == self.height:
+            d["size"] = int(self.width)
+        else:
+            d["width"], d["height"] = int(self.width), int(self.height)
+        if self.multiple_of:
+            d["multiple_of"] = int(self.multiple_of)
+        if self.no_upscale:
+            d["no_upscale"] = True
+        if self.resample:
+            d["resample"] = self.resample
+        if self.mean is not None and self.std is not None:
+            d["mean"], d["std"] = [float(v) for v in self.mean], [float(v) for v in self.std]
+        if not self.rescale:
+            d["rescale"] = False
+        if self.layout:
+            d["layout"] = self.layout
+        if self.pad:
+            d["pad"] = float(self.pad)
+        return d
+
+
+class SpecError(ValueError):
+    """An invalid or self-contradicting preprocessing declaration."""
+
+
+# --------------------------------------------------------------------------------------------
+# Resolution (registry.Manifest.PreprocessSpec, preprocess.FromLegacy, Spec.Validate)
+# --------------------------------------------------------------------------------------------
+
+def spec_from_legacy(width: int, height: int, layout: str = "", letterbox: bool = False,
+                     crop: Optional[str] = None, keep_aspect: bool = False, multiple_of: int = 0,
+                     mean=None, std=None) -> Spec:
+    """preprocess.FromLegacy: keep_aspect (+ multiple_of) > crop: center > letterbox > squash."""
+    s = Spec(width=int(width or 0), height=int(height or 0), layout=str(layout or "").strip().upper(),
+             mean=None if mean is None else [float(v) for v in mean],
+             std=None if std is None else [float(v) for v in std], legacy=True)
+    if keep_aspect:
+        s.resize, s.multiple_of = "keep_aspect", int(multiple_of or 0)
+    elif crop == "center":
+        s.resize = "center_crop"
+    elif letterbox:
+        s.resize = "letterbox"
+    else:
+        s.resize = "squash"
+    return s
+
+
+def _f32(xs) -> list:
+    return [float(np.float32(v)) for v in xs]
+
+
+def _fmt_floats(xs) -> str:
+    return "[" + " ".join(f"{float(np.float32(v)):g}" for v in xs) + "]"
+
+
+def spec_from_manifest(doc: dict) -> Spec:
+    """A parsed manifest (dict) -> Spec, exactly as the Go registry resolves it. Raises SpecError
+    for an invalid block or a block that contradicts its legacy alias (naming both fields)."""
+    inp = doc.get("input") or {}
+    norm = inp.get("normalize") or {}
+    l_mean, l_std = norm.get("mean") or None, norm.get("std") or None
+    pre = doc.get("preprocess")
+    letterbox, crop = bool(inp.get("letterbox", False)), inp.get("crop") or ""
+    keep = bool(inp.get("keep_aspect", False))
+    l_w, l_h = int(inp.get("width") or 0), int(inp.get("height") or 0)
+    l_mult, l_layout = int(inp.get("multiple_of") or 0), str(inp.get("layout") or "")
+    if pre is None:
+        return spec_from_legacy(l_w, l_h, l_layout, letterbox, crop, keep, l_mult, l_mean, l_std)
+
+    def conflict(legacy: str, block: str):
+        return SpecError(f"{legacy} conflicts with {block}: the preprocess: block and its legacy input.* alias "
+                         "must agree (or drop one of them)")
+
+    def tf(v) -> str:
+        return "true" if v else "false"
+
+    s = Spec()
+    if keep:
+        s.resize = "keep_aspect"
+    elif crop == "center":
+        s.resize = "center_crop"
+    elif letterbox:
+        s.resize = "letterbox"
+    r = str(pre.get("resize") or "").strip().lower()
+    if r:
+        if r not in MODES:
+            raise SpecError(f'preprocess.resize "{pre.get("resize")}" is invalid ({", ".join(MODES)})')
+        block = "preprocess.resize: " + r
+        if "letterbox" in inp and letterbox != (r in PAD_MODES):
+            raise conflict(f"input.letterbox: {tf(letterbox)}", block)
+        if crop and (crop == "center") != (r == "center_crop"):
+            raise conflict(f"input.crop: {crop}", block)
+        if "keep_aspect" in inp and keep != (r == "keep_aspect"):
+            raise conflict(f"input.keep_aspect: {tf(keep)}", block)
+        s.resize = r
+
+    size, w, h = int(pre.get("size") or 0), int(pre.get("width") or 0), int(pre.get("height") or 0)
+    if size < 0 or w < 0 or h < 0:
+        raise SpecError("preprocess.size/width/height must be > 0")
+    if size > 0:
+        if (w and w != size) or (h and h != size):
+            raise SpecError(f"preprocess.size: {size} disagrees with preprocess.width/height {w}x{h}")
+        w, h = size, size
+    if w > 0 and l_w > 0 and l_w != w:
+        raise conflict(f"input.width: {l_w}", f"preprocess width {w}")
+    if h > 0 and l_h > 0 and l_h != h:
+        raise conflict(f"input.height: {l_h}", f"preprocess height {h}")
+    s.width, s.height = w or l_w, h or l_h
+
+    mult = int(pre.get("multiple_of") or 0)
+    if mult:
+        if "multiple_of" in inp and l_mult != mult:
+            raise conflict(f"input.multiple_of: {l_mult}", f"preprocess.multiple_of: {mult}")
+        s.multiple_of = mult
+    elif s.resize in ("keep_aspect", "long_side_pad"):
+        s.multiple_of = l_mult
+
+    b_mean, b_std = pre.get("mean") or None, pre.get("std") or None
+    if b_mean and l_mean and _f32(l_mean) != _f32(b_mean):
+        raise conflict(f"input.normalize.mean: {_fmt_floats(l_mean)}", f"preprocess.mean: {_fmt_floats(b_mean)}")
+    if b_std and l_std and _f32(l_std) != _f32(b_std):
+        raise conflict(f"input.normalize.std: {_fmt_floats(l_std)}", f"preprocess.std: {_fmt_floats(b_std)}")
+    s.mean = [float(v) for v in (b_mean or l_mean)] if (b_mean or l_mean) else None
+    s.std = [float(v) for v in (b_std or l_std)] if (b_std or l_std) else None
+
+    legacy_layout = l_layout.strip().upper()
+    b_layout = str(pre.get("layout") or "").strip().upper()
+    if b_layout:
+        if legacy_layout and legacy_layout != b_layout:
+            raise conflict(f"input.layout: {l_layout}", f"preprocess.layout: {pre.get('layout')}")
+        s.layout = b_layout
+    else:
+        s.layout = legacy_layout
+
+    s.no_upscale = bool(pre.get("no_upscale", False))
+    s.resample = str(pre.get("resample") or "").strip().lower()
+    if pre.get("rescale") is not None:
+        s.rescale = bool(pre["rescale"])
+    if pre.get("pad") is not None:
+        s.pad = float(np.float32(pre["pad"]))
+    validate(s)
+    return s
+
+
+def validate(s: Spec) -> None:
+    """preprocess.Spec.Validate: strict for a declared spec, lenient for a legacy one."""
+    if s.resize and s.resize not in MODES:
+        raise SpecError(f'preprocess: resize "{s.resize}" is invalid ({", ".join(MODES)})')
+    if s.resize != "none" and (s.width <= 0 or s.height <= 0):
+        raise SpecError(f"preprocess: resize {s.resize} needs width/height > 0 (got {s.width}x{s.height})")
+    if s.multiple_of < 0:
+        raise SpecError("preprocess: multiple_of must be >= 0")
+    if s.layout not in ("",) + LAYOUTS:
+        raise SpecError(f'preprocess: layout "{s.layout}" is invalid (NCHW, NHWC or HWC)')
+    if s.resample not in ("", "bilinear", "bicubic"):
+        raise SpecError(f'preprocess: resample "{s.resample}" is invalid (bilinear or bicubic)')
+    if s.legacy:
+        return
+    if s.multiple_of > 0 and s.resize not in ("keep_aspect", "long_side_pad"):
+        raise SpecError(f"preprocess: multiple_of applies to keep_aspect and long_side_pad, not {s.resize}")
+    if s.no_upscale and s.resize not in ("long_side", "long_side_pad"):
+        raise SpecError(f"preprocess: no_upscale applies to long_side and long_side_pad, not {s.resize}")
+    if s.resize == "none" and s.resample:
+        raise SpecError("preprocess: resize none does not resample")
+    if s.pad != 0 and s.resize not in PAD_MODES:
+        raise SpecError(f"preprocess: pad applies to letterbox, top_left_pad and long_side_pad, not {s.resize}")
+    if s.resize in ("letterbox", "top_left_pad") and not 0 <= s.pad <= 255:
+        raise SpecError(f"preprocess: pad {s.pad:g} is a pixel value for {s.resize} and must be in [0,255]")
+    if (not s.mean) != (not s.std):
+        raise SpecError(f"preprocess: mean and std go together (got {len(s.mean or [])} mean, "
+                        f"{len(s.std or [])} std values)")
+    if s.mean and (len(s.mean) != 3 or len(s.std) != 3):
+        raise SpecError(f"preprocess: mean and std need 3 values each (RGB), got {len(s.mean)} and {len(s.std)}")
+    if s.std and any(v == 0 or v != v for v in s.std):
+        raise SpecError(f"preprocess: std values must be non-zero numbers, got {s.std}")
+
+
+# --------------------------------------------------------------------------------------------
+# Geometry (internal/vision/preprocess/geometry.go, float64 like Go)
+# --------------------------------------------------------------------------------------------
+
+def _round_half_away(x: float) -> int:
+    """Go's math.Round for x >= 0 (Python's round() is half-to-even)."""
+    f = math.floor(x)
+    return int(f) + (1 if x - f >= 0.5 else 0)
+
+
+def letterbox_size(w: int, h: int, W: int, H: int):
+    scale = W / w
+    if H / h < scale:
+        scale = H / h
+    nw, nh = max(1, int(w * scale + 0.5)), max(1, int(h * scale + 0.5))
+    return nw, nh, scale, (W - nw) // 2, (H - nh) // 2
+
+
+def cover_size(w: int, h: int, W: int, H: int):
+    """CLIPImageProcessor: short side -> target, long side truncated; offset floored."""
+    if w <= h:
+        rw, rh = W, int(W * h / w)
+    else:
+        rw, rh = int(H * w / h), H
+    rw, rh = max(rw, W), max(rh, H)
+    return rw, rh, (rw - W) // 2, (rh - H) // 2
+
+
+def dpt_keep_aspect_size(w: int, h: int, tw: int, th: int, multiple: int = 1):
+    """(new_w, new_h) for keep_aspect — vision/preprocess.DPTKeepAspectSize, which is HF's DPT
+    get_resize_output_image_size(keep_aspect_ratio=True): both axes take whichever of tw/w, th/h is
+    closer to 1 (ties: the height's), each side = round(scale*side / m) * m with Python's
+    half-to-even round. Like the Go side (and unlike HF, which returns 0) a side is never < m."""
+    m = int(multiple) if multiple and multiple > 0 else 1
+    sw, sh = tw / w, th / h
+    if abs(1 - sw) < abs(1 - sh):
+        sh = sw
+    else:
+        sw = sh
+    return max(m, round(sw * w / m) * m), max(m, round(sh * h / m) * m)
+
+
+def top_left_size(w: int, h: int, W: int, H: int):
+    """InsightFace scrfd.py detect(): fit by the aspect ratios, new size truncated."""
+    im_ratio, model_ratio = h / w, H / W
+    if im_ratio > model_ratio:
+        nh = H
+        nw = int(nh / im_ratio)
+    else:
+        nw = W
+        nh = int(nw * im_ratio)
+    nw, nh = max(1, nw), max(1, nh)
+    return nw, nh, nh / h
+
+
+def long_side_size(w: int, h: int, W: int, H: int, no_upscale: bool = False):
+    scale = min(W / w, H / h)
+    if no_upscale and scale > 1.0:
+        scale = 1.0
+    return max(1, _round_half_away(w * scale)), max(1, _round_half_away(h * scale)), scale
+
+
+# --------------------------------------------------------------------------------------------
+# Apply
+# --------------------------------------------------------------------------------------------
+
+def _resample(spec: Spec):
+    from PIL import Image
+    r = spec.resample or ("bicubic" if spec.resize in ("center_crop", "keep_aspect") else "bilinear")
+    return Image.BICUBIC if r == "bicubic" else Image.BILINEAR
+
+
+def _normalise(x: np.ndarray, spec: Spec) -> np.ndarray:
+    """x: float32 [H,W,3] pixel values (0..255) -> the tensor values (vision/preprocess normalizer)."""
+    if not spec.rescale:
+        if spec.mean is None and spec.std is None:
+            return x
+        mean = np.asarray(spec.mean if spec.mean is not None else [0, 0, 0], np.float32) / np.float32(255)
+        std = np.asarray(spec.std if spec.std is not None else [255, 255, 255], np.float32) / np.float32(255)
+        return (x / np.float32(255) - mean) / std
+    x = x / 255.0
+    if spec.mean is not None and spec.std is not None:
+        x = (x - np.asarray(spec.mean, np.float32)) / np.asarray(spec.std, np.float32)
+    return x
+
+
+def _layout(x: np.ndarray, spec: Spec) -> np.ndarray:
+    # A legacy spec is always fed NCHW: no architecture ever read input.layout.
+    lay = "NCHW" if spec.legacy else (spec.layout or "NCHW")
+    if lay == "NHWC":
+        return np.ascontiguousarray(x[None]).astype(np.float32)
+    if lay == "HWC":
+        return np.ascontiguousarray(x).astype(np.float32)
+    return np.ascontiguousarray(x.transpose(2, 0, 1)[None]).astype(np.float32)
+
+
+def _meta(ow, oh, sx, sy, px=0, py=0) -> dict:
+    return {"orig_width": ow, "orig_height": oh, "scale_x": sx, "scale_y": sy, "pad_x": px, "pad_y": py}
+
+
+def apply_spec(pil, spec: Spec):
+    """-> (tensor float32, meta) — what vision/preprocess.Spec.Apply feeds for `spec`, with PIL's
+    resampler (imaging.Linear / CatmullRom are PIL's BILINEAR / BICUBIC filters)."""
+    img = pil.convert("RGB")
+    ow, oh = img.size
+    W, H, mode = spec.width, spec.height, spec.resize or "squash"
+    rs = _resample(spec)
+    if mode == "keep_aspect":
+        nw, nh = dpt_keep_aspect_size(ow, oh, W, H, spec.multiple_of)
+        x = np.asarray(img.resize((nw, nh), rs), np.float32)
+        meta = _meta(ow, oh, nw / ow, nh / oh)
+    elif mode == "center_crop":
+        rw, rh, ox, oy = cover_size(ow, oh, W, H)
+        x = np.asarray(img.resize((rw, rh), rs).crop((ox, oy, ox + W, oy + H)), np.float32)
+        meta = _meta(ow, oh, rw / ow, rh / oh, -ox, -oy)
+    elif mode in ("letterbox", "top_left_pad"):
+        if mode == "letterbox":
+            nw, nh, s, px, py = letterbox_size(ow, oh, W, H)
+        else:
+            (nw, nh, s), px, py = top_left_size(ow, oh, W, H), 0, 0
+        # The canvas is a pixel image: the pad is normalised like the image.
+        x = np.full((H, W, 3), np.float32(spec.pad), np.float32)
+        content = np.asarray(img.resize((nw, nh), rs), np.float32)
+        x[py:py + nh, px:px + nw] = content[:H - py, :W - px]
+        meta = _meta(ow, oh, s, s, px, py)
+    elif mode in ("long_side", "long_side_pad"):
+        nw, nh, s = long_side_size(ow, oh, W, H, spec.no_upscale)
+        x = _normalise(np.asarray(img.resize((nw, nh), rs), np.float32), spec)
+        if mode == "long_side_pad":
+            out_w, out_h = W, H
+            if spec.multiple_of > 0:
+                m = spec.multiple_of
+                out_w, out_h = -(-nw // m) * m, -(-nh // m) * m
+            # SAM: normalise, then pad the NORMALISED tensor (bottom/right) with `pad`.
+            padded = np.full((out_h, out_w, 3), np.float32(spec.pad), np.float32)
+            padded[:min(nh, out_h), :min(nw, out_w)] = x[:out_h, :out_w]
+            x = padded
+        return _layout(x, spec), _meta(ow, oh, s, s)
+    elif mode == "none":
+        x = np.asarray(img, np.float32)
+        meta = _meta(ow, oh, 1.0, 1.0)
+    else:  # squash
+        x = np.asarray(img.resize((W, H), rs), np.float32)
+        meta = _meta(ow, oh, W / ow, H / oh)
+    return _layout(_normalise(x, spec), spec), meta
+
+
+def spec_meta(spec: Spec, ow: int, oh: int) -> dict:
+    """The Meta apply_spec returns for an ow x oh image, without touching pixels."""
+    W, H, mode = spec.width, spec.height, spec.resize or "squash"
+    if mode == "keep_aspect":
+        nw, nh = dpt_keep_aspect_size(ow, oh, W, H, spec.multiple_of)
+        return _meta(ow, oh, nw / ow, nh / oh)
+    if mode == "center_crop":
+        rw, rh, ox, oy = cover_size(ow, oh, W, H)
+        return _meta(ow, oh, rw / ow, rh / oh, -ox, -oy)
+    if mode == "letterbox":
+        _, _, s, px, py = letterbox_size(ow, oh, W, H)
+        return _meta(ow, oh, s, s, px, py)
+    if mode == "top_left_pad":
+        s = top_left_size(ow, oh, W, H)[2]
+        return _meta(ow, oh, s, s)
+    if mode in ("long_side", "long_side_pad"):
+        s = long_side_size(ow, oh, W, H, spec.no_upscale)[2]
+        return _meta(ow, oh, s, s)
+    if mode == "none":
+        return _meta(ow, oh, 1.0, 1.0)
+    return _meta(ow, oh, W / ow, H / oh)
+
+
+def describe(spec: Spec) -> str:
+    """A few words for reports: the geometry and filter."""
+    mode = spec.resize or "squash"
+    if mode == "keep_aspect":
+        return f"keep-aspect {_filter_name(spec)} (multiple of {spec.multiple_of or 1}) around"
+    if mode == "center_crop":
+        return f"centre crop {_filter_name(spec)}"
+    return f"{mode.replace('_', ' ')} {_filter_name(spec)}"
+
+
+def _filter_name(spec: Spec) -> str:
+    return spec.resample or ("bicubic" if spec.resize in ("center_crop", "keep_aspect") else "bilinear")

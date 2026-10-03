@@ -30,6 +30,8 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 
 from .metrics import sigmoid, softmax
+from .spec import (Spec, apply_spec, describe, dpt_keep_aspect_size, spec_from_legacy,  # noqa: F401
+                   spec_from_manifest, spec_meta)
 
 
 @dataclasses.dataclass
@@ -101,79 +103,40 @@ def to_numpy(x) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------------------------
-# The manifest's declared preprocessing, re-implemented (mirrors internal/imageproc)
+# The manifest's declared preprocessing, re-implemented: the Spec semantics of
+# internal/vision/preprocess (see spec.py; both sides run the same sync corpora)
 # --------------------------------------------------------------------------------------------
 
-def dpt_keep_aspect_size(w: int, h: int, tw: int, th: int, multiple: int = 1):
-    """(new_w, new_h) for keep_aspect — internal/imageproc.DPTKeepAspectSize, which is HF's DPT
-    get_resize_output_image_size(keep_aspect_ratio=True): both axes take whichever of tw/w, th/h is
-    closer to 1 (ties: the height's), each side = round(scale*side / m) * m with Python's
-    half-to-even round. Like the Go side (and unlike HF, which returns 0) a side is never < m."""
-    m = int(multiple) if multiple and multiple > 0 else 1
-    sw, sh = tw / w, th / h
-    if abs(1 - sw) < abs(1 - sh):
-        sh = sw
-    else:
-        sw = sh
-    return max(m, round(sw * w / m) * m), max(m, round(sh * h / m) * m)
+def bundle_spec(bundle) -> Spec:
+    """The Spec a Bundle (or any object with its fields) declares through its legacy manifest
+    fields — what the server resolves for the manifest the Bundle renders."""
+    return spec_from_legacy(bundle.width, bundle.height, getattr(bundle, "layout", "") or "",
+                            getattr(bundle, "letterbox", False), getattr(bundle, "crop", None),
+                            getattr(bundle, "keep_aspect", False), getattr(bundle, "multiple_of", 0),
+                            getattr(bundle, "mean", None), getattr(bundle, "std", None))
 
 
-def manifest_preprocess(pil, width: int, height: int, mean=None, std=None, letterbox: bool = False,
-                        crop: Optional[str] = None, keep_aspect: bool = False, multiple_of: int = 0):
-    """-> (x [1,3,H,W] float32, meta). Squash = PIL bilinear resize to WxH (imaging.Linear is the
-    same antialiased triangle filter); letterbox = scale min(W/w, H/h), round half up, black pad,
-    centred — exactly internal/imageproc.Letterbox; keep_aspect = dpt_keep_aspect_size, bicubic, no
-    crop/pad (internal/models/depth). Then x/255, (x-mean)/std, CHW."""
-    from PIL import Image
-    img = pil.convert("RGB")
-    ow, oh = img.size
-    if keep_aspect:
-        nw, nh = dpt_keep_aspect_size(ow, oh, width, height, multiple_of)
-        img = img.resize((nw, nh), Image.BICUBIC)
-        meta = {"orig_width": ow, "orig_height": oh, "scale_x": nw / ow, "scale_y": nh / oh,
-                "pad_x": 0, "pad_y": 0}
-    elif crop == "center":
-        # internal/imageproc.ResizeShortCenterCrop: short side -> target, long side truncated,
-        # bicubic, offset floored (HuggingFace CLIPImageProcessor rounding).
-        if ow <= oh:
-            rw, rh = width, int(width * oh / ow)
-        else:
-            rw, rh = int(height * ow / oh), height
-        rw, rh = max(rw, width), max(rh, height)
-        ox, oy = (rw - width) // 2, (rh - height) // 2
-        img = img.resize((rw, rh), Image.BICUBIC).crop((ox, oy, ox + width, oy + height))
-        meta = {"orig_width": ow, "orig_height": oh, "scale_x": rw / ow, "scale_y": rh / oh,
-                "pad_x": -ox, "pad_y": -oy}
-    elif letterbox:
-        s = min(width / ow, height / oh)
-        nw, nh = max(1, int(ow * s + 0.5)), max(1, int(oh * s + 0.5))
-        canvas = Image.new("RGB", (width, height), (0, 0, 0))
-        px, py = (width - nw) // 2, (height - nh) // 2
-        canvas.paste(img.resize((nw, nh), Image.BILINEAR), (px, py))
-        img, meta = canvas, {"orig_width": ow, "orig_height": oh, "scale_x": s, "scale_y": s,
-                             "pad_x": px, "pad_y": py}
-    else:
-        img = img.resize((width, height), Image.BILINEAR)
-        meta = {"orig_width": ow, "orig_height": oh, "scale_x": width / ow, "scale_y": height / oh,
-                "pad_x": 0, "pad_y": 0}
-    x = np.asarray(img, np.float32) / 255.0
-    if mean is not None and std is not None:
-        x = (x - np.asarray(mean, np.float32)) / np.asarray(std, np.float32)
-    return np.ascontiguousarray(x.transpose(2, 0, 1)[None]).astype(np.float32), meta
+def manifest_preprocess(pil, width: int = 0, height: int = 0, mean=None, std=None, letterbox: bool = False,
+                        crop: Optional[str] = None, keep_aspect: bool = False, multiple_of: int = 0,
+                        spec: Optional[Spec] = None):
+    """-> (x float32, meta): the declared preprocessing — `spec` (e.g. spec_from_manifest of an
+    installed manifest), or the legacy fields given — applied with the server's Spec semantics
+    (spec.apply_spec). For the legacy fields: squash = PIL bilinear resize to WxH (imaging.Linear is
+    the same antialiased triangle filter); letterbox = scale min(W/w, H/h), round half up, black pad,
+    centred; crop: center = short side to target (bicubic), centred crop; keep_aspect =
+    dpt_keep_aspect_size, bicubic, no crop/pad. Then x/255, (x-mean)/std, NCHW [1,3,H,W]."""
+    if spec is None:
+        spec = spec_from_legacy(width, height, "", letterbox, crop, keep_aspect, multiple_of, mean, std)
+    return apply_spec(pil, spec)
 
 
 def manifest_meta(bundle, ow: int, oh: int) -> dict:
-    if getattr(bundle, "keep_aspect", False):
-        nw, nh = dpt_keep_aspect_size(ow, oh, bundle.width, bundle.height, getattr(bundle, "multiple_of", 0))
-        return {"orig_width": ow, "orig_height": oh, "scale_x": nw / ow, "scale_y": nh / oh,
-                "pad_x": 0, "pad_y": 0}
-    if bundle.letterbox:
-        s = min(bundle.width / ow, bundle.height / oh)
-        nw, nh = int(ow * s + 0.5), int(oh * s + 0.5)
-        return {"orig_width": ow, "orig_height": oh, "scale_x": s, "scale_y": s,
-                "pad_x": (bundle.width - nw) // 2, "pad_y": (bundle.height - nh) // 2}
-    return {"orig_width": ow, "orig_height": oh, "scale_x": bundle.width / ow, "scale_y": bundle.height / oh,
-            "pad_x": 0, "pad_y": 0}
+    """The Meta the Go box decoders (rf-detr / rt-detr) map boxes back with. Like those decoders,
+    a legacy input.crop is ignored (only architectures that map no boxes honour it)."""
+    spec = bundle_spec(bundle)
+    if spec.resize == "center_crop":
+        spec = dataclasses.replace(spec, resize="squash")
+    return spec_meta(spec, ow, oh)
 
 
 # --------------------------------------------------------------------------------------------
@@ -271,11 +234,7 @@ class OnnxForward:
 
 
 def _geometry_desc(bundle) -> str:
-    if getattr(bundle, "keep_aspect", False):
-        return f"keep-aspect bicubic (multiple of {getattr(bundle, 'multiple_of', 0) or 1}) around"
-    if getattr(bundle, "crop", None):
-        return "centre crop bicubic"
-    return ("letterbox" if bundle.letterbox else "squash") + " bilinear"
+    return describe(bundle_spec(bundle))
 
 
 class ManifestReference(Reference):
@@ -293,10 +252,7 @@ class ManifestReference(Reference):
                             "fidelity")
 
     def preprocess(self, pil, prompt=None):
-        b = self.bundle
-        x, _ = manifest_preprocess(pil, b.width, b.height, b.mean, b.std, b.letterbox,
-                                   getattr(b, "crop", None), getattr(b, "keep_aspect", False),
-                                   getattr(b, "multiple_of", 0))
+        x, _ = apply_spec(pil, bundle_spec(self.bundle))
         return {self.input_name: x}
 
     def predict(self, pil, prompt=None):

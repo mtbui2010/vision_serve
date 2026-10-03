@@ -168,3 +168,70 @@ def test_converter_tasks_are_valid_in_go():
     tasks |= {task for _arch, task, _post in cli.TASK_PRESETS.values()}
     missing = sorted(tasks - go)
     assert not missing, f"the converter writes tasks the Go registry refuses: {missing}"
+
+
+# --------------------------------------------------------------------------------------------
+# preprocessing: one Spec semantics (internal/vision/preprocess <-> convert/spec.py)
+# --------------------------------------------------------------------------------------------
+
+PRE_CORPUS = ROOT / "internal" / "registry" / "testdata" / "preprocess_sync.json"
+GEOMETRY_CORPUS = ROOT / "internal" / "vision" / "preprocess" / "testdata" / "geometry_sync.json"
+GO_PREPROCESS = ROOT / "internal" / "vision" / "preprocess" / "spec.go"
+
+
+def _canonical(s) -> dict:
+    import numpy as np
+    return {"resize": s.resize, "width": s.width, "height": s.height, "multiple_of": s.multiple_of,
+            "no_upscale": s.no_upscale, "resample": s.resample,
+            "mean": [float(np.float32(v)) for v in (s.mean or [])],
+            "std": [float(np.float32(v)) for v in (s.std or [])],
+            "rescale": s.rescale, "layout": s.layout, "pad": float(np.float32(s.pad)), "legacy": s.legacy}
+
+
+def test_preprocess_modes_match_go():
+    from visionserve.convert import spec
+    go_modes = re.findall(r'^\t(\w+)\s+Mode = "(\w+)"', _go(GO_PREPROCESS), re.M)
+    assert go_modes, f"could not find the Mode constants in {GO_PREPROCESS}"
+    assert tuple(v for _, v in go_modes) == spec.MODES
+
+
+def test_preprocess_resolution_corpus():
+    """registry.Manifest.PreprocessSpec and spec.spec_from_manifest resolve every manifest of the
+    shared corpus the same way: legacy-only, block-only, both-consistent, both-conflicting."""
+    import numpy as np
+    from visionserve.convert import spec
+    cases = json.loads(PRE_CORPUS.read_text(encoding="utf-8"))["cases"]
+    assert len(cases) >= 30
+    for c in cases:
+        doc = {k: c[k] for k in ("input", "preprocess") if k in c}
+        if "error" in c:
+            with pytest.raises(spec.SpecError) as e:
+                spec.spec_from_manifest(doc)
+            for sub in c["error"]:
+                assert sub in str(e.value), f"{c['name']}: {e.value!r} does not name {sub!r}"
+            continue
+        want = {"resize": "", "width": 0, "height": 0, "multiple_of": 0, "no_upscale": False, "resample": "",
+                "mean": [], "std": [], "rescale": True, "layout": "", "pad": 0.0, "legacy": False}
+        want.update(c["spec"])
+        want["mean"] = [float(np.float32(v)) for v in want["mean"]]
+        want["std"] = [float(np.float32(v)) for v in want["std"]]
+        assert _canonical(spec.spec_from_manifest(doc)) == want, c["name"]
+
+
+def test_preprocess_geometry_corpus():
+    """spec.apply_spec gives the tensor shape and Meta Go's Spec.Apply gives, for every mode."""
+    import numpy as np
+    from PIL import Image
+    from visionserve.convert import spec
+    cases = json.loads(GEOMETRY_CORPUS.read_text(encoding="utf-8"))["cases"]
+    assert len(cases) >= 50
+    for c in cases:
+        s = spec.Spec(**c["spec"])
+        w, h = c["image"]
+        pil = Image.fromarray(np.random.default_rng(w * 7 + h).integers(0, 256, (h, w, 3), dtype=np.uint8))
+        x, meta = spec.apply_spec(pil, s)
+        assert list(x.shape) == c["shape"], (c["spec"], c["image"])
+        m = c["meta"]
+        assert meta == {"orig_width": m["OrigWidth"], "orig_height": m["OrigHeight"], "scale_x": m["ScaleX"],
+                        "scale_y": m["ScaleY"], "pad_x": m["PadX"], "pad_y": m["PadY"]}, (c["spec"], c["image"])
+        assert spec.spec_meta(s, w, h) == meta
