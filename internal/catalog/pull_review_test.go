@@ -29,7 +29,7 @@ func TestPullKeepsHandEditsUnderTheGeneratedHeader(t *testing.T) {
 	path := filepath.Join(dir, "rfdetr-gdino", "manifest.yaml")
 
 	// Edited body, header untouched -> kept.
-	edited := strings.Replace(e.RenderManifest(), "\ninput:\n", "\n# my tweak\ninput:\n", 1)
+	edited := strings.Replace(render(t, e), "\ninput:\n", "\n# my tweak\ninput:\n", 1)
 	mustWrite(t, path, edited)
 	var log bytes.Buffer
 	if err := Pull("rfdetr-gdino", PullOptions{ModelsDir: dir, Out: &log}); err != nil {
@@ -42,11 +42,11 @@ func TestPullKeepsHandEditsUnderTheGeneratedHeader(t *testing.T) {
 	// Unedited output of a DIFFERENT (older) catalog, with its own recorded hash -> regenerated.
 	old := e
 	old.ConfThreshold = 0.987
-	mustWrite(t, path, old.RenderManifest())
+	mustWrite(t, path, render(t, old))
 	if err := Pull("rfdetr-gdino", PullOptions{ModelsDir: dir, Out: &log}); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(path); string(got) != e.RenderManifest() {
+	if got, _ := os.ReadFile(path); string(got) != render(t, e) {
 		t.Fatalf("an unedited manifest from an older catalog was not regenerated:\n%s", got)
 	}
 }

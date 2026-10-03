@@ -157,7 +157,10 @@ func pull(name string, opts PullOptions, visiting map[string]bool) error {
 	// downloaded model-fixedmask.onnx next to a manifest still pointing at the defective
 	// model.onnx, and an RF-DETR re-pull kept letterbox: true. Those are regenerated in place.
 	manifestPath := filepath.Join(dstDir, "manifest.yaml")
-	want := entry.RenderManifest()
+	want, err := entry.RenderManifest()
+	if err != nil {
+		return fmt.Errorf("pull %s: %w", entry.Name, err)
+	}
 	existing, statErr := os.ReadFile(manifestPath)
 	switch {
 	case statErr != nil || opts.Force:
