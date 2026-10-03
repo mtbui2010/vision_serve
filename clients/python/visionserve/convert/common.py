@@ -29,6 +29,7 @@ import numpy as np
 from .constants import TEXT_ARCHS
 
 # Keep in sync with internal/registry/manifest.go::licenseAllowlist (the Go gate re-checks).
+# tests/test_go_python_sync.py and internal/registry/sync_test.go fail when the two differ.
 LICENSE_ALLOWLIST = {
     "apache-2.0": "Apache-2.0",
     "mit": "MIT",
@@ -49,13 +50,17 @@ class ConvertError(Exception):
 
 # A registry name is a directory name under --models AND the manifest's `name:`. Anything else
 # (an absolute path, "../x", a newline) would make the converter write — and on FAIL, rmtree —
-# outside the registry, or inject YAML. The Go registry should enforce the same rule.
+# outside the registry, or inject YAML. The Go registry enforces the same rule
+# (internal/registry/manifest.go::validModelName, same pattern text and limit; the same two sync
+# tests check both). fullmatch, not match: Python's `$` also matches BEFORE a trailing newline, so
+# match() accepted "name\n", which Go's regexp refuses.
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+NAME_MAX_LEN = 128
 
 
 def validate_name(name) -> str:
     n = str(name or "")
-    if not _NAME_RE.match(n) or len(n) > 128:
+    if not _NAME_RE.fullmatch(n) or len(n) > NAME_MAX_LEN:
         raise ConvertError(f"--name {name!r} is not a valid model name: use letters, digits, '.', '_' and '-' "
                            "(starting with a letter or digit, at most 128 characters) — it becomes a directory "
                            "under --models")
