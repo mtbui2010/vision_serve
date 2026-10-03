@@ -56,9 +56,6 @@ func (m *textModel) Task() models.Task { return models.TaskEmbed }
 // Roles declares the single ONNX session this model needs.
 func (m *textModel) Roles() []string { return []string{roleModel} }
 
-// Tokenizer exposes the loaded tokenizer, for callers that want ids without inference.
-func (m *textModel) Tokenizer() *Tokenizer { return m.tok }
-
 // Infer embeds prompt.Text and returns one L2-normalised row per phrase.
 //
 // Phrase splitting is clip.SplitPhrases, so a prompt means the same thing whichever text tower a

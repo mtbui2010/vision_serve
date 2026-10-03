@@ -71,30 +71,34 @@ func LoadTextTokenizer(dir string) (TextTokenizer, error) {
 }
 
 // TextEmbedder turns words into one L2-normalised text embedding each, through a prompt ensemble
-// and the text tower session under Role, with a bounded per-WORD cache.
+// and the text tower session under its role, with a bounded per-WORD cache.
 //
-// The embedding of a word is exactly what the whole-list caches it replaced computed for it:
-// every word is expanded through the templates in class-major order (promptens.Apply), all rows
-// of the words being embedded go through the tower in ONE batched call, each output row is
-// L2-normalised, and the per-word rows are averaged and re-normalised (promptens.Average). Only
-// the words missing from the cache are embedded, so a new word list costs its new words — about
-// 4.3 ms per word per request for SigLIP — instead of re-embedding every word of the list.
+// A word's embedding is computed exactly as the whole-list caches it replaced computed it: the
+// word is expanded through the templates in class-major order (promptens.Apply), all rows of the
+// words being embedded go through the tower in ONE batched call, each output row is
+// L2-normalised, and the word's rows are averaged and re-normalised (promptens.Average). Only the
+// words missing from the cache are embedded, so a new word list costs its new words — about 4.3 ms
+// per word per request for SigLIP — instead of re-embedding every word of the list.
+//
+// On a cold cache the tower sees exactly the batch the whole-list cache sent. ONNX Runtime's CPU
+// EP is batch-invariant; its CUDA EP is not (a row moves by up to ~5e-5 with the batch it is in,
+// measured on the SigLIP text tower), so on GPU a word first embedded alongside OTHER words keeps
+// that batch's last bits where the whole-list cache re-embedded it with each new list.
 type TextEmbedder struct {
-	Role      string        // the text tower's session role
-	Tok       TextTokenizer // the tower's own tokenizer
-	Templates []string      // the prompt ensemble; part of the measured contract
-	// Dim, when > 0, is the width the tower must emit (a head's projection d_text): a tower of
-	// another checkpoint is refused before anything is cached.
-	Dim int
-
-	tkey  string // hash of Templates, the first half of every cache key
-	cache *LRU[[]float32]
+	role      string        // the text tower's session role
+	tok       TextTokenizer // the tower's own tokenizer
+	templates []string      // the prompt ensemble; part of the measured contract
+	dim       int           // the width the tower must emit (> 0), or any (0)
+	tkey      string        // hash of templates, the first half of every cache key
+	cache     *LRU[[]float32]
 }
 
-// NewTextEmbedder builds an embedder with an empty cache of MaxCachedWords words.
+// NewTextEmbedder builds an embedder for the text tower under role, with an empty cache of
+// MaxCachedWords words. dim, when > 0, is the width the tower must emit (a head's projection
+// d_text): a tower of another checkpoint is refused before anything is cached.
 func NewTextEmbedder(role string, tok TextTokenizer, templates []string, dim int) *TextEmbedder {
 	return &TextEmbedder{
-		Role: role, Tok: tok, Templates: templates, Dim: dim,
+		role: role, tok: tok, templates: templates, dim: dim,
 		tkey:  promptens.TemplateKey(templates),
 		cache: NewLRU[[]float32](MaxCachedWords),
 	}
@@ -142,19 +146,19 @@ func (e *TextEmbedder) Embed(words []string, r models.Runner) ([][]float32, erro
 
 // embed runs the tower once over words × templates and ensembles the rows per word.
 func (e *TextEmbedder) embed(words []string, r models.Runner) ([][]float32, error) {
-	if e.Tok == nil {
-		return nil, fmt.Errorf("text tower %q: no tokenizer", e.Role)
+	if e.tok == nil {
+		return nil, fmt.Errorf("text tower %q: no tokenizer", e.role)
 	}
-	texts := promptens.Apply(e.Templates, words)
+	texts := promptens.Apply(e.templates, words)
 	if len(texts) == 0 {
-		return nil, fmt.Errorf("text tower %q: nothing to embed", e.Role)
+		return nil, fmt.Errorf("text tower %q: nothing to embed", e.role)
 	}
-	ids, err := e.Tok.EncodeBatch(texts)
+	ids, err := e.tok.EncodeBatch(texts)
 	if err != nil {
 		return nil, err
 	}
-	outs, err := r.Run(e.Role, map[string]engine.Tensor{
-		pickInput(r.InputNames(e.Role), "input_ids"): engine.I64(ids, int64(len(texts)), int64(e.Tok.ContextLength())),
+	outs, err := r.Run(e.role, map[string]engine.Tensor{
+		pickInput(r.InputNames(e.role), "input_ids"): engine.I64(ids, int64(len(texts)), int64(e.tok.ContextLength())),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("text tower inference: %w", err)
@@ -167,15 +171,15 @@ func (e *TextEmbedder) embed(words []string, r models.Runner) ([][]float32, erro
 	if n != len(texts) || dim <= 0 || len(t.Data) < n*dim {
 		return nil, fmt.Errorf("text tower returned [%d,%d] with %d values for %d prompts", n, dim, len(t.Data), len(texts))
 	}
-	if e.Dim > 0 && dim != e.Dim {
+	if e.dim > 0 && dim != e.dim {
 		return nil, fmt.Errorf("text tower returned [%d,%d], expected [%d,%d] (the head's projection d_text) — "+
-			"head and tower are different checkpoints", n, dim, len(texts), e.Dim)
+			"head and tower are different checkpoints", n, dim, len(texts), e.dim)
 	}
 	embs := make([][]float32, n)
 	for i := range embs {
 		embs[i] = util.L2Normalized(t.Data[i*dim : (i+1)*dim])
 	}
-	return promptens.Average(embs, len(words), len(e.Templates))
+	return promptens.Average(embs, len(words), len(e.templates))
 }
 
 // pickInput returns want when the session declares it, otherwise the session's first input (an

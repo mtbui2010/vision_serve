@@ -32,7 +32,7 @@
 //     Detection.BBox is produced by the identical code path as the bare detector and is in
 //     ORIGINAL image coordinates, [x,y,w,h].
 //   - role "text" → models/clip-text/model.onnx (CLIP ViT-B/32 text tower) + the pure-Go BPE
-//     tokenizer from internal/models/clip. Used ONLY on a vocabulary cache miss.
+//     tokenizer from internal/models/clip. Used ONLY for words not embedded yet (per-word cache).
 //   - P itself is a 512 KB side-car (proj.bin) next to the manifest — see proj.go. Weights
 //     that are not an ONNX graph do not belong in the `files:` map (lifecycle would try to
 //     open them as a session), and the manifest parser needs no new field for them.
@@ -104,7 +104,8 @@ type textAlign struct {
 	text *pipeline.TextEmbedder
 	// folds caches each word's row of the deploy-time matrix W = a·T̂P, keyed like text's cache.
 	// Fold is row-separable, so a W assembled from cached rows is bit-identical to folding the
-	// whole vocabulary at once — and a request pays for the fold of its new words only.
+	// whole vocabulary at once — and a request pays for the fold of its new words only (a dense
+	// row is ~0.4 ms of Go: 9 ms for 22 words, 34 ms for 78, more than the exact head itself).
 	folds *pipeline.LRU[foldedRow]
 	// namer is the crop head (files.crop): nil when the manifest wires none.
 	namer *pipeline.CropNamer
