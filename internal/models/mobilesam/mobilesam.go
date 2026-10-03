@@ -82,15 +82,12 @@ func (m *mobileSAM) PoolSizes() map[string]int { return map[string]int{roleDecod
 //   - Automatic Mask Generator (16×16 grid) when no prompt is provided, or
 //   - one decoder run per prompt set (box / point).
 //
-// It returns the public Result (masks as column-major RLE).
+// It returns the public Result (masks as column-major RLE). Each mask is encoded as soon as it
+// is final, so the full-resolution bitmaps are never all held at once.
 func (m *mobileSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
-	bms, err := m.inferBitmaps(img, prompt, r)
+	masks, err := inferAs(m, img, prompt, r, MaskBitmap.ToMask)
 	if err != nil {
 		return models.Result{}, err
-	}
-	masks := make([]models.Mask, len(bms))
-	for i, b := range bms {
-		masks[i] = b.ToMask()
 	}
 	return models.Result{Masks: masks}, nil
 }
@@ -115,6 +112,12 @@ func (m *mobileSAM) InferMasks(img image.Image, prompt models.Prompt, r models.R
 // inferBitmaps is the shared core: encoder once, then AMG (no prompt) or one decoder
 // run per prompt set, producing raw mask bitmaps at original-image resolution.
 func (m *mobileSAM) inferBitmaps(img image.Image, prompt models.Prompt, r models.Runner) ([]MaskBitmap, error) {
+	return inferAs(m, img, prompt, r, keepBitmap)
+}
+
+// inferAs is inferBitmaps with every mask passed through emit as soon as it is final (in the
+// same order), so a caller that only wants the RLE need not hold every bitmap.
+func inferAs[T any](m *mobileSAM, img image.Image, prompt models.Prompt, r models.Runner, emit func(MaskBitmap) T) ([]T, error) {
 	sets, err := promptToPointSets(prompt)
 	if err != nil {
 		return nil, err
@@ -150,11 +153,11 @@ func (m *mobileSAM) inferBitmaps(img image.Image, prompt models.Prompt, r models
 		if prompt.GridSize > 0 {
 			grid = prompt.GridSize
 		}
-		return autoSegment(img, embedding, scale, decRun, decOutNames, grid)
+		return autoSegmentAs(img, embedding, scale, decRun, decOutNames, grid, emit)
 	}
 
 	// Prompted: one decoder run per prompt set.
-	bitmaps := make([]MaskBitmap, 0, len(sets))
+	out := make([]T, 0, len(sets))
 	for _, ps := range sets {
 		coords := ps.scaledCoords(scale)
 		dec := map[string]engine.Tensor{
@@ -177,10 +180,10 @@ func (m *mobileSAM) inferBitmaps(img image.Image, prompt models.Prompt, r models
 		if err != nil {
 			return nil, err
 		}
-		bitmaps = append(bitmaps, bm)
+		out = append(out, emit(bm))
 	}
 
-	return bitmaps, nil
+	return out, nil
 }
 
 func firstName(names []string, fallback string) string {
