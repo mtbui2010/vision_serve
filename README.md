@@ -83,7 +83,7 @@ sequenceDiagram
         L->>L: Load() — read manifest, check weights,<br/>create ORT session(s) (EP fallback CUDA→CPU; TensorRT opt-in)
     end
     L->>M: Preprocess(img) → tensor + PreprocessMeta
-    L->>E: Run(tensor) — thread-safe (mutex/pool)
+    L->>E: Run(tensor) — queued on the session's own OS-locked worker (or a free pool member)
     E-->>L: output tensors
     L->>M: Postprocess(out, meta) → Result<br/>(BBox mapped back to ORIGINAL image coords)
     L-->>S: Result (unified schema)
@@ -137,7 +137,7 @@ opt into it).
 # Detection
 make run MODEL=rf-detr IMAGE=image.jpg                        # → detection JSON
 make run MODEL=rf-detr IMAGE=image.jpg OUT=out.png           # + draw bboxes, save out.png
-make run MODEL=rt-detr IMAGE=image.jpg                        # RT-DETR (640×640, NMS-free)
+make run MODEL=rt-detr IMAGE=image.jpg                        # RT-DETR (640×640, NMS-free; weights no longer pullable)
 
 # Segmentation — box or point prompt (original-image coords)
 make run MODEL=mobile-sam IMAGE=img.jpg BOX=34,58,120,240 OUT=mask.png
@@ -305,11 +305,6 @@ res = client.predict("rf-detr", "image.jpg")
 for d in res.detections:
     print(d.cls, round(d.conf, 3), d.bbox)   # bbox = [x, y, w, h] in original pixels
 
-# RT-DETR (640×640, COCO-80)
-res = client.predict("rt-detr", "image.jpg")
-for d in res.detections:
-    print(d.cls, round(d.conf, 3), d.bbox)
-
 # Segmentation — pass a box; works with a numpy ndarray input too
 import numpy as np
 res = client.predict("mobile-sam", "image.jpg", box=[34, 58, 120, 240])
@@ -371,10 +366,6 @@ const client = new Client("http://localhost:11435");
 // Detection
 const det = await client.predict("rf-detr", "image.jpg");
 for (const d of det.detections) console.log(d.cls, d.conf.toFixed(3), d.bbox);
-
-// RT-DETR (640×640, COCO-80)
-const det2 = await client.predict("rt-detr", "image.jpg");
-for (const d of det2.detections) console.log(d.cls, d.conf.toFixed(3), d.bbox);
 
 // Segmentation — box prompt; decode the column-major RLE mask
 const seg = await client.predict("mobile-sam", "image.jpg", { box: [34, 58, 120, 240] });
@@ -491,7 +482,6 @@ All available models (all free, Apache-2.0 / MIT):
 ```bash
 docker exec -it visionserve visionserve pull rf-detr          # detection, COCO
 docker exec -it visionserve visionserve pull rf-detr-nano     # detection, faster
-docker exec -it visionserve visionserve pull rt-detr          # detection, COCO-80
 docker exec -it visionserve visionserve pull mobile-sam       # segmentation
 docker exec -it visionserve visionserve pull efficient-sam    # segmentation, lighter
 docker exec -it visionserve visionserve pull sam2             # segmentation, SAM2-Tiny
@@ -504,11 +494,13 @@ docker exec -it visionserve visionserve pull clip             # image embeddings
 docker exec -it visionserve visionserve pull scrfd            # face detection
 docker exec -it visionserve visionserve pull paddle-ocr       # OCR (Chinese + English)
 
-# Grounded-SAM (text → boxes → masks): pull dependencies first, then grounded-sam
-docker exec -it visionserve visionserve pull grounding-dino
-docker exec -it visionserve visionserve pull mobile-sam
+# Grounded-SAM (text → boxes → masks): one command, pull fetches the missing
+# dependencies (grounding-dino, mobile-sam) itself
 docker exec -it visionserve visionserve pull grounded-sam
 ```
+
+`rt-detr` is still in the catalog but cannot be pulled: its upstream repository
+(`onnx-community/RT-DETR-l-hf`) returns 401, and the entry is marked unverified.
 
 **Bring your own / fine-tuned model.** With the bind-mount above, just drop the model
 folder on the host and it shows up — no repo, no `pull`, no `docker cp`:
@@ -703,7 +695,7 @@ Depth estimation results come back in `depth_map` (flat row-major float32, relat
 | Task | Model | License | Source | Architecture key | Input | Status |
 |------|-------|---------|--------|-----------------|-------|--------|
 | Detection | RF-DETR | Apache-2.0 | [PierreMarieCurie/rf-detr-onnx](https://huggingface.co/PierreMarieCurie/rf-detr-onnx) | `rf-detr` | 560×560 | working |
-| Detection | RT-DETR | Apache-2.0 | [onnx-community/RT-DETR-l-hf](https://huggingface.co/onnx-community/RT-DETR-l-hf) | `rt-detr` | 640×640 | working — NMS-free, COCO-80 |
+| Detection | RT-DETR | Apache-2.0 | [onnx-community/RT-DETR-l-hf](https://huggingface.co/onnx-community/RT-DETR-l-hf) | `rt-detr` | 640×640 | code works (NMS-free, COCO-80); **cannot be pulled**: upstream returns 401 |
 | Segmentation | MobileSAM | Apache-2.0 | [Acly/MobileSAM](https://huggingface.co/Acly/MobileSAM) | `mobile-sam` | 1024×1024 | working — box/point prompt, or no prompt → segment everything (AMG) |
 | Segmentation | EfficientSAM | Apache-2.0 | [yunyangx/EfficientSAM](https://huggingface.co/yunyangx/EfficientSAM) | `efficient-sam` | 1024×1024 | working — box/point prompt |
 | Segmentation | SAM2-Tiny | Apache-2.0 | [SharpAI/sam2-hiera-tiny-onnx](https://huggingface.co/SharpAI/sam2-hiera-tiny-onnx) | `sam2` | 1024×1024 | working — multi-scale encoder |
@@ -734,7 +726,7 @@ Quick reference for choosing the right model. All models are free (Apache-2.0 / 
 |----------|-------|-----|
 | Max speed — edge / real-time | `rf-detr-nano` | ~23 ms GPU, near YOLO speed, 384×384 |
 | Best COCO accuracy | `rf-detr` | 53.4 AP, NMS-free, 560×560 |
-| Balanced accuracy + speed | `rt-detr` | 53.0 AP, NMS-free, COCO-80, 640×640 |
+| Balanced accuracy + speed | `rt-detr` | 53.0 AP, NMS-free, COCO-80, 640×640 (upstream weights gone: only if you already have them) |
 | No fixed class list (text query) | `grounding-dino` | zero-shot: `"cat. remote."` → boxes |
 | **Mix of known + novel classes** | `rfdetr-gdino` | hybrid router — known words go to RF-DETR (fast), unknown words to GroundingDINO (open-vocab); pays GroundingDINO's cost only when a request actually needs it |
 | Face detection | `scrfd` | WiderFace-tuned, returns 5 keypoints |
@@ -951,7 +943,8 @@ Guide: [docs/contributing-models.md](docs/contributing-models.md).
 1. **Core** — serve + run, RF-DETR detection end-to-end, normalized JSON. *(done)*
 2. **Prompted models** — MobileSAM segmentation, GroundingDINO open-vocab, and
    Grounded-SAM (text → box → mask) on the unified `PipelineModel` path. *(done)*
-3. **Community growth** — more permissive models, a remote model registry (`pull`),
+3. **Community growth** — more permissive models, Ollama-style `pull` from a built-in
+   HuggingFace catalog,
    Python + JS clients, Docker images, contributor guides — all free and in-scope. *(done)*
 4. **Expanded model coverage** — RT-DETR, EfficientSAM, SAM2-Tiny, Depth Anything V2,
    MiDaS, EfficientNet-B0, MobileNetV3 added with new `depth` and `classification`

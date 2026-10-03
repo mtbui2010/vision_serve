@@ -40,7 +40,7 @@ sequenceDiagram
         L->>L: Load() — read manifest, create session(s) (EP fallback)
     end
     L->>M: Preprocess(img) → tensor + meta
-    L->>E: Run(tensor)  (thread-safe, mutex)
+    L->>E: Run(tensor)  (queued on the session's OS-locked worker)
     E-->>L: output tensors
     L->>M: Postprocess(out, meta) → Result (ORIGINAL image coords)
     L-->>S: Result
@@ -67,8 +67,9 @@ interface; lifecycle type-asserts to pick the path):
   It returns a single support-surface (background) mask and picks the algorithm per
   request via `Prompt.Method`: `"auto"` (default) runs depth, falling back to cv;
   `"depth"` uses MiDaS depth + an affine-disparity RANSAC plane fit (the near-plane =
-  support surface); `"sam"` runs a MobileSAM foreground-point prompt on the lower
-  frame; `"cv"` is classical CV with **no ONNX session** (a low-texture region grown
+  support surface); `"sam"` prompts MobileSAM at six seed points on the lower frame
+  (a 3×2 grid, one point per prompt; the encoder runs once and each seed costs one decoder
+  call) and keeps the largest mask that passes the area / border check; `"cv"` is classical CV with **no ONNX session** (a low-texture region grown
   from the border); and `"automask"` runs the MobileSAM Automatic Mask Generator and
   unions the large / border-touching masks. Background reuses the MobileSAM weights
   (roles `encoder`/`decoder`) and the MiDaS weights (role `depth`) via the manifest
@@ -119,9 +120,13 @@ creates one `engine.Session` per role, and stores them in a `role → engine.Ses
 map on the `Session`. It then hands the model a **`Runner`** — the lifecycle-backed
 gateway that exposes those sessions by role (`Run(role, inputs)`, `InputNames(role)`,
 `OutputNames(role)`) **without** transferring ownership. The model chains stages
-(e.g. SAM: encoder → decoder) by calling the Runner per role. Each `engine.Session.Run`
-locks a mutex, so concurrent requests are safely serialized, and the idle reaper
-unloads *all* of a model's sessions together. A pipeline whose whole `Infer` must not run
+(e.g. SAM: encoder → decoder) by calling the Runner per role. Each `engine.Session` owns one
+worker goroutine locked to one OS thread (`runtime.LockOSThread`, `internal/engine/ort.go`):
+the session is created, run and destroyed on that thread, and `Run` hands its job to the worker
+and waits, so concurrent requests are serialized per session. A mutex alone would not do: ORT's
+CUDA EP keeps a cuBLAS/cuDNN context per OS thread, and Go moves goroutines between threads, so
+mutex-serialized calls leaked a new GPU context on each new thread until cuBLAS ran out. The
+idle reaper unloads *all* of a model's sessions together. A pipeline whose whole `Infer` must not run
 concurrently implements `models.Exclusive` (returning `true`); lifecycle then holds a
 per-loaded-model lock around `Infer` — the policy lives in the runtime, not in a
 package-level mutex in the model.
@@ -246,10 +251,19 @@ Every task returns the same `api.Result`. There is **no per-model schema**:
 - `Masks` — each `{ rle, bbox, conf }`, the mask encoded as **column-major RLE**
   (COCO-style). Used by segmentation (MobileSAM, EfficientSAM, SAM2, Background) and
   Grounded-SAM.
+- `Grasps` — each `{ x, y, theta, width, quality, class, conf }`: a planar parallel-jaw grasp
+  in **original-image** pixels (`theta` in radians, `width` = jaw opening). `class`/`conf` come
+  from the detector in box mode and are empty for class-agnostic grasps. Used by the grasp task.
 - `Classifications` — each `{ class, conf }`, ranked top-K predictions.
   Used by classification (EfficientNet-B0, MobileNetV3).
+- `Embeddings` — one `[]float32` vector per input. Used by the embed task (CLIP and SigLIP, image and
+  text towers).
 - `DepthMap` / `DepthWidth` / `DepthHeight` — flat row-major `[]float32` relative depth
   values. Used by depth estimation (Depth Anything V2, MiDaS).
+- `DepthMapBase64` / `EmbeddingsBase64` + `EmbeddingsShape` — sent **instead of** `depth_map` /
+  `embeddings` when the request asks for `encoding=base64`: base64 of the little-endian float32
+  bytes, row-major (`[depth_height, depth_width]`, and `[N, D]` for embeddings).
+- `DurationMs` — how long the inference took, in milliseconds.
 
 Open-vocab detection populates `Detections` (text → boxes); Grounded-SAM populates
 `Masks` (text → boxes → masks).
@@ -277,8 +291,9 @@ Open-vocab detection populates `Detections` (text → boxes); Grounded-SAM popul
 - `Detection.BBox` is **always in ORIGINAL image coords** (mapped back via `PreprocessMeta`).
 - Prompts (box/point/text) are in **original-image** coordinates and flow through
   `PredictPrompt`; an empty prompt is valid for models that need none.
-- The `Result` schema is shared across all tasks (`Detections`, `Masks`,
-  `Classifications`, `DepthMap`/`DepthWidth`/`DepthHeight`; masks as column-major RLE).
+- The `Result` schema is shared across all tasks (`Detections`, `Masks`, `Grasps`,
+  `Classifications`, `Embeddings`, `DepthMap`/`DepthWidth`/`DepthHeight`; masks as
+  column-major RLE).
   Never invent a per-model schema.
 - Adding a model **does not touch core**: just add a package under
   `internal/models/<name>/` + `Register()` + one blank import line in

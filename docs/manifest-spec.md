@@ -7,8 +7,8 @@ Each model is a subdirectory in the registry (`./models/<name>/`) containing a
 
 ```yaml
 name: rf-detr                 # required — model identifier in the registry
-task: detection               # required — detection | segmentation | open_vocab | depth | classification | embed
-license: Apache-2.0           # required — permissive ONLY (Apache-2.0/MIT/BSD); AGPL forbidden
+task: detection               # required — detection | segmentation | open_vocab | depth | classification | embed | grasp | instance_detection
+license: Apache-2.0           # required — permissive ONLY (Apache-2.0/MIT/BSD, any casing); AGPL forbidden
 architecture: rf-detr         # optional — factory key (default = name)
 model_file: rf-detr-base.onnx # required (when no `files:`) — relative path to the .onnx
 
@@ -44,7 +44,7 @@ postprocess:
   conf_threshold: 0.5
   max_detections: 300
 
-labels: coco.txt              # optional — one class per line
+labels: coco91.txt            # optional — one class per line (RF-DETR: 91 COCO ids, index 0 = N/A)
 
 runtime:
   prefer: [cuda, cpu]   # EP fallback chain (CPU is always appended last); tensorrt is opt-in:
@@ -95,7 +95,7 @@ runtime:
 | Field | Meaning |
 |-------|---------|
 | `name` | required — registry identifier |
-| `task` | `detection` / `segmentation` / `open_vocab` / `depth` / `classification` / `embed` |
+| `task` | `detection` / `segmentation` / `open_vocab` / `depth` / `classification` / `embed` / `grasp` / `instance_detection` |
 | `license` | required — must be in the permissive allowlist (below) |
 | `architecture` | optional — factory key (default = `name`) |
 | `model_file` | path to the .onnx — **optional when `files:` is present** |
@@ -111,6 +111,10 @@ runtime:
 | `postprocess.text_threshold` | **GroundingDINO only** — threshold for assigning text tokens to a detected box (open-vocab label gating) |
 | `postprocess.max_detections` | cap on returned detections |
 | `labels` | optional labels file (one class per line) |
+| `detector` / `segmenter` | **`grasp` architecture only** — composition: `segmenter` picks the mask backbone (default `mobile-sam`); `detector` is optional (e.g. `rf-detr`, `grounding-dino`) for class-aware grasps, omitted for class-agnostic ones. Their graphs are referenced by role in `files:` |
+| `grasp` | **`grasp` architecture only** — `gripper_min` / `gripper_max`: default jaw-opening bounds in original-image pixels (a request may override them) |
+| `explain` | **optional** — enables `/api/explain` heatmaps: `type` (`attention` or `score_cam`), `outputs` (`attention` → attention output name, or `features` → feature-map output name), `role` (PipelineModel: which role's graph has them), `spatial_stride` (default 32), `top_channels` (Score-CAM, default 64). Absent ⇒ the model does not support explain |
+| `instance` | **optional** — one-shot / template detection (OWL-ViT): `max_templates`, `sim_threshold`, `patch_size`. Absent ⇒ the model accepts no template prompts |
 | `runtime.prefer` | EP fallback chain (NVIDIA `tensorrt`/`cuda`, Apple `coreml`, Windows `directml`, Intel `openvino`, `cpu`). Write `[cuda, cpu]` for NVIDIA: the operator turns TensorRT on for the whole server with `--tensorrt` / `VISIONSERVE_TENSORRT=1`, which inserts `tensorrt` before `cuda`. List `tensorrt` here only if the model was measured under it. `VISIONSERVE_EP` replaces this chain |
 | `runtime.idle_unload_seconds` | idle auto-unload (0 = never) |
 | `runtime.threads` | **optional** — map role → ONNX Runtime intra-op threads for that role's session(s), e.g. `threads: {head: 1}`. Overrides the default for that role only: ORT's own (one spinning thread per physical core) for a lone session, the pool cap (`NumCPU/(4n)`, `VISIONSERVE_POOL_THREADS`) for each session of a pool. `0` = ORT's default, explicitly. A value above the host's logical CPUs is capped at load (logged once). Roles not listed keep the default. Results do not depend on it; use it for a small session that runs between a large one's calls, whose default thread pool otherwise competes with the large one on CPU |
@@ -119,9 +123,9 @@ runtime:
 
 | Field | Constraint |
 |-------|------------|
-| `name` | required, non-empty |
-| `license` | must be ∈ {Apache-2.0, MIT, BSD-3-Clause, BSD-2-Clause}. **AGPL is strictly forbidden.** |
-| `task` | ∈ {detection, segmentation, open_vocab, depth, classification, embed} |
+| `name` | required; matches `^[A-Za-z0-9][A-Za-z0-9._-]*$` and is at most 128 characters (it becomes a directory name, so `../x` or `/abs` is refused) |
+| `license` | must be ∈ {Apache-2.0, MIT, BSD-3-Clause, BSD-2-Clause}, matched case-insensitively (`apache-2.0` from an HF model card passes); the canonical SPDX spelling is stored back on the manifest. **AGPL is strictly forbidden**, in any casing. |
+| `task` | ∈ {detection, segmentation, open_vocab, depth, classification, embed, grasp, instance_detection} |
 | `model_file` / `files` | at least one required — `model_file` OR a non-empty `files:` map |
 | `input.width/height` | > 0 (may be omitted when `preprocess:` gives `size` or `width`/`height`) |
 | `input.layout` | NCHW / NHWC (or empty) |

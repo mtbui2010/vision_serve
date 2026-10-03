@@ -2,7 +2,8 @@
 #
 # Two variants (--build-arg ORT_VARIANT):
 #   cpu (default): slim Debian + ONNX Runtime CPU build.            ~141 MB
-#   gpu           : CUDA 12.4 + cuDNN 9 + ORT GPU (CUDA + TensorRT providers). ~3-5 GB
+#   gpu           : CUDA 12.4 + cuDNN 9 + ORT GPU (CUDA + TensorRT providers; no TensorRT
+#                   libraries). ~3-5 GB
 #
 # The GPU variant runs CUDA → CPU. It includes ORT's TensorRT provider (but not the TensorRT
 # libraries) so TensorRT can be opted into: mount libnvinfer.so.10 and set

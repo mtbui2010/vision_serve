@@ -259,7 +259,7 @@ func (r runner) Run(role string, inputs map[string]engine.Tensor) ([]engine.Tens
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L227-L237)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L229-L239)
 
 ### Exclusive models
 
@@ -279,7 +279,7 @@ func (s *Session) inferPipeline(img image.Image, prompt models.Prompt) (api.Resu
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L116-L122)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L118-L124)
 
 ### Admission control
 

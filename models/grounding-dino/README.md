@@ -237,12 +237,13 @@ for the whole prompt — the win is entirely in doing one pass instead of N.
 > prevent, where the CUDA EP cannot find `libcudnn.so.9` and ORT quietly drops to CPU without
 > erroring. Run with `VISIONSERVE_TRACE=1` to see which EP was actually selected.
 
-TensorRT is expected to be substantially faster still, but no TensorRT number is quoted here
-because `libnvinfer.so.10` is not installed on this host and the previously recorded `~70 ms`
-has not been reproduced on the current ORT build.
-
-VisionServe auto-detects TRT at startup. Check status with `visionserve version` — the
-response also includes a `hint` field when TRT is absent.
+TensorRT was measured later (29 Sep 2026, served, same weights, held-out-names protocol): ~104 ms
+against CUDA's ~153 ms, but 6.83 mAP lower on the unseen names (37.78 vs 44.61) with 243 fewer
+boxes, and it rebuilds its engine for every new prompt length (see `manifest.yaml` and
+BUGS_TO_FIX.md #3). So the manifest prefers `[cuda, cpu]`, and TensorRT is opt-in for the whole
+server with `visionserve serve --tensorrt` or `VISIONSERVE_TENSORRT=1`. `visionserve version`
+prints the EP chain in effect; a response carries a `hint` only when TensorRT was requested but
+`libnvinfer.so.10` was not found.
 
 ## License
 

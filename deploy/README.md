@@ -72,7 +72,6 @@ All available models (Apache-2.0 / MIT):
 ```bash
 docker exec -it visionserve visionserve pull rf-detr          # detection
 docker exec -it visionserve visionserve pull rf-detr-nano     # detection, faster
-docker exec -it visionserve visionserve pull rt-detr          # detection, COCO-80
 docker exec -it visionserve visionserve pull mobile-sam       # segmentation
 docker exec -it visionserve visionserve pull efficient-sam    # segmentation
 docker exec -it visionserve visionserve pull sam2             # segmentation (SAM2)
@@ -99,6 +98,9 @@ docker exec -it visionserve visionserve pull rfdetr-gdino-siglip-sam-etri  # + r
 docker exec -it visionserve visionserve pull gdino-siglip               # GroundingDINO + SigLIP rescoring, no RF-DETR
 docker exec -it visionserve visionserve pull gdino-siglip-sam           # + MobileSAM masks
 ```
+
+`rt-detr` is still listed by `visionserve pull` but cannot be pulled: its upstream repository
+(`onnx-community/RT-DETR-l-hf`) returns 401 and the catalog marks it unverified.
 
 `visionserve pull grounding-dino` (or `groundingdino`) always installs the **corrected**
 fixed-mask export (`mtbui2010/grounding-dino-tiny-fixedmask-ONNX`), never the onnx-community

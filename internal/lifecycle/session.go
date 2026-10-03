@@ -16,8 +16,10 @@ import (
 )
 
 // Session wraps a live model: its pre/postprocess (models.*) plus its heavy ONNX
-// session(s) (engine.Session). One Session serves many requests concurrently;
-// engine.Session.Run locks a mutex, so inference is safely serialized.
+// session(s) (engine.Session). One Session serves many requests concurrently. Each
+// engine.Session runs every ORT call on its own worker goroutine locked to one OS thread
+// (ORT's CUDA EP keeps per-thread GPU state; see engine.Session), so calls into one session
+// are serialized; a pool spreads them over several such sessions.
 //
 // Two modes (exactly one is set):
 //   - simple: a models.Model + ONE engine.Session (pre → infer → post). e.g. rf-detr.

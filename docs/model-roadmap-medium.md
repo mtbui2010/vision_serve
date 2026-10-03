@@ -452,8 +452,8 @@ However there are **two new lifecycle concerns** not present in Grounded-SAM:
 
 1. **Per-inference loop calling `Runner.Run` N times:** This is already possible — `Runner`
    has no loop limit. But the detector session lock (if any) will be held across all N
-   pose calls in `Infer()`. Currently `engine.Session.Run` takes a mutex per call
-   (`session.go` line 89: `s.RunNamed(inputs)`). This is fine for single-threaded
+   pose calls in `Infer()`. Currently `engine.Session.Run` serializes calls per session
+   (each call is queued on the session's OS-locked worker, `internal/engine/ort.go`). This is fine for single-threaded
    requests; it becomes a bottleneck only under concurrent requests. No change needed
    in Phase 1.
 

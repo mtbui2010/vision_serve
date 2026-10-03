@@ -1,6 +1,7 @@
-// Package hybrid implements a router model (Apache-2.0) that picks the right detector
-// per request: RF-DETR (fast, closed-set COCO) when every requested class is in RF-DETR's
-// vocabulary, otherwise GroundingDINO (open-vocab, text-prompted). With the optional
+// Package hybrid implements a router model (Apache-2.0) that splits the prompt word by word:
+// each word in RF-DETR's vocabulary goes to RF-DETR (fast, closed-set), every other word to
+// GroundingDINO (open-vocab, text-prompted) or to the distilled head, and the answers are
+// concatenated (pipeline.Router). With the optional
 // MobileSAM encoder+decoder roles it also returns one mask per detected box (Grounded-SAM
 // style). It is a fully free community pipeline — no AGPL, no Python at runtime (CLAUDE.md).
 //

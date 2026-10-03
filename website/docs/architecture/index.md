@@ -128,7 +128,7 @@ func (s *Session) Predict(img image.Image, prompt models.Prompt, now time.Time) 
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L126-L137)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L128-L139)
 
 ```go title="internal/lifecycle/session.go"
 func (s *Session) predictSimple(img image.Image) (api.Result, error) {
@@ -144,7 +144,7 @@ func (s *Session) predictSimple(img image.Image) (api.Result, error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L191-L201)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L193-L203)
 
 `meta` (a `PreprocessMeta`) records how the image was resized and padded, so `Postprocess` can
 map every box back from the network's input frame to the original photo.
@@ -190,7 +190,7 @@ the [engine page](engine.md) explains why it is not the default.
 	return out, nil
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L128-L131)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L199-L202)
 
 ### Only permissive licenses get in
 

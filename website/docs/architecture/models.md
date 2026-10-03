@@ -72,7 +72,7 @@ func (s *Session) predictSimple(img image.Image) (api.Result, error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L191-L201)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L193-L203)
 
 A **`PipelineModel`** is for anything that needs a *prompt* (a box, a point or a text phrase)
 and/or chains several ONNX graphs. MobileSAM, for example, runs an image encoder once and then a
@@ -102,7 +102,7 @@ type PipelineModel interface {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L226-L276)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L227-L277)
 
 Two optional interfaces let a pipeline ask the runtime for a concurrency policy instead of
 implementing one itself:
@@ -117,7 +117,7 @@ type PoolSizer interface {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L248-L261)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L249-L262)
 
 - `Exclusive() == true` makes the lifecycle hold a per-loaded-model lock around `Infer`
   (GroundingDINO and Grounded-SAM use it; grasp only in its GroundingDINO-detector variant).
@@ -139,7 +139,7 @@ type Prompt struct {
 	ROI [4]float64
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L146-L197)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L146-L198)
 
 Besides `Text`, `Boxes` and `Points` it holds the size filter (`MinSize`/`MaxSize`), grasp
 gripper bounds, GroundingDINO thresholds, background-model knobs, the automask `GridSize`, a
@@ -305,7 +305,7 @@ var licenseAllowlist = map[string]string{
 	m.License = canonLicense
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L265-L269)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L275-L279)
 
 The rest of `validate()` rejects:
 

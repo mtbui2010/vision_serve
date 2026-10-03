@@ -104,8 +104,15 @@ func TestValidateNormalizedLicenseMatchesLedger(t *testing.T) {
 func TestValidateRejectsBadTask(t *testing.T) {
 	m := &Manifest{Name: "x", License: "Apache-2.0", Task: "not_a_real_task", ModelFile: "x.onnx"}
 	m.Input.Width, m.Input.Height = 1, 1
-	if err := m.validate(); err == nil || !strings.Contains(err.Error(), "task") {
+	err := m.validate()
+	if err == nil || !strings.Contains(err.Error(), "task") {
 		t.Fatalf("expected an invalid-task error, got: %v", err)
+	}
+	// The error lists every valid task, not a stale subset.
+	for task := range validTasks {
+		if !strings.Contains(err.Error(), string(task)) {
+			t.Errorf("invalid-task error %q does not list %q", err, task)
+		}
 	}
 }
 
