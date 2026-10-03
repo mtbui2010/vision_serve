@@ -244,8 +244,6 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
 - 4 điểm nóng chưa làm (bảng trên).
 - **Mask MobileSAM trên GPU** lệch 1–5 pixel biên khi tải song song. Lỗi có từ trước; có thể
   thử `use_deterministic_compute` của ORT.
-- **`detr.splitRF`** có thể gọi thẳng `SplitOutputs`, vì test đã chứng minh hai hàm chọn cùng
-  tensor.
 - **`Admit`** chưa nhận ctx, và multipart vẫn được parse trước `Admit`.
 - **`top_left_pad`** (SCRFD) ánh xạ sai trục x với ảnh panorama cực đoan. Đây là hành vi giống
   InsightFace gốc, không phải hồi quy.
