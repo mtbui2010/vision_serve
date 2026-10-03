@@ -32,6 +32,9 @@ type fakeRuntime struct {
 	runErr    error         // returned by every inference call
 	result    api.Result
 
+	runWait    chan struct{} // when set, Load and the inference calls wait for it (or ctx), see wait
+	runEntered chan struct{} // when set, closed when one of those calls starts waiting
+
 	prompt  models.Prompt
 	img     image.Image
 	explain lifecycle.ExplainRequest
@@ -69,43 +72,79 @@ func (f *fakeRuntime) Admit(ctx context.Context, name string) (func(), error) {
 	return func() { f.event("release") }, nil
 }
 
-func (f *fakeRuntime) Load(name string) error   { f.event("load:" + name); return f.runErr }
+func (f *fakeRuntime) Load(ctx context.Context, name string) error {
+	f.event("load:" + name)
+	if err := f.wait(ctx); err != nil {
+		return err
+	}
+	return f.runErr
+}
 func (f *fakeRuntime) Unload(name string) error { f.event("unload:" + name); return f.runErr }
 func (f *fakeRuntime) IsLoaded(string) bool     { return false }
 func (f *fakeRuntime) Close()                   {}
 
-func (f *fakeRuntime) PredictPrompt(name string, img image.Image, p models.Prompt) (api.Result, error) {
+// wait stands in for the time an inference call waits for its model, session or lock: when
+// runWait is set it blocks until runWait is closed or ctx ends, and in the second case returns an
+// error wrapping ctx.Err() as lifecycle.Manager does. runEntered, when set, is closed on entry.
+func (f *fakeRuntime) wait(ctx context.Context) error {
+	if f.runEntered != nil {
+		close(f.runEntered)
+	}
+	if f.runWait == nil {
+		return nil
+	}
+	select {
+	case <-f.runWait:
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("fake: gave up waiting: %w", ctx.Err())
+	}
+}
+
+func (f *fakeRuntime) PredictPrompt(ctx context.Context, name string, img image.Image, p models.Prompt) (api.Result, error) {
 	f.event("predict:" + name)
 	f.mu.Lock()
 	f.prompt, f.img = p, img
 	f.mu.Unlock()
+	if err := f.wait(ctx); err != nil {
+		return api.Result{}, err
+	}
 	if f.runErr != nil {
 		return api.Result{}, f.runErr
 	}
 	return f.result, nil
 }
 
-func (f *fakeRuntime) InferTensor(name string, in engine.Tensor) (api.Result, error) {
+func (f *fakeRuntime) InferTensor(ctx context.Context, name string, in engine.Tensor) (api.Result, error) {
 	f.event("tensor:" + name)
 	f.tensor = in
+	if err := f.wait(ctx); err != nil {
+		return api.Result{}, err
+	}
 	if f.runErr != nil {
 		return api.Result{}, f.runErr
 	}
 	return f.result, nil
 }
 
-func (f *fakeRuntime) Explain(name string, img image.Image, req lifecycle.ExplainRequest) (lifecycle.ExplainResult, error) {
+func (f *fakeRuntime) Explain(ctx context.Context, name string, img image.Image, req lifecycle.ExplainRequest) (lifecycle.ExplainResult, error) {
 	f.event("explain:" + name)
 	f.explain, f.img = req, img
+	if err := f.wait(ctx); err != nil {
+		return lifecycle.ExplainResult{}, err
+	}
 	if f.runErr != nil {
 		return lifecycle.ExplainResult{}, f.runErr
 	}
 	return lifecycle.ExplainResult{Heatmap: []float32{0, 0.5, 1, 0.25}, Width: 2, Height: 2}, nil
 }
 
-func (f *fakeRuntime) Preprocess(name string, img image.Image, p models.Prompt) (lifecycle.PreprocessResult, error) {
+func (f *fakeRuntime) Preprocess(ctx context.Context, name string, img image.Image, p models.Prompt) (lifecycle.PreprocessResult, error) {
 	f.event("preprocess:" + name)
 	f.prompt, f.img = p, img
+	if err := f.wait(ctx); err != nil {
+		return lifecycle.PreprocessResult{}, err
+	}
 	if f.runErr != nil {
 		return lifecycle.PreprocessResult{}, f.runErr
 	}

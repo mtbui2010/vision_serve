@@ -90,9 +90,9 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 		writeError(w, errClientGone)
 		return
 	}
-	result, err := s.mgr.Explain(q.Model, img, req)
+	result, err := s.mgr.Explain(r.Context(), q.Model, img, req)
 	if err != nil {
-		writeError(w, err)
+		writeError(w, orClientGone(r.Context(), err))
 		return
 	}
 

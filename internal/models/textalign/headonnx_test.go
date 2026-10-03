@@ -1,6 +1,7 @@
 package textalign
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -296,7 +297,9 @@ func TestExactHeadONNXMatchesGoORT(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer sess.Close()
-			r := &headRunner{in: sess.InputNames(), out: sess.OutputNames(), run: sess.RunNamed}
+			r := &headRunner{in: sess.InputNames(), out: sess.OutputNames(), run: func(in map[string]engine.Tensor) ([]engine.Tensor, error) {
+				return sess.RunNamed(context.Background(), in)
+			}}
 
 			h, feats := headInputs(t, pr, c.q, c.n)
 			want, err := h.logits(pr, feats.Data, c.q, true)

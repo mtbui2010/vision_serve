@@ -25,15 +25,19 @@ const DefaultAddr = "127.0.0.1:11435"
 
 // modelRuntime is what the HTTP layer needs from lifecycle.Manager. It is an interface so the
 // handler tests can drive a fake (admission order, cancellation, status mapping) without ONNX.
+//
+// Every call that can wait takes the request's context: when the client leaves, the runtime stops
+// waiting (for the model to load, a session, a model's lock) and returns an error wrapping
+// ctx.Err(), which the handlers answer as errClientGone (499).
 type modelRuntime interface {
 	Admit(ctx context.Context, name string) (release func(), err error)
-	Load(name string) error
+	Load(ctx context.Context, name string) error
 	Unload(name string) error
 	IsLoaded(name string) bool
-	PredictPrompt(name string, img image.Image, prompt models.Prompt) (api.Result, error)
-	InferTensor(name string, in engine.Tensor) (api.Result, error)
-	Explain(name string, img image.Image, req lifecycle.ExplainRequest) (lifecycle.ExplainResult, error)
-	Preprocess(name string, img image.Image, prompt models.Prompt) (lifecycle.PreprocessResult, error)
+	PredictPrompt(ctx context.Context, name string, img image.Image, prompt models.Prompt) (api.Result, error)
+	InferTensor(ctx context.Context, name string, in engine.Tensor) (api.Result, error)
+	Explain(ctx context.Context, name string, img image.Image, req lifecycle.ExplainRequest) (lifecycle.ExplainResult, error)
+	Preprocess(ctx context.Context, name string, img image.Image, prompt models.Prompt) (lifecycle.PreprocessResult, error)
 	Close()
 }
 

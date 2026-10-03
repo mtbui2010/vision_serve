@@ -291,8 +291,8 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   đọc có thể lớn. Nếu ảnh đến trước field `model`, ảnh
   được giữ với đúng giới hạn cũ (32 MiB trong RAM, phần còn lại ra file tạm) và request được admit
   sau khi đọc hết form. JSON vẫn đọc trọn trước `Admit` (model nằm trong JSON, body đã bị chặn ở
-  32 MiB). Còn lại: khi quá tải, một request sai định dạng có thể nhận 503 thay vì 400; và
-  `PredictPrompt` vẫn chờ slot session mà không theo ctx.
+  32 MiB). Hai điểm còn lại (503 thay vì 400 khi quá tải; `PredictPrompt` chờ slot không theo
+  ctx) đã xử lý ở mục dưới.
 - **`top_left_pad`** (SCRFD): **đã sửa**. Trước đây Meta dùng một `det_scale = new_h / h` cho cả
   hai trục, giống InsightFace gốc. Vì `new_w` và `new_h` bị cắt phần lẻ riêng, trục x lệch tới
   1–2 pixel input ở mép xa với ảnh thường, và lệch hẳn với panorama cực đoan (10000×10 → 640×1:
@@ -304,8 +304,27 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
 
 ### Vẫn còn mở sau đợt này (2026-10-04)
 
-- `PredictPrompt` chờ slot session mà không theo ctx; khi quá tải, request multipart sai định
-  dạng có thể nhận 503 thay vì 400.
+- ~~`PredictPrompt` chờ slot session mà không theo ctx; khi quá tải, request multipart sai định
+  dạng có thể nhận 503 thay vì 400.~~ **Đã xong (365ad7b).**
+  - `PredictPrompt`, `InferTensor`, `Explain`, `Preprocess` và `Load` nhận ctx của request. Mọi
+    chỗ chờ trước khi chạy inference đều theo ctx: chờ load model, chờ lock của model
+    `Exclusive` (nay là semaphore 1 slot thay cho mutex), chờ session
+    (`engine.Runnable.Run(ctx, …)`: chờ worker của session đơn hoặc một session rảnh trong pool).
+    Client bỏ đi thì request thôi chờ, không chạy gì, server trả 499.
+  - Không ngắt một `Run` đã vào ORT (không ngắt được). Nhưng `Runner` mang ctx của request, nên
+    pipeline không chạy stage kế tiếp cho request đã bỏ; Score-CAM dừng giữa các kênh.
+  - Load chạy trên goroutine riêng, không thuộc request nào. Một request thôi chờ (kể cả request
+    khởi động load) không hủy load của các request khác; load xong thì model vẫn live. Chỉ
+    `Unload`/`Close` hủy load.
+  - Lease và slot admission được trả trên mọi đường đi. Test: request chờ slot duy nhất (session,
+    pool, lock `Exclusive`) bị hủy thì trả về ngay, không chạy, `refs`/admission về 0; load
+    singleflight không bị ảnh hưởng khi waiter (và cả leader) hủy; `-race -count=5` sạch. Golden
+    43 case trùng từng byte.
+  - 503 thay vì 400: **giữ nguyên, có chủ ý** (ghi trong `multipart.go`). Phép thử admission chạy
+    trước khi validate form; đa số lỗi định dạng nằm trong hoặc sau part ảnh, muốn thấy thì phải
+    đọc đúng phần upload mà phép thử muốn bỏ qua. Kiểm vài field đứng trước ảnh thì phải chép
+    validate của từng endpoint vào đó, chỉ để đổi lỗi nào client hỏng thấy trước. Gửi lại sẽ
+    nhận 400.
 - Kernel GPU tất định đang là opt-in. Bật mặc định thì phải đo lại và cập nhật các con số mAP
   trong manifest. Trên Windows chưa nối. Có thể thay shim cgo bằng một PR nhỏ lên
   `yalue/onnxruntime_go` (thêm `SessionOptions.SetDeterministicCompute`).

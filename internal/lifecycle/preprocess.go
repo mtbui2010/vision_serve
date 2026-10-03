@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"image"
@@ -35,7 +36,13 @@ type PreprocessResult struct {
 //   - a PipelineModel: its own Infer, run against a recording Runner that captures the inputs of
 //     the first session call and stops there. Whatever the model builds — resized pixels, a text
 //     mask, token ids — is what gets returned.
-func (m *Manager) Preprocess(name string, img image.Image, prompt models.Prompt) (PreprocessResult, error) {
+//
+// It waits for nothing (no load, no session), so ctx is checked once, on entry: a request whose
+// client has left is not preprocessed.
+func (m *Manager) Preprocess(ctx context.Context, name string, img image.Image, prompt models.Prompt) (PreprocessResult, error) {
+	if err := ctx.Err(); err != nil {
+		return PreprocessResult{}, gaveUp(name, err)
+	}
 	base, man, err := m.buildModel(name)
 	if err != nil {
 		return PreprocessResult{}, err

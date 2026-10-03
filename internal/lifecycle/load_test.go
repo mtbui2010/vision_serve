@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"image"
 	"os"
 	"path/filepath"
@@ -60,7 +61,7 @@ func TestConcurrentLoadsBuildOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := m.Load("slow"); err != nil {
+			if err := m.Load(context.Background(), "slow"); err != nil {
 				t.Errorf("Load: %v", err)
 			}
 		}()

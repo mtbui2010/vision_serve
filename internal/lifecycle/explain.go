@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"time"
@@ -82,23 +83,26 @@ func (s *Session) explainEngineOrLoad() (engine.Runnable, error) {
 
 // Explain runs heatmap inference for the named model.
 // Returns raw float32 heatmap; rendering (PNG / numpy response) is done by the handler.
-func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (ExplainResult, error) {
+// ctx as in PredictPrompt: a gone request stops waiting for the model and its sessions, and a
+// Score-CAM run stops between its per-channel passes.
+func (m *Manager) Explain(ctx context.Context, name string, img image.Image, req ExplainRequest) (ExplainResult, error) {
 	if req.DetectionIdx < 0 || req.TopChannels < 0 {
 		// A negative index would panic the Score-CAM runner (res.Detections[-1]).
 		return ExplainResult{}, fmt.Errorf("lifecycle: explain: %w: detection index %d / top channels %d must be >= 0",
 			ErrInvalidRequest, req.DetectionIdx, req.TopChannels)
 	}
 	// Ensure the model is loaded.
-	if err := m.Load(name); err != nil {
-		return ExplainResult{}, err
-	}
-	s, release, err := m.acquire(name)
+	s, release, err := m.loadAndAcquire(ctx, name)
 	if err != nil {
 		return ExplainResult{}, err
 	}
 	defer release()
 
-	// Ensure explain session exists (lazy), on the session this request holds.
+	// Ensure explain session exists (lazy), on the session this request holds. Creating it is
+	// heavy and cannot be interrupted: not for a request that is already gone.
+	if err := ctx.Err(); err != nil {
+		return ExplainResult{}, gaveUp(name, err)
+	}
 	explainEng, err := s.explainEngineOrLoad()
 	if err != nil {
 		return ExplainResult{}, err
@@ -143,7 +147,7 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 		if req.Class != "" {
 			// A class that is not detected is an error, not "explain detection 0": that used to
 			// return a heatmap for some other object, labelled as the requested class.
-			detectOuts, derr := s.engine.Run([]engine.Tensor{inputTensor})
+			detectOuts, derr := s.engine.Run(ctx, []engine.Tensor{inputTensor})
 			if derr != nil {
 				return ExplainResult{}, fmt.Errorf("lifecycle: explain: detection pass failed: %w", derr)
 			}
@@ -165,7 +169,7 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 	}
 
 	// Run the explain session (all outputs: detect + explain tensors).
-	outputs, err := explainEng.Run([]engine.Tensor{inputTensor})
+	outputs, err := explainEng.Run(ctx, []engine.Tensor{inputTensor})
 	if err != nil {
 		return ExplainResult{}, fmt.Errorf("lifecycle: explain session inference failed: %w", err)
 	}
@@ -214,11 +218,14 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 			return ExplainResult{}, fmt.Errorf("lifecycle: score_cam explain requires a plain Model, not a pipeline")
 		}
 		detectRunner := func(masked image.Image) (float32, error) {
+			if err2 := ctx.Err(); err2 != nil { // ends the Score-CAM loop (see ScoreCAMHeatmap)
+				return 0, gaveUp(name, err2)
+			}
 			in, meta2, err2 := plainMdl.Preprocess(masked)
 			if err2 != nil {
 				return 0, err2
 			}
-			outs, err2 := s.engine.Run([]engine.Tensor{in})
+			outs, err2 := s.engine.Run(ctx, []engine.Tensor{in})
 			if err2 != nil {
 				return 0, err2
 			}

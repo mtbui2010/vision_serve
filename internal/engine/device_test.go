@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -69,11 +70,11 @@ func TestRunAfterCloseReturnsErrClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Run(in); err != nil {
+	if _, err := s.Run(context.Background(), in); err != nil {
 		t.Fatal(err)
 	}
 	_ = s.Close()
-	if _, err := s.Run(in); !errors.Is(err, ErrClosed) {
+	if _, err := s.Run(context.Background(), in); !errors.Is(err, ErrClosed) {
 		t.Fatalf("Run after Close: %v, want ErrClosed", err)
 	}
 
@@ -84,7 +85,7 @@ func TestRunAfterCloseReturnsErrClosed(t *testing.T) {
 	pool := NewSessionPool([]*Session{s2})
 	_ = pool.Close()
 	done := make(chan error, 1)
-	go func() { _, err := pool.Run(in); done <- err }()
+	go func() { _, err := pool.Run(context.Background(), in); done <- err }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, ErrClosed) {

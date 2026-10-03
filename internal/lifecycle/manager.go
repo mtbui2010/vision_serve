@@ -14,6 +14,7 @@
 package lifecycle
 
 import (
+	"context"
 	"fmt"
 	"image"
 	"sync"
@@ -90,18 +91,20 @@ func (m *Manager) SetIdleUnloadOverride(sec int) {
 
 // Predict ensures the model is loaded then runs inference (no prompt). Back-compat
 // entrypoint for plain models like rf-detr.
-func (m *Manager) Predict(name string, img image.Image) (api.Result, error) {
-	return m.PredictPrompt(name, img, models.Prompt{})
+func (m *Manager) Predict(ctx context.Context, name string, img image.Image) (api.Result, error) {
+	return m.PredictPrompt(ctx, name, img, models.Prompt{})
 }
 
 // PredictPrompt ensures the model is loaded then runs inference with a prompt.
 // Plain models ignore the prompt; prompted models (SAM, GroundingDINO, Grounded-SAM)
 // use it. This is the entrypoint for handlers/CLI.
-func (m *Manager) PredictPrompt(name string, img image.Image, prompt models.Prompt) (api.Result, error) {
-	if err := m.Load(name); err != nil {
-		return api.Result{}, err
-	}
-	s, release, err := m.acquire(name)
+//
+// ctx is the request's. Every wait on the way to inference follows it — the model's load (see
+// Load), an Exclusive model's lock, a session or a pool slot — so a request whose client has left
+// stops waiting and runs nothing; the error wraps ctx.Err(). An inference already inside ONNX
+// Runtime is not interrupted, but a pipeline does not start its next stage for a gone request.
+func (m *Manager) PredictPrompt(ctx context.Context, name string, img image.Image, prompt models.Prompt) (api.Result, error) {
+	s, release, err := m.loadAndAcquire(ctx, name)
 	if err != nil {
 		return api.Result{}, err
 	}
@@ -109,7 +112,21 @@ func (m *Manager) PredictPrompt(name string, img image.Image, prompt models.Prom
 	if err := m.resolveTemplates(&prompt); err != nil {
 		return api.Result{}, err
 	}
-	return s.Predict(img, prompt, time.Now())
+	return s.Predict(ctx, img, prompt, time.Now())
+}
+
+// loadAndAcquire loads name if needed and leases its live session, for a request with context ctx.
+// The caller must call release when err is nil. A ctx that ended during the load is reported (and
+// no lease is held): the load may have finished in the same instant, and nothing is run for a
+// request that is gone.
+func (m *Manager) loadAndAcquire(ctx context.Context, name string) (*Session, func(), error) {
+	if err := m.Load(ctx, name); err != nil {
+		return nil, nil, err
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, gaveUp(name, err)
+	}
+	return m.acquire(name)
 }
 
 // resolveTemplates fills prompt.TemplateImages from the registered set prompt.TemplateName
@@ -128,17 +145,14 @@ func (m *Manager) resolveTemplates(prompt *models.Prompt) error {
 }
 
 // InferTensor ensures the model is loaded then runs the tensor-in path (no decode/preprocess).
-// See Session.PredictTensor. Simple models only.
-func (m *Manager) InferTensor(name string, in engine.Tensor) (api.Result, error) {
-	if err := m.Load(name); err != nil {
-		return api.Result{}, err
-	}
-	s, release, err := m.acquire(name)
+// See Session.PredictTensor. Simple models only. ctx as in PredictPrompt.
+func (m *Manager) InferTensor(ctx context.Context, name string, in engine.Tensor) (api.Result, error) {
+	s, release, err := m.loadAndAcquire(ctx, name)
 	if err != nil {
 		return api.Result{}, err
 	}
 	defer release()
-	return s.PredictTensor(in, time.Now())
+	return s.PredictTensor(ctx, in, time.Now())
 }
 
 // Loaded returns the names of the models currently in memory.

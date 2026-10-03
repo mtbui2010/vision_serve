@@ -86,8 +86,8 @@ func (s *Server) preprocess(w http.ResponseWriter, r *http.Request) (lifecycle.P
 	if r.Context().Err() != nil {
 		return lifecycle.PreprocessResult{}, "", errClientGone
 	}
-	res, err := s.mgr.Preprocess(q.Model, img, prompt)
-	return res, q.Model, err
+	res, err := s.mgr.Preprocess(r.Context(), q.Model, img, prompt)
+	return res, q.Model, orClientGone(r.Context(), err)
 }
 
 func encodePreprocess(name string, res lifecycle.PreprocessResult) preprocessResponse {

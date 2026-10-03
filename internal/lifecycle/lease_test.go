@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,8 +13,10 @@ import (
 // fakeEngine records Close and fails Run after it, like a real session would.
 type fakeEngine struct{ closed atomic.Bool }
 
-func (f *fakeEngine) Run([]engine.Tensor) ([]engine.Tensor, error) { return f.check() }
-func (f *fakeEngine) RunNamed(map[string]engine.Tensor) ([]engine.Tensor, error) {
+func (f *fakeEngine) Run(context.Context, []engine.Tensor) ([]engine.Tensor, error) {
+	return f.check()
+}
+func (f *fakeEngine) RunNamed(context.Context, map[string]engine.Tensor) ([]engine.Tensor, error) {
 	return f.check()
 }
 func (f *fakeEngine) check() ([]engine.Tensor, error) {
@@ -48,7 +51,7 @@ func TestUnloadWaitsForInFlightRequest(t *testing.T) {
 	if fe.closed.Load() {
 		t.Fatal("Unload closed a session that a request was still using")
 	}
-	if _, err := s.engine.Run(nil); err != nil {
+	if _, err := s.engine.Run(context.Background(), nil); err != nil {
 		t.Fatalf("in-flight request failed after Unload: %v", err)
 	}
 	if _, _, err := m.acquire("m"); err == nil {
@@ -96,7 +99,7 @@ func TestConcurrentRequestsAndUnloadDoNotRace(t *testing.T) {
 				return // unloaded before we got it: a clean error, which is fine
 			}
 			defer release()
-			if _, err := s.engine.Run(nil); err != nil {
+			if _, err := s.engine.Run(context.Background(), nil); err != nil {
 				t.Errorf("request saw a closed session: %v", err)
 			}
 		}()

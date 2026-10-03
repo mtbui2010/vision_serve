@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"image"
 	"strings"
 	"testing"
@@ -15,7 +16,7 @@ func TestExplainUsesLoadTimeManifest(t *testing.T) {
 	writeTestModel(t, root, "snap", "test-pipe", "")
 	reg := scanRegistry(t, root)
 	m, _ := newFakeManager(t, reg)
-	if err := m.Load("snap"); err != nil {
+	if err := m.Load(context.Background(), "snap"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -28,7 +29,7 @@ func TestExplainUsesLoadTimeManifest(t *testing.T) {
 		t.Fatal("fixture: the rescan did not pick up the edited manifest")
 	}
 
-	_, err := m.Explain("snap", image.NewRGBA(image.Rect(0, 0, 4, 4)), ExplainRequest{})
+	_, err := m.Explain(context.Background(), "snap", image.NewRGBA(image.Rect(0, 0, 4, 4)), ExplainRequest{})
 	if err == nil || !strings.Contains(err.Error(), "does not support explain") {
 		t.Fatalf("Explain = %v, want the load-time answer (no explain block)", err)
 	}

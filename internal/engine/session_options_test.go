@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"errors"
 	"os"
 	"testing"
@@ -52,7 +53,7 @@ func TestRealSessionWithIntraOpThreads(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	outs, err := s.Run([]Tensor{F32([]float32{4, 5, 6}, 1, 3)})
+	outs, err := s.Run(context.Background(), []Tensor{F32([]float32{4, 5, 6}, 1, 3)})
 	if err != nil {
 		t.Fatal(err)
 	}

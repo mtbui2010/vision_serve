@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"os"
@@ -23,11 +24,11 @@ func TestJobPanicBecomesErrorAndWorkerSurvives(t *testing.T) {
 	}()
 	defer s.Close()
 
-	_, err := s.submit(func() ([]Tensor, error) { panic("boom") })
+	_, err := s.submit(context.Background(), func() ([]Tensor, error) { panic("boom") })
 	if !errors.Is(err, ErrInferencePanic) {
 		t.Fatalf("panicking job: err = %v, want ErrInferencePanic", err)
 	}
-	outs, err := s.submit(func() ([]Tensor, error) { return []Tensor{F32([]float32{7}, 1)}, nil })
+	outs, err := s.submit(context.Background(), func() ([]Tensor, error) { return []Tensor{F32([]float32{7}, 1)}, nil })
 	if err != nil || len(outs) != 1 || outs[0].Data[0] != 7 {
 		t.Fatalf("job after a panic: outs=%v err=%v — the worker did not survive", outs, err)
 	}
@@ -61,7 +62,7 @@ func TestRealSessionUsableAfterJobPanic(t *testing.T) {
 	}
 	defer s.Close()
 
-	_, err = s.submit(func() ([]Tensor, error) {
+	_, err = s.submit(context.Background(), func() ([]Tensor, error) {
 		in, _ := ort.NewTensor(ort.NewShape(1, 3), []float32{1, 2, 3})
 		defer in.Destroy()
 		var nilMap map[string]int
@@ -72,7 +73,7 @@ func TestRealSessionUsableAfterJobPanic(t *testing.T) {
 	if !errors.Is(err, ErrInferencePanic) {
 		t.Fatalf("err = %v, want ErrInferencePanic", err)
 	}
-	outs, err := s.Run([]Tensor{F32([]float32{1, 2, 3}, 1, 3)})
+	outs, err := s.Run(context.Background(), []Tensor{F32([]float32{1, 2, 3}, 1, 3)})
 	if err != nil {
 		t.Fatalf("Run after a recovered panic: %v", err)
 	}

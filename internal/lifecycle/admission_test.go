@@ -106,7 +106,7 @@ func TestAdmitDefaultFollowsPoolSize(t *testing.T) {
 	if got := admitCapacity(t, m, "pooled"); got != defaultMinQueue {
 		t.Fatalf("not loaded: bound %d, want the floor %d", got, defaultMinQueue)
 	}
-	if err := m.Load("pooled"); err != nil {
+	if err := m.Load(context.Background(), "pooled"); err != nil {
 		t.Fatal(err)
 	}
 	if got := admitCapacity(t, m, "pooled"); got != 40 {

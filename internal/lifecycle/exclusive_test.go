@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"errors"
 	"image"
 	"sync"
@@ -64,7 +65,7 @@ func TestExclusivePipelineInferIsSerialized(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := m.Predict("excl", img); err != nil {
+			if _, err := m.Predict(context.Background(), "excl", img); err != nil {
 				t.Errorf("Predict: %v", err)
 			}
 		}()
@@ -111,7 +112,7 @@ func runConcurrently(t *testing.T, m *Manager, names ...string) {
 	img := image.NewRGBA(image.Rect(0, 0, 2, 2))
 	errs := make(chan error, len(names))
 	for _, n := range names {
-		go func(n string) { _, err := m.Predict(n, img); errs <- err }(n)
+		go func(n string) { _, err := m.Predict(context.Background(), n, img); errs <- err }(n)
 	}
 	for range names {
 		if err := <-errs; err != nil {
@@ -131,7 +132,7 @@ func TestExclusiveCountsAsOneSlot(t *testing.T) {
 	m.openRunnable = func(_ string, _, _ []string, n, _ int, _ []engine.Provider) (engine.Runnable, error) {
 		return &fakePool{n: n}, nil
 	}
-	if err := m.Load("excl"); err != nil {
+	if err := m.Load(context.Background(), "excl"); err != nil {
 		t.Fatal(err)
 	}
 	if got := admitCapacity(t, m, "excl"); got != defaultMinQueue {

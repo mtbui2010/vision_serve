@@ -1,6 +1,8 @@
 package explain
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -106,7 +108,9 @@ func scoreCAMStructural(feat engine.Tensor, topChannels, origW, origH int) ([]fl
 //
 // This is called directly by the handler (not through the Explainer interface) because
 // it needs the detect runner callback — a function that runs the detect ONNX session
-// on a masked image and returns the confidence score of the target detection.
+// on a masked image and returns the confidence score of the target detection. A channel whose
+// run fails is skipped, except when the error wraps context.Canceled or DeadlineExceeded: the
+// request is gone, and the whole run stops with that error.
 //
 // Parameters:
 //
@@ -170,6 +174,9 @@ func ScoreCAMHeatmap(
 
 		// Run detect session, get score for the target detection.
 		score, rerr := detectRunner(masked)
+		if errors.Is(rerr, context.Canceled) || errors.Is(rerr, context.DeadlineExceeded) {
+			return nil, 0, 0, rerr // the request is gone: no point in the remaining channels
+		}
 		if rerr != nil {
 			continue // skip channels where inference fails
 		}
