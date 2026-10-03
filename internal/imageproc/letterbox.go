@@ -1,6 +1,10 @@
 // Package imageproc holds shared image-processing utilities, written in pure Go
 // (github.com/disintegration/imaging + the image package) to keep the binary lightweight.
 // Do NOT use OpenCV/cgo here (CLAUDE.md).
+//
+// Model input preprocessing lives in internal/vision/preprocess (one Spec-driven
+// implementation); the resize / letterbox / tensor helpers here are thin wrappers over it, kept
+// for drawing code and the packages that still compose their input by hand.
 package imageproc
 
 import (
@@ -8,6 +12,8 @@ import (
 	"image/color"
 
 	"github.com/disintegration/imaging"
+
+	"visionserve/internal/vision/preprocess"
 )
 
 // LetterboxResult holds the letterboxed image + the info needed to map coordinates back.
@@ -20,34 +26,15 @@ type LetterboxResult struct {
 }
 
 // Letterbox resizes the image preserving aspect ratio into a WxH frame, then pads it to full size.
-// padColor is the background color of the pad region.
-//
-// TODO(verify): the correct pad color for RF-DETR needs to be confirmed against how the model was
-// trained/exported (many DETRs pad with 0, some pipelines use gray 114). Defaults to (0,0,0).
+// padColor is the background color of the pad region. The geometry is
+// preprocess.LetterboxSize; a model that needs the letterboxed TENSOR declares a preprocess.Spec
+// with Resize: preprocess.Letterbox instead (no intermediate canvas).
 func Letterbox(src image.Image, w, h int, padColor color.NRGBA) LetterboxResult {
 	b := src.Bounds()
-	sw, sh := b.Dx(), b.Dy()
-
-	scale := float64(w) / float64(sw)
-	if s := float64(h) / float64(sh); s < scale {
-		scale = s
-	}
-	newW := int(float64(sw)*scale + 0.5)
-	newH := int(float64(sh)*scale + 0.5)
-	if newW < 1 {
-		newW = 1
-	}
-	if newH < 1 {
-		newH = 1
-	}
-
+	newW, newH, scale, padX, padY := preprocess.LetterboxSize(b.Dx(), b.Dy(), w, h)
 	resized := imaging.Resize(src, newW, newH, imaging.Linear)
-
 	canvas := imaging.New(w, h, padColor)
-	padX := (w - newW) / 2
-	padY := (h - newH) / 2
 	canvas = imaging.Paste(canvas, resized, image.Pt(padX, padY))
-
 	return LetterboxResult{Img: canvas, Scale: scale, PadX: padX, PadY: padY}
 }
 

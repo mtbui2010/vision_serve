@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"visionserve/internal/engine"
+	"visionserve/internal/vision/preprocess"
 	"visionserve/pkg/api"
 )
 
@@ -63,22 +64,20 @@ type Model interface {
 	Postprocess(outs []engine.Tensor, meta PreprocessMeta) (Result, error)
 }
 
-// PreprocessMeta holds the info needed to map results back to original image coordinates.
-// With letterbox, the scale on both axes is usually equal (aspect ratio preserved).
-type PreprocessMeta struct {
-	OrigWidth  int
-	OrigHeight int
-	ScaleX     float64 // input_x = orig_x * ScaleX + PadX
-	ScaleY     float64
-	PadX       int
-	PadY       int
-}
-
 // Config is the configuration derived from the manifest, passed to the factory when
 // creating a model. The registry is responsible for filling this struct (reading the
 // YAML + loading the labels file).
 type Config struct {
-	Name      string
+	Name string
+
+	// Preprocess is the manifest's preprocessing, resolved by the registry from its
+	// `preprocess:` block and/or the legacy input.* fields below (lifecycle sets it for every
+	// loaded model). nil — a Config built in code — means "map the legacy fields below"; use
+	// PreprocessSpec(), never this field directly.
+	Preprocess *preprocess.Spec
+
+	// Legacy preprocessing fields (manifest input.*). The registry keeps them consistent with
+	// a `preprocess:` block, so code that predates the block reads the same values.
 	Width     int
 	Height    int
 	Layout    string // "NCHW" | "NHWC"
