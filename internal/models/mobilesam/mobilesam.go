@@ -92,11 +92,21 @@ func (m *mobileSAM) PoolSizes() map[string]int { return map[string]int{roleDecod
 // It returns the public Result (masks as column-major RLE). Each mask is encoded as soon as it
 // is final, so the full-resolution bitmaps are never all held at once.
 func (m *mobileSAM) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
-	masks, err := inferAs(m, img, prompt, r, MaskBitmap.ToMask)
+	masks, err := inferAs(m, img, prompt, r, MaskBitmap.ToMask, true)
 	if err != nil {
 		return models.Result{}, err
 	}
 	return models.Result{Masks: masks}, nil
+}
+
+// InferMasksEach runs InferMasks' pipeline but hands each mask's bitmap to fn as soon as the
+// mask is final, instead of returning every bitmap: fn's results come back in InferMasks'
+// order. A caller that only needs something computed from each bitmap (grasps, a union) then
+// never holds all of them — an automask of a 3200×2400 image yields ~30 bitmaps of 7.7 MB.
+//
+// fn may run concurrently on several goroutines, and must not keep b.Data after it returns.
+func (m *mobileSAM) InferMasksEach(img image.Image, prompt models.Prompt, r models.Runner, fn func(b MaskBitmap) any) ([]any, error) {
+	return inferAs(m, img, prompt, r, fn, true)
 }
 
 // InferMasks runs the same encoder→decoder/AMG pipeline as Infer but also returns the
@@ -119,12 +129,14 @@ func (m *mobileSAM) InferMasks(img image.Image, prompt models.Prompt, r models.R
 // inferBitmaps is the shared core: encoder once, then AMG (no prompt) or one decoder
 // run per prompt set, producing raw mask bitmaps at original-image resolution.
 func (m *mobileSAM) inferBitmaps(img image.Image, prompt models.Prompt, r models.Runner) ([]MaskBitmap, error) {
-	return inferAs(m, img, prompt, r, keepBitmap)
+	return inferAs(m, img, prompt, r, keepBitmap, false)
 }
 
 // inferAs is inferBitmaps with every mask passed through emit as soon as it is final (in the
 // same order), so a caller that only wants the RLE need not hold every bitmap.
-func inferAs[T any](m *mobileSAM, img image.Image, prompt models.Prompt, r models.Runner, emit func(MaskBitmap) T) ([]T, error) {
+//
+// borrow: emit does not keep the bitmap's Data after it returns (see autoSegmentAs).
+func inferAs[T any](m *mobileSAM, img image.Image, prompt models.Prompt, r models.Runner, emit func(MaskBitmap) T, borrow bool) ([]T, error) {
 	sets, err := promptToPointSets(prompt)
 	if err != nil {
 		return nil, err
@@ -148,9 +160,7 @@ func inferAs[T any](m *mobileSAM, img image.Image, prompt models.Prompt, r model
 	}
 	embedding := encOuts[0]
 
-	decRun := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
-		return r.Run(roleDecoder, inputs)
-	}
+	decRun := decoderRun(r)
 	decOutNames := r.OutputNames(roleDecoder)
 
 	// No prompt → Automatic Mask Generator (N×N grid, N² decoder calls). A per-request
@@ -160,7 +170,7 @@ func inferAs[T any](m *mobileSAM, img image.Image, prompt models.Prompt, r model
 		if prompt.GridSize > 0 {
 			grid = prompt.GridSize
 		}
-		return autoSegmentAs(img, embedding, scale, decRun, decOutNames, grid, emit)
+		return autoSegmentAs(img, embedding, scale, decRun, decOutNames, grid, emit, borrow)
 	}
 
 	// Prompted: one decoder run per prompt set.
@@ -175,7 +185,7 @@ func inferAs[T any](m *mobileSAM, img image.Image, prompt models.Prompt, r model
 			"has_mask_input":   engine.F32([]float32{0}, 1),
 			"orig_im_size":     engine.F32([]float32{float32(origH), float32(origW)}, 2),
 		}
-		outs, err := decRun(dec)
+		outs, err := decRun(dec, nil)
 		if err != nil {
 			return nil, fmt.Errorf("mobilesam: decoder failed: %w", err)
 		}
@@ -191,6 +201,20 @@ func inferAs[T any](m *mobileSAM, img image.Image, prompt models.Prompt, r model
 	}
 
 	return out, nil
+}
+
+// decoderRun is the decoder role of r as a decodeFunc: RunInto when r can write outputs into
+// caller buffers, else Run (into ignored).
+func decoderRun(r models.Runner) decodeFunc {
+	if ir, ok := r.(models.IntoRunner); ok {
+		return func(in, into map[string]engine.Tensor) ([]engine.Tensor, error) {
+			if into == nil {
+				return r.Run(roleDecoder, in)
+			}
+			return ir.RunInto(roleDecoder, in, into)
+		}
+	}
+	return func(in, _ map[string]engine.Tensor) ([]engine.Tensor, error) { return r.Run(roleDecoder, in) }
 }
 
 func firstName(names []string, fallback string) string {

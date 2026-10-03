@@ -63,6 +63,36 @@ func TestThresholdMatchesBruteForce(t *testing.T) {
 	}
 }
 
+// ThresholdExtentInto reuses a dirty buffer and must give exactly ThresholdExtent's bitmap and
+// extent, including on an all-background plane.
+func TestThresholdExtentIntoMatches(t *testing.T) {
+	r := rand.New(rand.NewSource(2))
+	dst := make([]bool, 64*48+7) // longer than any plane, and dirtied by each previous case
+	for i := range dst {
+		dst[i] = true
+	}
+	for _, sz := range [][2]int{{64, 48}, {3, 5}, {17, 9}, {1, 1}} {
+		h, w := sz[0], sz[1]
+		for c, data := range [][]float32{randPlane(r, 2*h*w), make([]float32, 2*h*w)} {
+			for _, off := range []int{0, h * w} {
+				want, wantE := ThresholdExtent(data, off, h, w, 0)
+				got, gotE := ThresholdExtentInto(dst, data, off, h, w, 0)
+				if got.W != w || got.H != h || len(got.Data) != h*w || &got.Data[0] != &dst[0] {
+					t.Fatalf("case %d: bitmap %dx%d len %d (in dst: %v)", c, got.W, got.H, len(got.Data), &got.Data[0] == &dst[0])
+				}
+				for i := range want.Data {
+					if got.Data[i] != want.Data[i] {
+						t.Fatalf("case %d %dx%d off %d: pixel %d = %v, want %v", c, h, w, off, i, got.Data[i], want.Data[i])
+					}
+				}
+				if gotE != wantE {
+					t.Fatalf("case %d: extent %+v, want %+v", c, gotE, wantE)
+				}
+			}
+		}
+	}
+}
+
 // Probability maps are compared in float64 (PaddleOCR: float64(p) > 0.3), which differs
 // from a float32 compare for p == float32(0.3).
 func TestThresholdComparesInFloat64(t *testing.T) {

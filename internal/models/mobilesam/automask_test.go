@@ -3,6 +3,7 @@ package mobilesam
 import (
 	"fmt"
 	"image"
+	"math"
 	"reflect"
 	"sync"
 	"testing"
@@ -30,6 +31,44 @@ type fakeDecoder struct {
 
 	mu    sync.Mutex
 	calls map[[2]int]int // orig_im_size (W,H) → call count
+	// intoBufs counts the calls that wrote their masks into each distinct caller buffer
+	// (keyed by its first element's address); intoCalls is their total.
+	intoBufs  map[*float32]int
+	intoCalls int
+}
+
+// runInto is run honouring caller buffers like ONNX Runtime does: an output named in into is
+// written into that buffer (its shape must be exactly the produced shape) and returned
+// aliasing it.
+func (f *fakeDecoder) runInto(in, into map[string]engine.Tensor) ([]engine.Tensor, error) {
+	outs, err := f.run(in)
+	if err != nil || into == nil {
+		return outs, err
+	}
+	for name, buf := range into {
+		i := -1
+		for k, n := range realDecOutNames {
+			if n == name {
+				i = k
+			}
+		}
+		if i < 0 {
+			return nil, fmt.Errorf("into names unknown output %q", name)
+		}
+		if !reflect.DeepEqual(buf.Shape, outs[i].Shape) || len(buf.Data) != len(outs[i].Data) {
+			return nil, fmt.Errorf("into %q shape %v (len %d), output is %v", name, buf.Shape, len(buf.Data), outs[i].Shape)
+		}
+		for k := range buf.Data { // ORT overwrites the whole buffer: poison it first
+			buf.Data[k] = float32(math.NaN())
+		}
+		copy(buf.Data, outs[i].Data)
+		outs[i] = engine.Tensor{Data: buf.Data, Shape: outs[i].Shape}
+		f.mu.Lock()
+		f.intoBufs[&buf.Data[0]]++
+		f.intoCalls++
+		f.mu.Unlock()
+	}
+	return outs, nil
 }
 
 func (f *fakeDecoder) run(in map[string]engine.Tensor) ([]engine.Tensor, error) {
@@ -106,8 +145,13 @@ var realDecOutNames = []string{"masks", "iou_predictions", "low_res_masks"}
 func newFake(w, h, m int, rects [][4]int) *fakeDecoder {
 	return &fakeDecoder{
 		origW: w, origH: h, scale: 1024 / float64(max(w, h)), rects: rects, m: m,
-		calls: map[[2]int]int{},
+		calls: map[[2]int]int{}, intoBufs: map[*float32]int{},
 	}
+}
+
+// plainRun is f as a decodeFunc that cannot write into caller buffers (ignores into).
+func (f *fakeDecoder) plainRun(in, _ map[string]engine.Tensor) ([]engine.Tensor, error) {
+	return f.run(in)
 }
 
 // Large image: candidates are filtered/NMS'd in the 256-px work frame and ONLY the kept
@@ -122,7 +166,7 @@ func TestAutoSegmentLowResFilterFullResKept(t *testing.T) {
 			img := image.NewNRGBA(image.Rect(0, 0, W, H))
 			emb := engine.F32(make([]float32, 256*64*64), 1, 256, 64, 64)
 
-			out, err := autoSegment(img, emb, f.scale, f.run, realDecOutNames, 8)
+			out, err := autoSegment(img, emb, f.scale, f.plainRun, realDecOutNames, 8)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -163,7 +207,7 @@ func TestAutoSegmentSmallImageSinglePass(t *testing.T) {
 	f := newFake(W, H, 1, [][4]int{{20, 20, 60, 40}})
 	img := image.NewNRGBA(image.Rect(0, 0, W, H))
 	emb := engine.F32(make([]float32, 256*64*64), 1, 256, 64, 64)
-	out, err := autoSegment(img, emb, f.scale, f.run, realDecOutNames, 4)
+	out, err := autoSegment(img, emb, f.scale, f.plainRun, realDecOutNames, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,6 +228,17 @@ func (r fakeRunner) Run(role string, in map[string]engine.Tensor) ([]engine.Tens
 	}
 	return r.dec.run(in)
 }
+
+// intoRunner is fakeRunner that also implements models.IntoRunner, like lifecycle's runner.
+type intoRunner struct{ fakeRunner }
+
+func (r intoRunner) RunInto(role string, in, into map[string]engine.Tensor) ([]engine.Tensor, error) {
+	if role == roleEncoder {
+		return r.Run(role, in)
+	}
+	return r.dec.runInto(in, into)
+}
+
 func (fakeRunner) InputNames(role string) []string {
 	if role == roleEncoder {
 		return []string{"input_image"}
@@ -261,5 +316,105 @@ func TestNMSCandidates(t *testing.T) {
 			got = append(got, k.idx)
 		}
 		t.Fatalf("kept idx %v, want [7 0]", got)
+	}
+}
+
+// With a Runner that writes outputs into caller buffers, the final pass decodes every kept
+// point into one buffer per worker (at most autoFinalWorkers of them, reused across points),
+// the filter pass passes none, and the masks are exactly the plain Runner's.
+func TestAutoSegmentFinalPassReusesBuffers(t *testing.T) {
+	for _, m := range []int{1, 4} {
+		t.Run(fmt.Sprintf("M=%d", m), func(t *testing.T) {
+			const W, H = 1200, 800
+			var rects [][4]int // a 4×3 grid of separate objects → 12 kept masks + background
+			for i := 0; i < 4; i++ {
+				for j := 0; j < 3; j++ {
+					rects = append(rects, [4]int{40 + 300*i, 40 + 260*j, 150, 120})
+				}
+			}
+			img := image.NewNRGBA(image.Rect(0, 0, W, H))
+			sam := &mobileSAM{gridSize: 16}
+			fi := newFake(W, H, m, rects)
+			got, err := sam.Infer(img, models.Prompt{}, intoRunner{fakeRunner{fi}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want, err := sam.Infer(img, models.Prompt{}, fakeRunner{newFake(W, H, m, rects)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Masks) != len(rects)+1 || !reflect.DeepEqual(got.Masks, want.Masks) {
+				t.Fatalf("into masks (%d) differ from plain masks (%d)", len(got.Masks), len(want.Masks))
+			}
+			if full := fi.calls[[2]int{W, H}]; fi.intoCalls != full || full != len(rects)+1 {
+				t.Errorf("%d of %d full-res calls wrote into a caller buffer, want all %d", fi.intoCalls, full, len(rects)+1)
+			}
+			if n := len(fi.intoBufs); n == 0 || n > autoFinalWorkers {
+				t.Errorf("%d distinct buffers, want 1..%d (one per final-pass worker)", n, autoFinalWorkers)
+			}
+		})
+	}
+}
+
+func TestMaskOutputName(t *testing.T) {
+	for _, c := range []struct {
+		names []string
+		want  string
+	}{
+		{realDecOutNames, "masks"},
+		{[]string{"iou_predictions", "low_res_masks", "masks"}, "masks"},
+		{[]string{"out0", "out1"}, ""}, // picked by shape: no buffer
+		{[]string{"low_res_masks", "iou_predictions"}, ""},
+	} {
+		if got := maskOutputName(c.names); got != c.want {
+			t.Errorf("maskOutputName(%v) = %q, want %q", c.names, got, c.want)
+		}
+	}
+}
+
+// InferMasksEach hands fn exactly InferMasks' bitmaps, in order, with either Runner. The final
+// pass thresholds into one buffer per worker (fn must copy), so at most autoFinalWorkers
+// distinct backing arrays reach fn for the full-resolution masks.
+func TestInferMasksEachMatchesInferMasks(t *testing.T) {
+	const W, H = 1200, 800
+	var rects [][4]int
+	for i := 0; i < 4; i++ {
+		for j := 0; j < 3; j++ {
+			rects = append(rects, [4]int{40 + 300*i, 40 + 260*j, 150, 120})
+		}
+	}
+	img := image.NewNRGBA(image.Rect(0, 0, W, H))
+	sam := &mobileSAM{gridSize: 16}
+	_, want, err := sam.InferMasks(img, models.Prompt{}, fakeRunner{newFake(W, H, 1, rects)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, r := range map[string]models.Runner{
+		"plain": fakeRunner{newFake(W, H, 1, rects)},
+		"into":  intoRunner{fakeRunner{newFake(W, H, 1, rects)}},
+	} {
+		var mu sync.Mutex
+		backing := map[*bool]bool{}
+		got, err := sam.InferMasksEach(img, models.Prompt{}, r, func(b MaskBitmap) any {
+			mu.Lock()
+			backing[&b.Data[0]] = true
+			mu.Unlock()
+			b.Data = append([]bool(nil), b.Data...) // fn must not keep the borrowed Data
+			return b
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(want) || len(want) != len(rects)+1 {
+			t.Fatalf("%s: %d masks, want %d (= %d)", name, len(got), len(want), len(rects)+1)
+		}
+		for i := range want {
+			if !reflect.DeepEqual(got[i].(MaskBitmap), want[i]) {
+				t.Fatalf("%s: mask %d differs from InferMasks'", name, i)
+			}
+		}
+		if len(backing) > autoFinalWorkers {
+			t.Errorf("%s: %d distinct bitmap buffers reached fn, want ≤ %d (one per final-pass worker)", name, len(backing), autoFinalWorkers)
+		}
 	}
 }
