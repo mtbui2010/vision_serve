@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"visionserve/internal/engine"
@@ -165,7 +166,12 @@ func (m *Manager) load(name string) (*Session, error) {
 			if !ok {
 				return nil, fmt.Errorf("lifecycle: role %q of model %q not found in manifest 'files'", role, name)
 			}
-			run, err := open(path, nil, nil, poolSizes[role], providers)
+			// runtime.threads overrides the default intra-op threads for this role's session(s).
+			threads := -1
+			if n, ok := man.IntraOpThreads(role); ok {
+				threads = manifestThreads(man.Name, role, n, numCPU())
+			}
+			run, err := open(path, nil, nil, poolSizes[role], threads, providers)
 			if err != nil {
 				return nil, err
 			}
@@ -198,7 +204,7 @@ func (m *Manager) load(name string) (*Session, error) {
 
 		// VS_POOL_OVERRIDE>1 wraps N identical sessions in a pool so a single-session
 		// (classification/detection) model can serve inferences concurrently (eval sweep).
-		run, err := open(man.ModelFilePath(), inName, detectOutNames, poolOverride(), providers)
+		run, err := open(man.ModelFilePath(), inName, detectOutNames, poolOverride(), -1, providers)
 		if err != nil {
 			return nil, err
 		}
@@ -216,16 +222,31 @@ func (m *Manager) load(name string) (*Session, error) {
 // failed load never strands VRAM.
 //
 // Each pooled session gets a capped intra-op thread pool (poolIntraOpThreads); a lone session
-// keeps ORT's default.
-func newRunnable(path string, inputNames, outputNames []string, n int, providers []engine.Provider) (engine.Runnable, error) {
+// keeps ORT's default. threads >= 0 (the manifest's runtime.threads for this role) replaces both
+// for every session created here; threads < 0 means the manifest sets nothing.
+func newRunnable(path string, inputNames, outputNames []string, n, threads int, providers []engine.Provider) (engine.Runnable, error) {
 	if n <= 1 {
-		s, err := newEngineSession(path, inputNames, outputNames, providers, engine.SessionOptions{})
+		so := engine.SessionOptions{}
+		if threads >= 0 {
+			so.IntraOpThreads = threads
+		}
+		s, err := newEngineSession(path, inputNames, outputNames, providers, so)
 		if err != nil {
 			return nil, err
 		}
 		return s, nil
 	}
-	so := engine.SessionOptions{IntraOpThreads: poolIntraOpThreads(n, runtime.NumCPU(), os.Getenv("VISIONSERVE_POOL_THREADS"))}
+	so := engine.SessionOptions{}
+	if threads >= 0 {
+		so.IntraOpThreads = threads
+	} else {
+		env := os.Getenv("VISIONSERVE_POOL_THREADS")
+		var warn string
+		so.IntraOpThreads, warn = poolIntraOpThreads(n, numCPU(), env)
+		if warn != "" {
+			warnOnce("VISIONSERVE_POOL_THREADS="+env, warn)
+		}
+	}
 	sessions := make([]*engine.Session, 0, n)
 	for i := 0; i < n; i++ {
 		s, err := newEngineSession(path, inputNames, outputNames, providers, so)
@@ -257,15 +278,51 @@ var newEngineSession = engine.NewSessionWith
 // with identical outputs. So the pool shares a quarter of the logical CPUs (half the physical
 // cores with 2-way SMT): runtime.NumCPU()/(4n) threads per session, at least 1.
 //
-// VISIONSERVE_POOL_THREADS (env) overrides it: an integer >= 1 is used as is, 0 restores ORT's default.
-func poolIntraOpThreads(n, ncpu int, env string) int {
-	if v, err := strconv.Atoi(strings.TrimSpace(env)); err == nil && v >= 0 {
-		return v
+// VISIONSERVE_POOL_THREADS (env) overrides it: an integer >= 1 is used as is (at most ncpu), 0
+// restores ORT's default. A value that is not an integer >= 0 is ignored. Either correction comes
+// back as warn, which the caller logs once (warnOnce) rather than on every load.
+func poolIntraOpThreads(n, ncpu int, env string) (threads int, warn string) {
+	heuristic := max(1, ncpu/(4*max(n, 1)))
+	v := strings.TrimSpace(env)
+	if v == "" {
+		return heuristic, ""
 	}
-	if n < 1 {
-		n = 1
+	k, err := strconv.Atoi(v)
+	switch {
+	case err != nil || k < 0:
+		return heuristic, fmt.Sprintf("lifecycle: ignoring VISIONSERVE_POOL_THREADS=%q (want an integer >= 0; "+
+			"0 = ONNX Runtime's default) — pooled sessions get NumCPU/(4n) intra-op threads", env)
+	case k > ncpu:
+		return ncpu, fmt.Sprintf("lifecycle: VISIONSERVE_POOL_THREADS=%d is more than the %d logical CPUs — "+
+			"capped at %d intra-op threads per pooled session", k, ncpu, ncpu)
 	}
-	return max(1, ncpu/(4*n))
+	return k, ""
+}
+
+// manifestThreads caps a manifest's runtime.threads value for one role at the machine's logical
+// CPUs. The registry only checks it is >= 0: a manifest is portable, and the CPU count belongs to
+// the host it is served on. A cap is logged once per model and role.
+func manifestThreads(model, role string, n, ncpu int) int {
+	if n <= ncpu {
+		return n
+	}
+	warnOnce("threads:"+model+"/"+role, fmt.Sprintf("lifecycle: %s: runtime.threads.%s = %d is more than the %d "+
+		"logical CPUs — capped at %d", model, role, n, ncpu, ncpu))
+	return ncpu
+}
+
+// numCPU is runtime.NumCPU; tests replace it.
+var numCPU = runtime.NumCPU
+
+// warned holds the keys warnOnce has already logged.
+var warned sync.Map
+
+// warnOnce logs msg the first time key is seen in this process. A misconfiguration read at every
+// load (an env var, a manifest field) is reported once, not once per model load.
+func warnOnce(key, msg string) {
+	if _, dup := warned.LoadOrStore(key, struct{}{}); !dup {
+		log.Print(msg)
+	}
 }
 
 // closeEngines releases a partially-built set of sessions/pools on a load error.

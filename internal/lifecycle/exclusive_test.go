@@ -128,7 +128,7 @@ func TestExclusiveCountsAsOneSlot(t *testing.T) {
 	root := t.TempDir()
 	writeTestModel(t, root, "excl", "test-pipe-exclusive", "")
 	m, _ := newFakeManager(t, scanRegistry(t, root))
-	m.openRunnable = func(_ string, _, _ []string, n int, _ []engine.Provider) (engine.Runnable, error) {
+	m.openRunnable = func(_ string, _, _ []string, n, _ int, _ []engine.Provider) (engine.Runnable, error) {
 		return &fakePool{n: n}, nil
 	}
 	if err := m.Load("excl"); err != nil {

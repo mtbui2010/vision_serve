@@ -96,7 +96,7 @@ func TestAdmitDefaultFollowsPoolSize(t *testing.T) {
 	root := t.TempDir()
 	writeTestModel(t, root, "pooled", "test-pipe", "")
 	m, _ := newFakeManager(t, scanRegistry(t, root))
-	m.openRunnable = func(_ string, _, _ []string, n int, _ []engine.Provider) (engine.Runnable, error) {
+	m.openRunnable = func(_ string, _, _ []string, n, _ int, _ []engine.Provider) (engine.Runnable, error) {
 		if n > 1 {
 			return &fakePool{n: n}, nil
 		}

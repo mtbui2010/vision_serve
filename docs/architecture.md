@@ -146,8 +146,12 @@ refused request fails at once with `lifecycle.ErrOverloaded` (HTTP 503); it neve
 physical cores. A lone session keeps that default. Each session of an n-session pool (e.g.
 MobileSAM's decoder copies, which automask drives at once) gets `NumCPU / (4n)` threads, at
 least 1, so a pool does not put n × cores busy threads on the machine; outputs do not depend on
-the thread count. `VISIONSERVE_POOL_THREADS=k` sets k threads per pooled session, and `0`
-restores ORT's default.
+the thread count. `VISIONSERVE_POOL_THREADS=k` sets k threads per pooled session (at most
+`NumCPU`), and `0` restores ORT's default; a value that is not an integer >= 0 is ignored, and
+both corrections are logged once. A manifest can set a role's count itself with `runtime.threads`
+(`{head: 1}`), which overrides both defaults for that role: a tiny session that runs between a
+big one's calls (a score head after its detector) is ~1 ms on one thread, and its default pool
+spinning next to the detector's slowed the whole CPU request ~3× (docs/manifest-spec.md).
 
 ## Hardware / execution providers
 
