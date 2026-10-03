@@ -1,6 +1,8 @@
 package registry
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -42,5 +44,26 @@ func TestManifestNameMustBeOnePathSegment(t *testing.T) {
 		if err := m.validate(); err != nil {
 			t.Errorf("name %q refused: %v", good, err)
 		}
+	}
+}
+
+// A model set aside during a --force swap keeps its manifest (same name); it must not be listed
+// next to — or instead of — the real install.
+func TestScanSkipsDotDirectories(t *testing.T) {
+	root := t.TempDir()
+	write := func(dir string) {
+		_ = os.MkdirAll(filepath.Join(root, dir), 0o755)
+		man := "name: m\ntask: embed\nlicense: MIT\nmodel_file: m.onnx\ninput:\n  width: 8\n  height: 8\n"
+		_ = os.WriteFile(filepath.Join(root, dir, "manifest.yaml"), []byte(man), 0o644)
+	}
+	write("m")
+	write(".tmp-m-123-old")
+	r := New(root)
+	if _, err := r.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	e, ok := r.Get("m")
+	if !ok || filepath.Base(e.Manifest.Dir()) != "m" {
+		t.Fatalf("m resolved to %+v, want the real install, not the dot-directory", e)
 	}
 }

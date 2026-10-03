@@ -3,6 +3,7 @@
 package registry
 
 import (
+	"strings"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,6 +44,12 @@ func (r *Registry) Scan() ([]error, error) {
 	var warns []error
 	for _, e := range entries {
 		if !e.IsDir() {
+			continue
+		}
+		// Dot-directories are never models: they are install staging (.tmp-<name>-*), the
+		// previous version moved aside during a --force swap (.tmp-<name>-*-old, which still holds
+		// a manifest with the SAME name), converter backups (.convert-backup) and dry runs.
+		if strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		mpath := filepath.Join(r.root, e.Name(), "manifest.yaml")
