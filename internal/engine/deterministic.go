@@ -72,9 +72,6 @@ func deterministicRequested() bool {
 
 var badDeterministicEnv sync.Once
 
-// errDeterministicUnsupported is returned where setDeterministicCompute cannot reach the C API.
-var errDeterministicUnsupported = errors.New("not supported on this platform by VisionServe's ONNX Runtime binding")
-
 // Indices of the OrtApi members setDeterministicCompute calls, counted in onnxruntime_c_api.h
 // (struct OrtApi is a table of function pointers; ORT only ever appends to it, so an index never
 // moves). TestOrtAPIIndices recounts them in the header shipped with the binding.
