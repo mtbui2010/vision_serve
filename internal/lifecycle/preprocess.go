@@ -43,7 +43,7 @@ func (m *Manager) Preprocess(name string, img image.Image, prompt models.Prompt)
 	switch mdl := base.(type) {
 	case models.Model:
 		if img == nil {
-			return PreprocessResult{}, fmt.Errorf("preprocess: %q takes an image", name)
+			return PreprocessResult{}, fmt.Errorf("preprocess: %w: %q takes an image", ErrInvalidRequest, name)
 		}
 		in, meta, err := mdl.Preprocess(img)
 		if err != nil {
@@ -80,7 +80,7 @@ func (m *Manager) Preprocess(name string, img image.Image, prompt models.Prompt)
 		}
 		return res, nil
 	default:
-		return PreprocessResult{}, fmt.Errorf("preprocess: %q (%T) exposes no preprocessing", name, base)
+		return PreprocessResult{}, fmt.Errorf("preprocess: %w: %q (%T) exposes no preprocessing", ErrInvalidRequest, name, base)
 	}
 }
 

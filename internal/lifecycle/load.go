@@ -199,12 +199,13 @@ func (m *Manager) buildModel(name string) (models.Base, *registry.Manifest, erro
 		entry, ok = m.reg.Get(name)
 	}
 	if !ok {
-		return nil, nil, fmt.Errorf("lifecycle: model %q not found in registry", name)
+		return nil, nil, fmt.Errorf("lifecycle: %w: %q is not in the registry", ErrModelNotFound, name)
 	}
 	man := entry.Manifest
 
 	if !man.WeightsExist() {
-		return nil, nil, fmt.Errorf("lifecycle: no weights for %q at %s — download them per the README in the model directory", name, man.ModelFilePath())
+		return nil, nil, fmt.Errorf("lifecycle: %w: no weights for %q at %s — download them per the README in the model directory",
+			ErrModelNotFound, name, man.ModelFilePath())
 	}
 
 	// License-policy hardening: when the manifest pins a sha256 (and/or a verified

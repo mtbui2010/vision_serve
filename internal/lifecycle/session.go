@@ -121,7 +121,7 @@ func (s *Session) Predict(img image.Image, prompt models.Prompt, now time.Time) 
 // embedding (no coordinate mapping) or callers that map coordinates themselves.
 func (s *Session) PredictTensor(in engine.Tensor, now time.Time) (api.Result, error) {
 	if s.pipeline != nil {
-		return api.Result{}, fmt.Errorf("tensor-in not supported for multi-session model %q", s.name)
+		return api.Result{}, fmt.Errorf("%w: tensor-in not supported for multi-session model %q", ErrInvalidRequest, s.name)
 	}
 	start := now
 	outs, err := s.engine.Run([]engine.Tensor{in})

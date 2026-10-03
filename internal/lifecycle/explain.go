@@ -42,7 +42,7 @@ func (s *Session) explainEngineOrLoad() (engine.Runnable, error) {
 	// The manifest the live sessions were built from (see Session.man), not the registry.
 	man := s.man
 	if man == nil || man.Explain == nil {
-		return nil, fmt.Errorf("model %q does not support explain (no explain block in manifest)", s.name)
+		return nil, fmt.Errorf("%w: model %q does not support explain (no explain block in manifest)", ErrInvalidRequest, s.name)
 	}
 
 	providers, err := man.Providers()
@@ -83,6 +83,11 @@ func (s *Session) explainEngineOrLoad() (engine.Runnable, error) {
 // Explain runs heatmap inference for the named model.
 // Returns raw float32 heatmap; rendering (PNG / numpy response) is done by the handler.
 func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (ExplainResult, error) {
+	if req.DetectionIdx < 0 || req.TopChannels < 0 {
+		// A negative index would panic the Score-CAM runner (res.Detections[-1]).
+		return ExplainResult{}, fmt.Errorf("lifecycle: explain: %w: detection index %d / top channels %d must be >= 0",
+			ErrInvalidRequest, req.DetectionIdx, req.TopChannels)
+	}
 	// Ensure the model is loaded.
 	if err := m.Load(name); err != nil {
 		return ExplainResult{}, err
@@ -118,7 +123,7 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 		ep, ok := s.pipeline.(models.ExplainPreprocessor)
 		if !ok {
 			return ExplainResult{}, fmt.Errorf(
-				"lifecycle: pipeline model %q does not implement ExplainPreprocessor", name)
+				"lifecycle: %w: pipeline model %q does not implement ExplainPreprocessor", ErrInvalidRequest, name)
 		}
 		inputTensor, meta, err = ep.ExplainPreprocess(img)
 		if err != nil {
@@ -154,7 +159,7 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 				}
 			}
 			if !found {
-				return ExplainResult{}, fmt.Errorf("lifecycle: explain: no %q detection in this image", req.Class)
+				return ExplainResult{}, fmt.Errorf("lifecycle: explain: %w: no %q detection in this image", ErrInvalidRequest, req.Class)
 			}
 		}
 	}

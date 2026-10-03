@@ -100,7 +100,8 @@ func (m *Manager) PredictPrompt(name string, img image.Image, prompt models.Prom
 	if prompt.TemplateName != "" && m.tmpl != nil {
 		imgs := m.tmpl.Get(prompt.TemplateName)
 		if len(imgs) == 0 {
-			return api.Result{}, fmt.Errorf("lifecycle: template %q not found — register via POST /api/templates", prompt.TemplateName)
+			return api.Result{}, fmt.Errorf("lifecycle: %w: template %q not found — register via POST /api/templates",
+				ErrInvalidRequest, prompt.TemplateName)
 		}
 		prompt.TemplateImages = imgs
 	}
