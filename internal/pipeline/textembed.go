@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ import (
 )
 
 // MaxCachedWords bounds each TextEmbedder's cache. A row is one text-tower width of float32
-// (768 for SigLIP base: 3 KB), so the bound is ~3 MB per loaded model; it exists to stop
+// (768 for SigLIP base: 3 KB) and a key 32 bytes (Key), so the bound is ~3 MB per loaded model; it exists to stop
 // unbounded growth under adversarial per-request prompts, not to save memory. A request whose
 // own word list is longer than the bound still gets every row (they are returned before
 // eviction can matter); it just does not keep them all.
@@ -104,9 +105,15 @@ func NewTextEmbedder(role string, tok TextTokenizer, templates []string, dim int
 	}
 }
 
-// Key is the cache key of word under this embedder's templates. A word is keyed exactly as it is
-// embedded (no case folding): callers normalise their vocabularies before asking.
-func (e *TextEmbedder) Key(word string) string { return e.tkey + "\x00" + word }
+// Key is the cache key of word under this embedder's templates: a SHA-256 digest, so a cache
+// entry holds 32 bytes of key whatever the word's length. Keyed by the word itself, 1024 entries
+// of long phrases (the towers truncate them, so they embed cheaply) kept tens of GB alive. A word
+// is keyed exactly as it is embedded (no case folding): callers normalise their vocabularies
+// before asking.
+func (e *TextEmbedder) Key(word string) string {
+	sum := sha256.Sum256([]byte(e.tkey + "\x00" + word))
+	return string(sum[:])
+}
 
 // Cached reports how many words the cache holds.
 func (e *TextEmbedder) Cached() int { return e.cache.Len() }

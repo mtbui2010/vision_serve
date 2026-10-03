@@ -162,9 +162,12 @@ func TestEmbedKeyIncludesTemplates(t *testing.T) {
 	if a.Key("cup") == b.Key("cup") || a.Key("cup") == a.Key("hat") {
 		t.Error("keys must differ by word and by template set")
 	}
-	if a2 := NewTextEmbedder("text", nil, []string{"a photo of a {}."}, 0); a.Key("cup") != a2.Key("cup") ||
-		!strings.HasSuffix(a.Key("cup"), "\x00cup") {
-		t.Errorf("key %q is not <template hash>\\x00<word>", a.Key("cup"))
+	if a2 := NewTextEmbedder("text", nil, []string{"a photo of a {}."}, 0); a.Key("cup") != a2.Key("cup") {
+		t.Error("the same word under the same templates must give the same key")
+	}
+	// A fixed-size digest: a cached long phrase does not keep its bytes alive in the key.
+	if long := a.Key(strings.Repeat("x", 1<<16)); len(long) != 32 || len(a.Key("cup")) != 32 {
+		t.Errorf("key lengths %d / %d, want 32-byte digests", len(long), len(a.Key("cup")))
 	}
 }
 
