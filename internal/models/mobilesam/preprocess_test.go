@@ -27,7 +27,10 @@ func fillRGBA(w, h int, r, g, b uint8) *image.NRGBA {
 func TestEncoderInputShapeAndScale(t *testing.T) {
 	// 640x480 -> scale = 1024/640 = 1.6 ; newW=1024, newH=768.
 	img := fillRGBA(640, 480, 100, 150, 200)
-	ten, scale := encoderInput(img)
+	ten, scale, err := encoderInput(img)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if math.Abs(scale-1.6) > 1e-9 {
 		t.Fatalf("scale = %v, want 1.6", scale)
@@ -49,7 +52,10 @@ func TestEncoderInputShapeAndScale(t *testing.T) {
 func TestEncoderInputTall(t *testing.T) {
 	// 256x512 -> scale = 1024/512 = 2.0 ; newW=512, newH=1024.
 	img := fillRGBA(256, 512, 0, 0, 0)
-	ten, scale := encoderInput(img)
+	ten, scale, err := encoderInput(img)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if math.Abs(scale-2.0) > 1e-9 {
 		t.Fatalf("scale = %v, want 2.0", scale)
 	}

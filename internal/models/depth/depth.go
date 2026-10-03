@@ -31,6 +31,9 @@ func New(cfg models.Config) (models.Base, error) {
 	if cfg.Width <= 0 || cfg.Height <= 0 {
 		return nil, fmt.Errorf("depth: invalid input dimensions (%dx%d)", cfg.Width, cfg.Height)
 	}
+	if _, err := arch.Resolve(cfg.PreprocessSpec()); err != nil {
+		return nil, err
+	}
 	return &depthModel{cfg: cfg}, nil
 }
 

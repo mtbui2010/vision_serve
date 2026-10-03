@@ -115,7 +115,10 @@ func (m *mobileSAM) inferBitmaps(img image.Image, prompt models.Prompt, r models
 	origH := img.Bounds().Dy()
 
 	// Encoder: image → embedding (always runs once, shared across all decoder calls).
-	encIn, scale := encoderInput(img)
+	encIn, scale, err := encoderInput(img)
+	if err != nil {
+		return nil, err
+	}
 	encInName := firstName(r.InputNames(roleEncoder), "input_image")
 	encOuts, err := r.Run(roleEncoder, map[string]engine.Tensor{encInName: encIn})
 	if err != nil {
