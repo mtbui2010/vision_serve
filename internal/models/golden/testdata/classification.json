@@ -1,0 +1,1883 @@
+{
+ "efficientnet-nolabels/err-batch": {
+  "err": "classification: expected batch size 1, got shape [2 1000]"
+ },
+ "efficientnet-nolabels/err-none": {
+  "err": "classification: no output tensors returned by the model"
+ },
+ "efficientnet-nolabels/post/sample810x1080": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_232",
+     "conf": 0.08271315693855286
+    },
+    {
+     "class": "class_61",
+     "conf": 0.0571088008582592
+    },
+    {
+     "class": "class_6",
+     "conf": 0.04973717778921127
+    },
+    {
+     "class": "class_556",
+     "conf": 0.039186105132102966
+    },
+    {
+     "class": "class_977",
+     "conf": 0.03769880160689354
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-nolabels/post/synth640x480": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_801",
+     "conf": 0.5442293882369995
+    },
+    {
+     "class": "class_885",
+     "conf": 0.11147182434797287
+    },
+    {
+     "class": "class_385",
+     "conf": 0.0354132242500782
+    },
+    {
+     "class": "class_668",
+     "conf": 0.030748914927244186
+    },
+    {
+     "class": "class_271",
+     "conf": 0.019680749624967575
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-nolabels/post/synth97x173": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_908",
+     "conf": 0.649515688419342
+    },
+    {
+     "class": "class_96",
+     "conf": 0.047902584075927734
+    },
+    {
+     "class": "class_259",
+     "conf": 0.027116967365145683
+    },
+    {
+     "class": "class_426",
+     "conf": 0.02573467046022415
+    },
+    {
+     "class": "class_866",
+     "conf": 0.021142948418855667
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-nolabels/post1d/sample810x1080": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_232",
+     "conf": 0.08271315693855286
+    },
+    {
+     "class": "class_61",
+     "conf": 0.0571088008582592
+    },
+    {
+     "class": "class_6",
+     "conf": 0.04973717778921127
+    },
+    {
+     "class": "class_556",
+     "conf": 0.039186105132102966
+    },
+    {
+     "class": "class_977",
+     "conf": 0.03769880160689354
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-nolabels/post1d/synth640x480": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_801",
+     "conf": 0.5442293882369995
+    },
+    {
+     "class": "class_885",
+     "conf": 0.11147182434797287
+    },
+    {
+     "class": "class_385",
+     "conf": 0.0354132242500782
+    },
+    {
+     "class": "class_668",
+     "conf": 0.030748914927244186
+    },
+    {
+     "class": "class_271",
+     "conf": 0.019680749624967575
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-nolabels/post1d/synth97x173": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_908",
+     "conf": 0.649515688419342
+    },
+    {
+     "class": "class_96",
+     "conf": 0.047902584075927734
+    },
+    {
+     "class": "class_259",
+     "conf": 0.027116967365145683
+    },
+    {
+     "class": "class_426",
+     "conf": 0.02573467046022415
+    },
+    {
+     "class": "class_866",
+     "conf": 0.021142948418855667
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-nolabels/pre/sample810x1080": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "ab50745f042f778c7543a114",
+   "sum": 6806.519636986777,
+   "head": [
+    0.94742703,
+    1.1015497,
+    1.2042983,
+    1.2556726,
+    1.2385478,
+    1.2556726
+   ]
+  },
+  "meta": {
+   "OrigWidth": 810,
+   "OrigHeight": 1080,
+   "ScaleX": 0.2765432098765432,
+   "ScaleY": 0.2074074074074074,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "efficientnet-nolabels/pre/synth640x480": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "a260585a2cc1c174c82fe13a",
+   "sum": 32765.567884044256,
+   "head": [
+    -2.117904,
+    -2.1007793,
+    -2.1007793,
+    -2.0494049,
+    -2.0151556,
+    -2.0322802
+   ]
+  },
+  "meta": {
+   "OrigWidth": 640,
+   "OrigHeight": 480,
+   "ScaleX": 0.35,
+   "ScaleY": 0.4666666666666667,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "efficientnet-nolabels/pre/synth97x173": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "de2efeaf281c0d78672f84ec",
+   "sum": 23170.044172608294,
+   "head": [
+    -2.1007793,
+    -2.0836544,
+    -2.0665298,
+    -2.0322802,
+    -1.9980307,
+    -1.9637812
+   ]
+  },
+  "meta": {
+   "OrigWidth": 97,
+   "OrigHeight": 173,
+   "ScaleX": 2.3092783505154637,
+   "ScaleY": 1.2947976878612717,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "mobilenet-v3/err-batch": {
+  "err": "classification: expected batch size 1, got shape [2 1000]"
+ },
+ "mobilenet-v3/err-none": {
+  "err": "classification: no output tensors returned by the model"
+ },
+ "mobilenet-v3/post/sample810x1080": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "Border collie",
+     "conf": 0.08271315693855286
+    },
+    {
+     "class": "boa constrictor",
+     "conf": 0.0571088008582592
+    },
+    {
+     "class": "stingray",
+     "conf": 0.04973717778921127
+    },
+    {
+     "class": "fire screen",
+     "conf": 0.039186105132102966
+    },
+    {
+     "class": "sandbar",
+     "conf": 0.03769880160689354
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3/post/synth640x480": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "snorkel",
+     "conf": 0.5442293882369995
+    },
+    {
+     "class": "velvet",
+     "conf": 0.11147182434797287
+    },
+    {
+     "class": "Indian elephant",
+     "conf": 0.0354132242500782
+    },
+    {
+     "class": "mosque",
+     "conf": 0.030748914927244186
+    },
+    {
+     "class": "red wolf",
+     "conf": 0.019680749624967575
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3/post/synth97x173": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "wing",
+     "conf": 0.649515688419342
+    },
+    {
+     "class": "toucan",
+     "conf": 0.047902584075927734
+    },
+    {
+     "class": "Pomeranian",
+     "conf": 0.027116967365145683
+    },
+    {
+     "class": "barometer",
+     "conf": 0.02573467046022415
+    },
+    {
+     "class": "tractor",
+     "conf": 0.021142948418855667
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3/post1d/sample810x1080": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "Border collie",
+     "conf": 0.08271315693855286
+    },
+    {
+     "class": "boa constrictor",
+     "conf": 0.0571088008582592
+    },
+    {
+     "class": "stingray",
+     "conf": 0.04973717778921127
+    },
+    {
+     "class": "fire screen",
+     "conf": 0.039186105132102966
+    },
+    {
+     "class": "sandbar",
+     "conf": 0.03769880160689354
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3/post1d/synth640x480": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "snorkel",
+     "conf": 0.5442293882369995
+    },
+    {
+     "class": "velvet",
+     "conf": 0.11147182434797287
+    },
+    {
+     "class": "Indian elephant",
+     "conf": 0.0354132242500782
+    },
+    {
+     "class": "mosque",
+     "conf": 0.030748914927244186
+    },
+    {
+     "class": "red wolf",
+     "conf": 0.019680749624967575
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3/post1d/synth97x173": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "wing",
+     "conf": 0.649515688419342
+    },
+    {
+     "class": "toucan",
+     "conf": 0.047902584075927734
+    },
+    {
+     "class": "Pomeranian",
+     "conf": 0.027116967365145683
+    },
+    {
+     "class": "barometer",
+     "conf": 0.02573467046022415
+    },
+    {
+     "class": "tractor",
+     "conf": 0.021142948418855667
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3/pre/sample810x1080": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "ab50745f042f778c7543a114",
+   "sum": 6806.519636986777,
+   "head": [
+    0.94742703,
+    1.1015497,
+    1.2042983,
+    1.2556726,
+    1.2385478,
+    1.2556726
+   ]
+  },
+  "meta": {
+   "OrigWidth": 810,
+   "OrigHeight": 1080,
+   "ScaleX": 0.2765432098765432,
+   "ScaleY": 0.2074074074074074,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "mobilenet-v3/pre/synth640x480": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "a260585a2cc1c174c82fe13a",
+   "sum": 32765.567884044256,
+   "head": [
+    -2.117904,
+    -2.1007793,
+    -2.1007793,
+    -2.0494049,
+    -2.0151556,
+    -2.0322802
+   ]
+  },
+  "meta": {
+   "OrigWidth": 640,
+   "OrigHeight": 480,
+   "ScaleX": 0.35,
+   "ScaleY": 0.4666666666666667,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "mobilenet-v3/pre/synth97x173": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "de2efeaf281c0d78672f84ec",
+   "sum": 23170.044172608294,
+   "head": [
+    -2.1007793,
+    -2.0836544,
+    -2.0665298,
+    -2.0322802,
+    -1.9980307,
+    -1.9637812
+   ]
+  },
+  "meta": {
+   "OrigWidth": 97,
+   "OrigHeight": 173,
+   "ScaleX": 2.3092783505154637,
+   "ScaleY": 1.2947976878612717,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "top50/err-batch": {
+  "err": "classification: expected batch size 1, got shape [2 1000]"
+ },
+ "top50/err-none": {
+  "err": "classification: no output tensors returned by the model"
+ },
+ "top50/post/sample810x1080": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_232",
+     "conf": 0.08271315693855286
+    },
+    {
+     "class": "class_61",
+     "conf": 0.0571088008582592
+    },
+    {
+     "class": "stingray",
+     "conf": 0.04973717778921127
+    },
+    {
+     "class": "class_556",
+     "conf": 0.039186105132102966
+    },
+    {
+     "class": "class_977",
+     "conf": 0.03769880160689354
+    },
+    {
+     "class": "class_507",
+     "conf": 0.033529672771692276
+    },
+    {
+     "class": "class_662",
+     "conf": 0.02468966506421566
+    },
+    {
+     "class": "class_398",
+     "conf": 0.02410333789885044
+    },
+    {
+     "class": "class_917",
+     "conf": 0.023214275017380714
+    },
+    {
+     "class": "class_725",
+     "conf": 0.02287225052714348
+    },
+    {
+     "class": "class_342",
+     "conf": 0.021897509694099426
+    },
+    {
+     "class": "class_135",
+     "conf": 0.02135697938501835
+    },
+    {
+     "class": "class_994",
+     "conf": 0.02022773027420044
+    },
+    {
+     "class": "class_742",
+     "conf": 0.019699595868587494
+    },
+    {
+     "class": "class_403",
+     "conf": 0.01885385997593403
+    },
+    {
+     "class": "class_492",
+     "conf": 0.01574147678911686
+    },
+    {
+     "class": "class_183",
+     "conf": 0.015475931577384472
+    },
+    {
+     "class": "class_487",
+     "conf": 0.014757530763745308
+    },
+    {
+     "class": "class_451",
+     "conf": 0.01316773984581232
+    },
+    {
+     "class": "class_325",
+     "conf": 0.012651462107896805
+    },
+    {
+     "class": "class_466",
+     "conf": 0.012293691746890545
+    },
+    {
+     "class": "class_356",
+     "conf": 0.0121357012540102
+    },
+    {
+     "class": "class_175",
+     "conf": 0.01196150854229927
+    },
+    {
+     "class": "class_188",
+     "conf": 0.011427436023950577
+    },
+    {
+     "class": "class_94",
+     "conf": 0.01130035798996687
+    },
+    {
+     "class": "class_340",
+     "conf": 0.009875277988612652
+    },
+    {
+     "class": "class_66",
+     "conf": 0.009045258164405823
+    },
+    {
+     "class": "class_737",
+     "conf": 0.008806067518889904
+    },
+    {
+     "class": "class_661",
+     "conf": 0.008575760759413242
+    },
+    {
+     "class": "class_258",
+     "conf": 0.008540893904864788
+    },
+    {
+     "class": "class_980",
+     "conf": 0.007680077571421862
+    },
+    {
+     "class": "class_95",
+     "conf": 0.007274080533534288
+    },
+    {
+     "class": "class_639",
+     "conf": 0.007159496657550335
+    },
+    {
+     "class": "class_322",
+     "conf": 0.006636627949774265
+    },
+    {
+     "class": "class_803",
+     "conf": 0.006501542404294014
+    },
+    {
+     "class": "class_125",
+     "conf": 0.0058830720372498035
+    },
+    {
+     "class": "class_997",
+     "conf": 0.005784361623227596
+    },
+    {
+     "class": "class_108",
+     "conf": 0.005633864551782608
+    },
+    {
+     "class": "class_676",
+     "conf": 0.0056279064156115055
+    },
+    {
+     "class": "class_919",
+     "conf": 0.005362865049391985
+    },
+    {
+     "class": "class_197",
+     "conf": 0.00527617521584034
+    },
+    {
+     "class": "class_875",
+     "conf": 0.00522796344012022
+    },
+    {
+     "class": "class_114",
+     "conf": 0.005224504508078098
+    },
+    {
+     "class": "class_396",
+     "conf": 0.005169734824448824
+    },
+    {
+     "class": "class_631",
+     "conf": 0.005018552765250206
+    },
+    {
+     "class": "class_949",
+     "conf": 0.0048907152377069
+    },
+    {
+     "class": "class_432",
+     "conf": 0.0042145284824073315
+    },
+    {
+     "class": "hen",
+     "conf": 0.004128922708332539
+    },
+    {
+     "class": "class_523",
+     "conf": 0.004079482518136501
+    },
+    {
+     "class": "class_49",
+     "conf": 0.004066034220159054
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "top50/post/synth640x480": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_801",
+     "conf": 0.5442293882369995
+    },
+    {
+     "class": "class_885",
+     "conf": 0.11147182434797287
+    },
+    {
+     "class": "class_385",
+     "conf": 0.0354132242500782
+    },
+    {
+     "class": "class_668",
+     "conf": 0.030748914927244186
+    },
+    {
+     "class": "class_271",
+     "conf": 0.019680749624967575
+    },
+    {
+     "class": "class_806",
+     "conf": 0.014568569138646126
+    },
+    {
+     "class": "class_359",
+     "conf": 0.013749929144978523
+    },
+    {
+     "class": "class_242",
+     "conf": 0.009605476632714272
+    },
+    {
+     "class": "class_284",
+     "conf": 0.008806796744465828
+    },
+    {
+     "class": "class_513",
+     "conf": 0.008356568403542042
+    },
+    {
+     "class": "class_314",
+     "conf": 0.007862193509936333
+    },
+    {
+     "class": "class_667",
+     "conf": 0.007303051184862852
+    },
+    {
+     "class": "class_235",
+     "conf": 0.0072191390208899975
+    },
+    {
+     "class": "class_639",
+     "conf": 0.006724659353494644
+    },
+    {
+     "class": "class_133",
+     "conf": 0.006692348048090935
+    },
+    {
+     "class": "class_723",
+     "conf": 0.0064348699524998665
+    },
+    {
+     "class": "class_315",
+     "conf": 0.006327932700514793
+    },
+    {
+     "class": "class_608",
+     "conf": 0.005337419454008341
+    },
+    {
+     "class": "class_274",
+     "conf": 0.005325834266841412
+    },
+    {
+     "class": "class_744",
+     "conf": 0.0040039788000285625
+    },
+    {
+     "class": "class_378",
+     "conf": 0.003927531186491251
+    },
+    {
+     "class": "class_141",
+     "conf": 0.003463973756879568
+    },
+    {
+     "class": "class_357",
+     "conf": 0.0031260645482689142
+    },
+    {
+     "class": "class_815",
+     "conf": 0.0030351881869137287
+    },
+    {
+     "class": "class_735",
+     "conf": 0.002920982427895069
+    },
+    {
+     "class": "class_978",
+     "conf": 0.0028519195038825274
+    },
+    {
+     "class": "class_152",
+     "conf": 0.0028047312516719103
+    },
+    {
+     "class": "class_116",
+     "conf": 0.002516305074095726
+    },
+    {
+     "class": "class_396",
+     "conf": 0.0024286392144858837
+    },
+    {
+     "class": "class_537",
+     "conf": 0.0024092523381114006
+    },
+    {
+     "class": "class_216",
+     "conf": 0.002392555819824338
+    },
+    {
+     "class": "class_617",
+     "conf": 0.0023367744870483875
+    },
+    {
+     "class": "class_858",
+     "conf": 0.002332052681595087
+    },
+    {
+     "class": "class_955",
+     "conf": 0.002232760889455676
+    },
+    {
+     "class": "class_256",
+     "conf": 0.0022246299777179956
+    },
+    {
+     "class": "class_996",
+     "conf": 0.0021421131677925587
+    },
+    {
+     "class": "class_510",
+     "conf": 0.002105932217091322
+    },
+    {
+     "class": "class_263",
+     "conf": 0.001956575084477663
+    },
+    {
+     "class": "class_424",
+     "conf": 0.0018986423965543509
+    },
+    {
+     "class": "class_461",
+     "conf": 0.0018768778536468744
+    },
+    {
+     "class": "class_814",
+     "conf": 0.0018042339943349361
+    },
+    {
+     "class": "class_982",
+     "conf": 0.0017697960138320923
+    },
+    {
+     "class": "class_62",
+     "conf": 0.0017360202036798
+    },
+    {
+     "class": "class_753",
+     "conf": 0.0016839697491377592
+    },
+    {
+     "class": "class_512",
+     "conf": 0.0016746026230975986
+    },
+    {
+     "class": "class_870",
+     "conf": 0.0016362817259505391
+    },
+    {
+     "class": "class_89",
+     "conf": 0.0016158834332600236
+    },
+    {
+     "class": "class_535",
+     "conf": 0.001571226748637855
+    },
+    {
+     "class": "class_292",
+     "conf": 0.0015608774265274405
+    },
+    {
+     "class": "class_379",
+     "conf": 0.0015093431575223804
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "top50/post/synth97x173": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_908",
+     "conf": 0.649515688419342
+    },
+    {
+     "class": "class_96",
+     "conf": 0.047902584075927734
+    },
+    {
+     "class": "class_259",
+     "conf": 0.027116967365145683
+    },
+    {
+     "class": "class_426",
+     "conf": 0.02573467046022415
+    },
+    {
+     "class": "class_866",
+     "conf": 0.021142948418855667
+    },
+    {
+     "class": "class_203",
+     "conf": 0.020158827304840088
+    },
+    {
+     "class": "class_295",
+     "conf": 0.012056400068104267
+    },
+    {
+     "class": "class_328",
+     "conf": 0.011401789262890816
+    },
+    {
+     "class": "class_508",
+     "conf": 0.010225017555058002
+    },
+    {
+     "class": "class_574",
+     "conf": 0.00951220840215683
+    },
+    {
+     "class": "class_250",
+     "conf": 0.008678976446390152
+    },
+    {
+     "class": "class_898",
+     "conf": 0.007639368064701557
+    },
+    {
+     "class": "class_916",
+     "conf": 0.007118952926248312
+    },
+    {
+     "class": "class_956",
+     "conf": 0.005704473238438368
+    },
+    {
+     "class": "class_657",
+     "conf": 0.005295995157212019
+    },
+    {
+     "class": "class_379",
+     "conf": 0.005256197415292263
+    },
+    {
+     "class": "class_257",
+     "conf": 0.004693260416388512
+    },
+    {
+     "class": "class_498",
+     "conf": 0.0036631093826144934
+    },
+    {
+     "class": "class_91",
+     "conf": 0.003378534922376275
+    },
+    {
+     "class": "class_775",
+     "conf": 0.003125110873952508
+    },
+    {
+     "class": "class_349",
+     "conf": 0.002985776634886861
+    },
+    {
+     "class": "class_813",
+     "conf": 0.0029503044206649065
+    },
+    {
+     "class": "class_611",
+     "conf": 0.0025327925104647875
+    },
+    {
+     "class": "hammerhead",
+     "conf": 0.0024484111927449703
+    },
+    {
+     "class": "class_789",
+     "conf": 0.0024120237212628126
+    },
+    {
+     "class": "class_269",
+     "conf": 0.0024023258592933416
+    },
+    {
+     "class": "class_880",
+     "conf": 0.0023284251801669598
+    },
+    {
+     "class": "class_370",
+     "conf": 0.0023018831852823496
+    },
+    {
+     "class": "class_157",
+     "conf": 0.002255888655781746
+    },
+    {
+     "class": "class_756",
+     "conf": 0.0022144310642033815
+    },
+    {
+     "class": "class_803",
+     "conf": 0.0020406385883688927
+    },
+    {
+     "class": "class_570",
+     "conf": 0.002031636191532016
+    },
+    {
+     "class": "class_308",
+     "conf": 0.0020016576163470745
+    },
+    {
+     "class": "class_358",
+     "conf": 0.0018598245223984122
+    },
+    {
+     "class": "class_701",
+     "conf": 0.0017933000344783068
+    },
+    {
+     "class": "class_978",
+     "conf": 0.0016355494735762477
+    },
+    {
+     "class": "class_108",
+     "conf": 0.0015373784117400646
+    },
+    {
+     "class": "class_755",
+     "conf": 0.0014230174710974097
+    },
+    {
+     "class": "class_480",
+     "conf": 0.001342108240351081
+    },
+    {
+     "class": "class_197",
+     "conf": 0.0013028294779360294
+    },
+    {
+     "class": "class_392",
+     "conf": 0.0012934072874486446
+    },
+    {
+     "class": "class_527",
+     "conf": 0.0012376165250316262
+    },
+    {
+     "class": "class_342",
+     "conf": 0.0012122942134737968
+    },
+    {
+     "class": "class_523",
+     "conf": 0.0012002445291727781
+    },
+    {
+     "class": "class_138",
+     "conf": 0.0011583783198148012
+    },
+    {
+     "class": "class_909",
+     "conf": 0.0011238523293286562
+    },
+    {
+     "class": "class_995",
+     "conf": 0.0010925636161118746
+    },
+    {
+     "class": "class_516",
+     "conf": 0.001082815695554018
+    },
+    {
+     "class": "class_827",
+     "conf": 0.001082449103705585
+    },
+    {
+     "class": "class_646",
+     "conf": 0.0010663042776286602
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "top50/post1d/sample810x1080": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_232",
+     "conf": 0.08271315693855286
+    },
+    {
+     "class": "class_61",
+     "conf": 0.0571088008582592
+    },
+    {
+     "class": "stingray",
+     "conf": 0.04973717778921127
+    },
+    {
+     "class": "class_556",
+     "conf": 0.039186105132102966
+    },
+    {
+     "class": "class_977",
+     "conf": 0.03769880160689354
+    },
+    {
+     "class": "class_507",
+     "conf": 0.033529672771692276
+    },
+    {
+     "class": "class_662",
+     "conf": 0.02468966506421566
+    },
+    {
+     "class": "class_398",
+     "conf": 0.02410333789885044
+    },
+    {
+     "class": "class_917",
+     "conf": 0.023214275017380714
+    },
+    {
+     "class": "class_725",
+     "conf": 0.02287225052714348
+    },
+    {
+     "class": "class_342",
+     "conf": 0.021897509694099426
+    },
+    {
+     "class": "class_135",
+     "conf": 0.02135697938501835
+    },
+    {
+     "class": "class_994",
+     "conf": 0.02022773027420044
+    },
+    {
+     "class": "class_742",
+     "conf": 0.019699595868587494
+    },
+    {
+     "class": "class_403",
+     "conf": 0.01885385997593403
+    },
+    {
+     "class": "class_492",
+     "conf": 0.01574147678911686
+    },
+    {
+     "class": "class_183",
+     "conf": 0.015475931577384472
+    },
+    {
+     "class": "class_487",
+     "conf": 0.014757530763745308
+    },
+    {
+     "class": "class_451",
+     "conf": 0.01316773984581232
+    },
+    {
+     "class": "class_325",
+     "conf": 0.012651462107896805
+    },
+    {
+     "class": "class_466",
+     "conf": 0.012293691746890545
+    },
+    {
+     "class": "class_356",
+     "conf": 0.0121357012540102
+    },
+    {
+     "class": "class_175",
+     "conf": 0.01196150854229927
+    },
+    {
+     "class": "class_188",
+     "conf": 0.011427436023950577
+    },
+    {
+     "class": "class_94",
+     "conf": 0.01130035798996687
+    },
+    {
+     "class": "class_340",
+     "conf": 0.009875277988612652
+    },
+    {
+     "class": "class_66",
+     "conf": 0.009045258164405823
+    },
+    {
+     "class": "class_737",
+     "conf": 0.008806067518889904
+    },
+    {
+     "class": "class_661",
+     "conf": 0.008575760759413242
+    },
+    {
+     "class": "class_258",
+     "conf": 0.008540893904864788
+    },
+    {
+     "class": "class_980",
+     "conf": 0.007680077571421862
+    },
+    {
+     "class": "class_95",
+     "conf": 0.007274080533534288
+    },
+    {
+     "class": "class_639",
+     "conf": 0.007159496657550335
+    },
+    {
+     "class": "class_322",
+     "conf": 0.006636627949774265
+    },
+    {
+     "class": "class_803",
+     "conf": 0.006501542404294014
+    },
+    {
+     "class": "class_125",
+     "conf": 0.0058830720372498035
+    },
+    {
+     "class": "class_997",
+     "conf": 0.005784361623227596
+    },
+    {
+     "class": "class_108",
+     "conf": 0.005633864551782608
+    },
+    {
+     "class": "class_676",
+     "conf": 0.0056279064156115055
+    },
+    {
+     "class": "class_919",
+     "conf": 0.005362865049391985
+    },
+    {
+     "class": "class_197",
+     "conf": 0.00527617521584034
+    },
+    {
+     "class": "class_875",
+     "conf": 0.00522796344012022
+    },
+    {
+     "class": "class_114",
+     "conf": 0.005224504508078098
+    },
+    {
+     "class": "class_396",
+     "conf": 0.005169734824448824
+    },
+    {
+     "class": "class_631",
+     "conf": 0.005018552765250206
+    },
+    {
+     "class": "class_949",
+     "conf": 0.0048907152377069
+    },
+    {
+     "class": "class_432",
+     "conf": 0.0042145284824073315
+    },
+    {
+     "class": "hen",
+     "conf": 0.004128922708332539
+    },
+    {
+     "class": "class_523",
+     "conf": 0.004079482518136501
+    },
+    {
+     "class": "class_49",
+     "conf": 0.004066034220159054
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "top50/post1d/synth640x480": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_801",
+     "conf": 0.5442293882369995
+    },
+    {
+     "class": "class_885",
+     "conf": 0.11147182434797287
+    },
+    {
+     "class": "class_385",
+     "conf": 0.0354132242500782
+    },
+    {
+     "class": "class_668",
+     "conf": 0.030748914927244186
+    },
+    {
+     "class": "class_271",
+     "conf": 0.019680749624967575
+    },
+    {
+     "class": "class_806",
+     "conf": 0.014568569138646126
+    },
+    {
+     "class": "class_359",
+     "conf": 0.013749929144978523
+    },
+    {
+     "class": "class_242",
+     "conf": 0.009605476632714272
+    },
+    {
+     "class": "class_284",
+     "conf": 0.008806796744465828
+    },
+    {
+     "class": "class_513",
+     "conf": 0.008356568403542042
+    },
+    {
+     "class": "class_314",
+     "conf": 0.007862193509936333
+    },
+    {
+     "class": "class_667",
+     "conf": 0.007303051184862852
+    },
+    {
+     "class": "class_235",
+     "conf": 0.0072191390208899975
+    },
+    {
+     "class": "class_639",
+     "conf": 0.006724659353494644
+    },
+    {
+     "class": "class_133",
+     "conf": 0.006692348048090935
+    },
+    {
+     "class": "class_723",
+     "conf": 0.0064348699524998665
+    },
+    {
+     "class": "class_315",
+     "conf": 0.006327932700514793
+    },
+    {
+     "class": "class_608",
+     "conf": 0.005337419454008341
+    },
+    {
+     "class": "class_274",
+     "conf": 0.005325834266841412
+    },
+    {
+     "class": "class_744",
+     "conf": 0.0040039788000285625
+    },
+    {
+     "class": "class_378",
+     "conf": 0.003927531186491251
+    },
+    {
+     "class": "class_141",
+     "conf": 0.003463973756879568
+    },
+    {
+     "class": "class_357",
+     "conf": 0.0031260645482689142
+    },
+    {
+     "class": "class_815",
+     "conf": 0.0030351881869137287
+    },
+    {
+     "class": "class_735",
+     "conf": 0.002920982427895069
+    },
+    {
+     "class": "class_978",
+     "conf": 0.0028519195038825274
+    },
+    {
+     "class": "class_152",
+     "conf": 0.0028047312516719103
+    },
+    {
+     "class": "class_116",
+     "conf": 0.002516305074095726
+    },
+    {
+     "class": "class_396",
+     "conf": 0.0024286392144858837
+    },
+    {
+     "class": "class_537",
+     "conf": 0.0024092523381114006
+    },
+    {
+     "class": "class_216",
+     "conf": 0.002392555819824338
+    },
+    {
+     "class": "class_617",
+     "conf": 0.0023367744870483875
+    },
+    {
+     "class": "class_858",
+     "conf": 0.002332052681595087
+    },
+    {
+     "class": "class_955",
+     "conf": 0.002232760889455676
+    },
+    {
+     "class": "class_256",
+     "conf": 0.0022246299777179956
+    },
+    {
+     "class": "class_996",
+     "conf": 0.0021421131677925587
+    },
+    {
+     "class": "class_510",
+     "conf": 0.002105932217091322
+    },
+    {
+     "class": "class_263",
+     "conf": 0.001956575084477663
+    },
+    {
+     "class": "class_424",
+     "conf": 0.0018986423965543509
+    },
+    {
+     "class": "class_461",
+     "conf": 0.0018768778536468744
+    },
+    {
+     "class": "class_814",
+     "conf": 0.0018042339943349361
+    },
+    {
+     "class": "class_982",
+     "conf": 0.0017697960138320923
+    },
+    {
+     "class": "class_62",
+     "conf": 0.0017360202036798
+    },
+    {
+     "class": "class_753",
+     "conf": 0.0016839697491377592
+    },
+    {
+     "class": "class_512",
+     "conf": 0.0016746026230975986
+    },
+    {
+     "class": "class_870",
+     "conf": 0.0016362817259505391
+    },
+    {
+     "class": "class_89",
+     "conf": 0.0016158834332600236
+    },
+    {
+     "class": "class_535",
+     "conf": 0.001571226748637855
+    },
+    {
+     "class": "class_292",
+     "conf": 0.0015608774265274405
+    },
+    {
+     "class": "class_379",
+     "conf": 0.0015093431575223804
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "top50/post1d/synth97x173": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_908",
+     "conf": 0.649515688419342
+    },
+    {
+     "class": "class_96",
+     "conf": 0.047902584075927734
+    },
+    {
+     "class": "class_259",
+     "conf": 0.027116967365145683
+    },
+    {
+     "class": "class_426",
+     "conf": 0.02573467046022415
+    },
+    {
+     "class": "class_866",
+     "conf": 0.021142948418855667
+    },
+    {
+     "class": "class_203",
+     "conf": 0.020158827304840088
+    },
+    {
+     "class": "class_295",
+     "conf": 0.012056400068104267
+    },
+    {
+     "class": "class_328",
+     "conf": 0.011401789262890816
+    },
+    {
+     "class": "class_508",
+     "conf": 0.010225017555058002
+    },
+    {
+     "class": "class_574",
+     "conf": 0.00951220840215683
+    },
+    {
+     "class": "class_250",
+     "conf": 0.008678976446390152
+    },
+    {
+     "class": "class_898",
+     "conf": 0.007639368064701557
+    },
+    {
+     "class": "class_916",
+     "conf": 0.007118952926248312
+    },
+    {
+     "class": "class_956",
+     "conf": 0.005704473238438368
+    },
+    {
+     "class": "class_657",
+     "conf": 0.005295995157212019
+    },
+    {
+     "class": "class_379",
+     "conf": 0.005256197415292263
+    },
+    {
+     "class": "class_257",
+     "conf": 0.004693260416388512
+    },
+    {
+     "class": "class_498",
+     "conf": 0.0036631093826144934
+    },
+    {
+     "class": "class_91",
+     "conf": 0.003378534922376275
+    },
+    {
+     "class": "class_775",
+     "conf": 0.003125110873952508
+    },
+    {
+     "class": "class_349",
+     "conf": 0.002985776634886861
+    },
+    {
+     "class": "class_813",
+     "conf": 0.0029503044206649065
+    },
+    {
+     "class": "class_611",
+     "conf": 0.0025327925104647875
+    },
+    {
+     "class": "hammerhead",
+     "conf": 0.0024484111927449703
+    },
+    {
+     "class": "class_789",
+     "conf": 0.0024120237212628126
+    },
+    {
+     "class": "class_269",
+     "conf": 0.0024023258592933416
+    },
+    {
+     "class": "class_880",
+     "conf": 0.0023284251801669598
+    },
+    {
+     "class": "class_370",
+     "conf": 0.0023018831852823496
+    },
+    {
+     "class": "class_157",
+     "conf": 0.002255888655781746
+    },
+    {
+     "class": "class_756",
+     "conf": 0.0022144310642033815
+    },
+    {
+     "class": "class_803",
+     "conf": 0.0020406385883688927
+    },
+    {
+     "class": "class_570",
+     "conf": 0.002031636191532016
+    },
+    {
+     "class": "class_308",
+     "conf": 0.0020016576163470745
+    },
+    {
+     "class": "class_358",
+     "conf": 0.0018598245223984122
+    },
+    {
+     "class": "class_701",
+     "conf": 0.0017933000344783068
+    },
+    {
+     "class": "class_978",
+     "conf": 0.0016355494735762477
+    },
+    {
+     "class": "class_108",
+     "conf": 0.0015373784117400646
+    },
+    {
+     "class": "class_755",
+     "conf": 0.0014230174710974097
+    },
+    {
+     "class": "class_480",
+     "conf": 0.001342108240351081
+    },
+    {
+     "class": "class_197",
+     "conf": 0.0013028294779360294
+    },
+    {
+     "class": "class_392",
+     "conf": 0.0012934072874486446
+    },
+    {
+     "class": "class_527",
+     "conf": 0.0012376165250316262
+    },
+    {
+     "class": "class_342",
+     "conf": 0.0012122942134737968
+    },
+    {
+     "class": "class_523",
+     "conf": 0.0012002445291727781
+    },
+    {
+     "class": "class_138",
+     "conf": 0.0011583783198148012
+    },
+    {
+     "class": "class_909",
+     "conf": 0.0011238523293286562
+    },
+    {
+     "class": "class_995",
+     "conf": 0.0010925636161118746
+    },
+    {
+     "class": "class_516",
+     "conf": 0.001082815695554018
+    },
+    {
+     "class": "class_827",
+     "conf": 0.001082449103705585
+    },
+    {
+     "class": "class_646",
+     "conf": 0.0010663042776286602
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "top50/pre/sample810x1080": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    128,
+    160
+   ],
+   "n": 61440,
+   "sha": "8714f9ad57184e2532414ee9",
+   "sum": 28202.745801652316,
+   "head": [
+    0.7058824,
+    0.7411765,
+    0.7647059,
+    0.76862746,
+    0.78039217,
+    0.77254903
+   ]
+  },
+  "meta": {
+   "OrigWidth": 810,
+   "OrigHeight": 1080,
+   "ScaleX": 0.19753086419753085,
+   "ScaleY": 0.11851851851851852,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "top50/pre/synth640x480": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    128,
+    160
+   ],
+   "n": 61440,
+   "sha": "e92f1b832557e16b3df9fe45",
+   "sum": 30608.184945868794,
+   "head": [
+    0.007843138,
+    0.007843138,
+    0.011764706,
+    0.019607844,
+    0.019607844,
+    0.03137255
+   ]
+  },
+  "meta": {
+   "OrigWidth": 640,
+   "OrigHeight": 480,
+   "ScaleX": 0.25,
+   "ScaleY": 0.26666666666666666,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "top50/pre/synth97x173": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    128,
+    160
+   ],
+   "n": 61440,
+   "sha": "73f795b2da15d15e859b7d6a",
+   "sum": 29706.48685091408,
+   "head": [
+    0.007843138,
+    0.015686275,
+    0.019607844,
+    0.02745098,
+    0.03137255,
+    0.019607844
+   ]
+  },
+  "meta": {
+   "OrigWidth": 97,
+   "OrigHeight": 173,
+   "ScaleX": 1.6494845360824741,
+   "ScaleY": 0.7398843930635838,
+   "PadX": 0,
+   "PadY": 0
+  }
+ }
+}

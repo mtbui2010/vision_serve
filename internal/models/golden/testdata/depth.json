@@ -1,0 +1,632 @@
+{
+ "da2/err-len": {
+  "err": "depth: data length 10 does not match shape 48x64=3072"
+ },
+ "da2/err-shape": {
+  "err": "depth: expected batch size 1, got shape [2 24 64]"
+ },
+ "da2/flat": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 64,
+   "depth_height": 48,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    48,
+    64
+   ],
+   "n": 3072,
+   "sha": "f3cc103136423a5797575090",
+   "sum": 0,
+   "head": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  }
+ },
+ "da2/post/sample810x1080": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 518,
+   "depth_height": 686,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    686,
+    518
+   ],
+   "n": 355348,
+   "sha": "33546883a63fdf1063c5ce81",
+   "sum": 177618.4879229794,
+   "head": [
+    0.71834517,
+    0.22730272,
+    0.17722645,
+    0.5614664,
+    0.31827193,
+    0.8777853,
+    0,
+    1
+   ]
+  }
+ },
+ "da2/post/synth640x480": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 686,
+   "depth_height": 518,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    518,
+    686
+   ],
+   "n": 355348,
+   "sha": "746aa8298033391178f4948c",
+   "sum": 177919.66773256776,
+   "head": [
+    0.6305943,
+    0.36030534,
+    0.8955155,
+    0.2449554,
+    0.6076499,
+    0.4100979,
+    0,
+    1
+   ]
+  }
+ },
+ "da2/post/synth97x173": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 294,
+   "depth_height": 518,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    518,
+    294
+   ],
+   "n": 152292,
+   "sha": "a063aa26dda89862ab94ad17",
+   "sum": 76110.23226657425,
+   "head": [
+    0.16583896,
+    0.8409124,
+    0.5380304,
+    0.92707014,
+    0.51152366,
+    0.63717324,
+    0,
+    1
+   ]
+  }
+ },
+ "da2/post2d/sample810x1080": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 518,
+   "depth_height": 686,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    686,
+    518
+   ],
+   "n": 355348,
+   "sha": "33546883a63fdf1063c5ce81",
+   "sum": 177618.4879229794,
+   "head": [
+    0.71834517,
+    0.22730272,
+    0.17722645,
+    0.5614664,
+    0.31827193,
+    0.8777853,
+    0,
+    1
+   ]
+  }
+ },
+ "da2/post2d/synth640x480": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 686,
+   "depth_height": 518,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    518,
+    686
+   ],
+   "n": 355348,
+   "sha": "746aa8298033391178f4948c",
+   "sum": 177919.66773256776,
+   "head": [
+    0.6305943,
+    0.36030534,
+    0.8955155,
+    0.2449554,
+    0.6076499,
+    0.4100979,
+    0,
+    1
+   ]
+  }
+ },
+ "da2/post2d/synth97x173": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 294,
+   "depth_height": 518,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    518,
+    294
+   ],
+   "n": 152292,
+   "sha": "a063aa26dda89862ab94ad17",
+   "sum": 76110.23226657425,
+   "head": [
+    0.16583896,
+    0.8409124,
+    0.5380304,
+    0.92707014,
+    0.51152366,
+    0.63717324,
+    0,
+    1
+   ]
+  }
+ },
+ "da2/pre/sample810x1080": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    686,
+    518
+   ],
+   "n": 1066044,
+   "sha": "9f584c0d883313487a7dc436",
+   "sum": 48256.671316064894,
+   "head": [
+    0.8446785,
+    0.9131775,
+    1.0330508,
+    1.1700488,
+    1.2556726,
+    1.2727973
+   ]
+  },
+  "meta": {
+   "OrigWidth": 810,
+   "OrigHeight": 1080,
+   "ScaleX": 0.6395061728395062,
+   "ScaleY": 0.6351851851851852,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "da2/pre/synth640x480": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    518,
+    686
+   ],
+   "n": 1066044,
+   "sha": "97e86464d7ca250fadf8fbaf",
+   "sum": 231873.0543740308,
+   "head": [
+    -2.117904,
+    -2.117904,
+    -2.117904,
+    -2.117904,
+    -2.0665298,
+    -2.0836544
+   ]
+  },
+  "meta": {
+   "OrigWidth": 640,
+   "OrigHeight": 480,
+   "ScaleX": 1.071875,
+   "ScaleY": 1.0791666666666666,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "da2/pre/synth97x173": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    518,
+    294
+   ],
+   "n": 456876,
+   "sha": "53b832206b793e0e33169f55",
+   "sum": 70394.33157599391,
+   "head": [
+    -2.1007793,
+    -2.1007793,
+    -2.0836544,
+    -2.0665298,
+    -2.0322802,
+    -1.9980307
+   ]
+  },
+  "meta": {
+   "OrigWidth": 97,
+   "OrigHeight": 173,
+   "ScaleX": 3.0309278350515463,
+   "ScaleY": 2.994219653179191,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "da2/tinyrange": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 2,
+   "depth_height": 2,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    2,
+    2
+   ],
+   "n": 4,
+   "sha": "6855960ee428276148fc8745",
+   "sum": 1,
+   "head": [
+    0,
+    1,
+    0,
+    0,
+    0,
+    1
+   ]
+  }
+ },
+ "midas/err-len": {
+  "err": "depth: data length 10 does not match shape 48x64=3072"
+ },
+ "midas/err-shape": {
+  "err": "depth: expected batch size 1, got shape [2 24 64]"
+ },
+ "midas/flat": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 64,
+   "depth_height": 48,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    48,
+    64
+   ],
+   "n": 3072,
+   "sha": "f3cc103136423a5797575090",
+   "sum": 0,
+   "head": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+   ]
+  }
+ },
+ "midas/post/sample810x1080": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 256,
+   "depth_height": 256,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    256,
+    256
+   ],
+   "n": 65536,
+   "sha": "5654695df8b870042f5d0dc3",
+   "sum": 32820.47072529876,
+   "head": [
+    0.7183262,
+    0.22725068,
+    0.17717105,
+    0.56143695,
+    0.31822604,
+    0.87777704,
+    0,
+    1
+   ]
+  }
+ },
+ "midas/post/synth640x480": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 256,
+   "depth_height": 256,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    256,
+    256
+   ],
+   "n": 65536,
+   "sha": "882c8f911f57580eba9d6c30",
+   "sum": 32814.933329225634,
+   "head": [
+    0.63059616,
+    0.3603064,
+    0.8955181,
+    0.24495612,
+    0.6076517,
+    0.4100991,
+    0,
+    1
+   ]
+  }
+ },
+ "midas/post/synth97x173": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 256,
+   "depth_height": 256,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    256,
+    256
+   ],
+   "n": 65536,
+   "sha": "71b039245b4aa14227234c5d",
+   "sum": 32780.987001778616,
+   "head": [
+    0.16579102,
+    0.8409032,
+    0.53800386,
+    0.92706597,
+    0.51149553,
+    0.6371524,
+    0,
+    1
+   ]
+  }
+ },
+ "midas/post2d/sample810x1080": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 256,
+   "depth_height": 256,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    256,
+    256
+   ],
+   "n": 65536,
+   "sha": "5654695df8b870042f5d0dc3",
+   "sum": 32820.47072529876,
+   "head": [
+    0.7183262,
+    0.22725068,
+    0.17717105,
+    0.56143695,
+    0.31822604,
+    0.87777704,
+    0,
+    1
+   ]
+  }
+ },
+ "midas/post2d/synth640x480": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 256,
+   "depth_height": 256,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    256,
+    256
+   ],
+   "n": 65536,
+   "sha": "882c8f911f57580eba9d6c30",
+   "sum": 32814.933329225634,
+   "head": [
+    0.63059616,
+    0.3603064,
+    0.8955181,
+    0.24495612,
+    0.6076517,
+    0.4100991,
+    0,
+    1
+   ]
+  }
+ },
+ "midas/post2d/synth97x173": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 256,
+   "depth_height": 256,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    256,
+    256
+   ],
+   "n": 65536,
+   "sha": "71b039245b4aa14227234c5d",
+   "sum": 32780.987001778616,
+   "head": [
+    0.16579102,
+    0.8409032,
+    0.53800386,
+    0.92706597,
+    0.51149553,
+    0.6371524,
+    0,
+    1
+   ]
+  }
+ },
+ "midas/pre/sample810x1080": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    256,
+    256
+   ],
+   "n": 196608,
+   "sha": "a9cbb6bbda51dcf6c0f25b8d",
+   "sum": 8891.631909254938,
+   "head": [
+    0.93030226,
+    1.0844251,
+    1.1871736,
+    1.2385478,
+    1.2556726,
+    1.221423
+   ]
+  },
+  "meta": {
+   "OrigWidth": 810,
+   "OrigHeight": 1080,
+   "ScaleX": 0.3160493827160494,
+   "ScaleY": 0.23703703703703705,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "midas/pre/synth640x480": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    256,
+    256
+   ],
+   "n": 196608,
+   "sha": "4e32b780c471ee0b46466970",
+   "sum": 42794.84303238569,
+   "head": [
+    -2.117904,
+    -2.1007793,
+    -2.1007793,
+    -2.0836544,
+    -2.0322802,
+    -2.0322802
+   ]
+  },
+  "meta": {
+   "OrigWidth": 640,
+   "OrigHeight": 480,
+   "ScaleX": 0.4,
+   "ScaleY": 0.5333333333333333,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "midas/pre/synth97x173": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    256,
+    256
+   ],
+   "n": 196608,
+   "sha": "e319a0a740397fa1a22bb198",
+   "sum": 30274.047473287676,
+   "head": [
+    -2.1007793,
+    -2.1007793,
+    -2.0665298,
+    -2.0494049,
+    -2.0151556,
+    -1.9980307
+   ]
+  },
+  "meta": {
+   "OrigWidth": 97,
+   "OrigHeight": 173,
+   "ScaleX": 2.6391752577319587,
+   "ScaleY": 1.4797687861271676,
+   "PadX": 0,
+   "PadY": 0
+  }
+ },
+ "midas/tinyrange": {
+  "result": {
+   "task": "depth",
+   "model": "",
+   "depth_width": 2,
+   "depth_height": 2,
+   "duration_ms": 0
+  },
+  "depth_map": {
+   "shape": [
+    2,
+    2
+   ],
+   "n": 4,
+   "sha": "6855960ee428276148fc8745",
+   "sum": 1,
+   "head": [
+    0,
+    1,
+    0,
+    0,
+    0,
+    1
+   ]
+  }
+ }
+}
