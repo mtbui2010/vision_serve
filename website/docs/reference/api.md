@@ -18,7 +18,7 @@ The server listens on `http://127.0.0.1:11435` by default. Requests are `multipa
 | `POST` | `/api/predict` | Run a model on an image. **The main endpoint.** |
 | `POST` | `/api/preprocess` | Return the exact input tensor a model would receive, without running it (debugging). |
 | `POST` | `/api/infer_tensor` | Run a model on a tensor you prepared yourself (raw float32 body). |
-| `POST` | `/api/explain` | A heatmap of what the model looked at for one detection (Score-CAM). |
+| `POST` | `/api/explain` | A heatmap of what the model looked at for one detection (attention map or Score-CAM). |
 | `POST` | `/api/templates` | Register example images under a name, for template-prompted models. |
 | `GET` | `/api/templates` | List registered templates. |
 | `DELETE` | `/api/templates/{name}` | Remove a template. |

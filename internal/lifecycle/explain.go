@@ -9,21 +9,30 @@ import (
 	"visionserve/internal/engine"
 	"visionserve/internal/explain"
 	"visionserve/internal/models"
+	"visionserve/pkg/api"
 )
 
 // ExplainRequest carries explain parameters from the HTTP handler.
+//
+// The detection to explain is one of the detections /api/predict returns for the same image and
+// model (with no prompt or options): the DetectionIdx-th of that list, or the first one of Class.
 type ExplainRequest struct {
-	Class        string  // filter by class name (e.g. "cup"); empty = use DetectionIdx
-	DetectionIdx int     // 0-based index; used when Class is empty (default 0)
+	Class        string  // the first detection of this class (e.g. "cup"); empty = use DetectionIdx
+	DetectionIdx int     // 0-based position in /api/predict's detections; used when Class is empty
 	TopChannels  int     // Score-CAM: number of channels to sample (0 = use manifest default)
 	Alpha        float32 // PNG overlay opacity [0,1] (0 = use default 0.5)
 }
 
-// ExplainResult holds the raw heatmap (H×W float32 in [0,1]).
+// ExplainResult holds the raw heatmap (H×W float32 in [0,1]) and the detection it explains.
 type ExplainResult struct {
 	Heatmap []float32 // row-major [H*W], values in [0,1]
 	Width   int
 	Height  int
+	// Detection is the explained detection, exactly as /api/predict returns it.
+	Detection api.Detection
+	// Query is the object query of the explain session that produced Detection (attention), or
+	// -1 when the method follows the object by its box instead (Score-CAM).
+	Query int
 }
 
 // explainEngineOrLoad returns the session's explain session (the same ONNX file loaded with ALL outputs,
@@ -121,7 +130,6 @@ func (m *Manager) Explain(ctx context.Context, name string, img image.Image, req
 	// Preprocess: plain Model uses its own Preprocess(); PipelineModel uses ExplainPreprocessor.
 	var inputTensor engine.Tensor
 	var meta models.PreprocessMeta
-	detectionIdx := req.DetectionIdx
 
 	if s.pipeline != nil {
 		ep, ok := s.pipeline.(models.ExplainPreprocessor)
@@ -130,42 +138,20 @@ func (m *Manager) Explain(ctx context.Context, name string, img image.Image, req
 				"lifecycle: %w: pipeline model %q does not implement ExplainPreprocessor", ErrInvalidRequest, name)
 		}
 		inputTensor, meta, err = ep.ExplainPreprocess(img)
-		if err != nil {
-			return ExplainResult{}, fmt.Errorf("lifecycle: preprocess for explain failed: %w", err)
-		}
-		// Class-based detection index not supported for pipeline models; use req.DetectionIdx.
 	} else {
-		mdl := s.model
-		if mdl == nil {
+		if s.model == nil {
 			return ExplainResult{}, fmt.Errorf("lifecycle: model %q has no simple Model", name)
 		}
-		inputTensor, meta, err = mdl.Preprocess(img)
-		if err != nil {
-			return ExplainResult{}, fmt.Errorf("lifecycle: preprocess for explain failed: %w", err)
-		}
-		// Resolve class → detectionIdx (plain models only).
-		if req.Class != "" {
-			// A class that is not detected is an error, not "explain detection 0": that used to
-			// return a heatmap for some other object, labelled as the requested class.
-			detectOuts, derr := s.engine.Run(ctx, []engine.Tensor{inputTensor})
-			if derr != nil {
-				return ExplainResult{}, fmt.Errorf("lifecycle: explain: detection pass failed: %w", derr)
-			}
-			res, derr := mdl.Postprocess(detectOuts, meta)
-			if derr != nil {
-				return ExplainResult{}, fmt.Errorf("lifecycle: explain: %w", derr)
-			}
-			found := false
-			for i, d := range res.Detections {
-				if d.Class == req.Class {
-					detectionIdx, found = i, true
-					break
-				}
-			}
-			if !found {
-				return ExplainResult{}, fmt.Errorf("lifecycle: explain: %w: no %q detection in this image", ErrInvalidRequest, req.Class)
-			}
-		}
+		inputTensor, meta, err = s.model.Preprocess(img)
+	}
+	if err != nil {
+		return ExplainResult{}, fmt.Errorf("lifecycle: preprocess for explain failed: %w", err)
+	}
+
+	// The detection to explain, picked from the list /api/predict returns for this image.
+	target, err := s.explainTarget(ctx, img, req)
+	if err != nil {
+		return ExplainResult{}, err
 	}
 
 	// Run the explain session (all outputs: detect + explain tensors).
@@ -191,6 +177,7 @@ func (m *Manager) Explain(ctx context.Context, name string, img image.Image, req
 
 	var heatmap []float32
 	var W, H int
+	query := -1
 
 	if man.Explain.Type == "score_cam" {
 		// Full Score-CAM: re-run detect session once per top-K channel with a masked image.
@@ -213,36 +200,34 @@ func (m *Manager) Explain(ctx context.Context, name string, img image.Image, req
 			topK = req.TopChannels
 		}
 
-		plainMdl := s.model // Score-CAM requires a plain Model (pipeline models not supported)
-		if plainMdl == nil {
+		if s.model == nil { // Score-CAM requires a plain Model (pipeline models not supported)
 			return ExplainResult{}, fmt.Errorf("lifecycle: score_cam explain requires a plain Model, not a pipeline")
 		}
+		// The target is followed on each masked image by class and box: the N-th detection of
+		// a masked run is in general another object (SameObjectScore).
 		detectRunner := func(masked image.Image) (float32, error) {
 			if err2 := ctx.Err(); err2 != nil { // ends the Score-CAM loop (see ScoreCAMHeatmap)
 				return 0, gaveUp(name, err2)
 			}
-			in, meta2, err2 := plainMdl.Preprocess(masked)
+			res, err2 := s.predictSimple(ctx, masked)
 			if err2 != nil {
 				return 0, err2
 			}
-			outs, err2 := s.engine.Run(ctx, []engine.Tensor{in})
-			if err2 != nil {
-				return 0, err2
-			}
-			res, err2 := plainMdl.Postprocess(outs, meta2)
-			if err2 != nil {
-				return 0, err2
-			}
-			if detectionIdx < len(res.Detections) {
-				return float32(res.Detections[detectionIdx].Conf), nil
-			}
-			return 0, nil
+			return explain.SameObjectScore(res.Detections, target), nil
 		}
 
 		heatmap, W, H, err = explain.ScoreCAMHeatmap(featTensor, img, detectRunner, topK, origW, origH)
 	} else {
-		// Attention map: single inference already done, extract from outputs.
-		heatmap, W, H, err = exp.Heatmap(outputs, outputNames, meta, detectionIdx, origW, origH)
+		// Attention is indexed by object QUERY. The target's position in the detection list is
+		// not its query (the decoder thresholds and sorts the queries), so find the query whose
+		// box is the target's.
+		query, err = explain.QueryForDetection(outputs, meta,
+			explain.BoxDecode{InputW: man.Input.Width, InputH: man.Input.Height, Format: man.Postprocess.BoxFormat},
+			target)
+		if err != nil {
+			return ExplainResult{}, fmt.Errorf("lifecycle: explain %q: %w", name, err)
+		}
+		heatmap, W, H, err = exp.Heatmap(outputs, outputNames, meta, query, origW, origH)
 	}
 
 	if err != nil {
@@ -250,5 +235,41 @@ func (m *Manager) Explain(ctx context.Context, name string, img image.Image, req
 	}
 
 	s.touch(time.Now())
-	return ExplainResult{Heatmap: heatmap, Width: W, Height: H}, nil
+	return ExplainResult{Heatmap: heatmap, Width: W, Height: H, Detection: target, Query: query}, nil
+}
+
+// explainTarget returns the detection an explain request names, from the detections
+// /api/predict returns for img on this session (no prompt, no options): the DetectionIdx-th, or
+// the first of Class. Explaining "detection N" means exactly that detection, so the list is
+// produced by the same path as a predict, not re-derived from the explain session's outputs.
+//
+// A class that is not detected, or an index past the end of the list, is an error: anything
+// else would return a heatmap of some other object, labelled as the requested one.
+func (s *Session) explainTarget(ctx context.Context, img image.Image, req ExplainRequest) (api.Detection, error) {
+	var (
+		res api.Result
+		err error
+	)
+	if s.pipeline != nil {
+		res, err = s.inferPipeline(ctx, img, models.Prompt{})
+	} else {
+		res, err = s.predictSimple(ctx, img)
+	}
+	if err != nil {
+		return api.Detection{}, fmt.Errorf("lifecycle: explain: detection pass failed: %w", err)
+	}
+	dets := res.Detections
+	if req.Class != "" {
+		for _, d := range dets {
+			if d.Class == req.Class {
+				return d, nil
+			}
+		}
+		return api.Detection{}, fmt.Errorf("lifecycle: explain: %w: no %q detection in this image", ErrInvalidRequest, req.Class)
+	}
+	if req.DetectionIdx >= len(dets) {
+		return api.Detection{}, fmt.Errorf("lifecycle: explain: %w: detection_idx %d is out of range: %q found %d detection(s) in this image",
+			ErrInvalidRequest, req.DetectionIdx, s.name, len(dets))
+	}
+	return dets[req.DetectionIdx], nil
 }

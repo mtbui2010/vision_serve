@@ -225,11 +225,29 @@ Content-Type: multipart/form-data
 |-------|------|----------|-------------|
 | `model` | string | yes | model name (same as `/api/predict`) |
 | `image` | file | yes | input image |
-| `class` | string | no | class name to explain (e.g. `"cup"`). Uses highest-score detection matching the class. |
-| `detection_idx` | int | no | 0-based index into detections; overrides `class` |
+| `class` | string | no | class name to explain (e.g. `"cup"`): the highest-score detection of that class. Takes precedence over `detection_idx`. |
+| `detection_idx` | int | no | 0-based position in the `detections` that `/api/predict` returns for the same image and model (default 0) |
 | `top_channels` | int | no | Score-CAM only — channels to sample (default: manifest value or 64) |
 | `alpha` | float | no | PNG overlay opacity 0–1 (default 0.5) |
 | `format` | string | no | `"png"` (default) \| `"numpy"` |
+
+The detection to explain is taken from the list `/api/predict` returns (without a prompt), so
+`detection_idx: 0` is the first detection of a predict call on the same image. A
+`detection_idx` past the end of that list, or a `class` that is not detected, is a 400 — never
+a heatmap of some other object.
+
+For `type: attention` the server then finds the **object query** that produced that detection:
+the detector's output list is thresholded and sorted by confidence, so a detection's position
+is not its query index, and `cross_attn_weights` is indexed by query. The query is the one whose
+decoded box reproduces the detection's box. For `type: score_cam` each masked re-run scores the
+same object (same class, IoU ≥ 0.5 with its box), not the N-th detection of the re-run.
+
+Every response carries the explained detection and, for attention, its query:
+
+```
+X-Explain-Detection: {"bbox":[316.3,182.3,298.5,182.3],"class":"cat","conf":0.918}
+X-Explain-Query: 17
+```
 
 ### Response — `format=png`
 

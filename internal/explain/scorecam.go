@@ -35,7 +35,7 @@ func (e *scoreCamExplainer) Heatmap(
 	outputs []engine.Tensor,
 	outputNames []string,
 	meta models.PreprocessMeta,
-	detectionIdx int,
+	_ int, // query: structural Score-CAM does not depend on the target
 	origW, origH int,
 ) ([]float32, int, int, error) {
 	feat, err := findOutput(outputs, outputNames, e.outputName)
@@ -116,7 +116,8 @@ func scoreCAMStructural(feat engine.Tensor, topChannels, origW, origH int) ([]fl
 //
 //	featTensor    backbone feature tensor [1, C, fH, fW] from the explain session.
 //	origImg       the original (unmasked) input image.
-//	detectRunner  runs the detect session on a masked image, returns score of detectionIdx.
+//	detectRunner  runs the detect session on a masked image and returns the target object's
+//	              score (SameObjectScore: followed by class and box, not by list position).
 //	topChannels   number of channels to evaluate (0 = all channels).
 //	origW, origH  dimensions of the original image.
 func ScoreCAMHeatmap(
