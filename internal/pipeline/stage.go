@@ -60,6 +60,15 @@ type BitmapSegmenter interface {
 	SegmentBitmaps(c Call, boxes [][4]float64) ([]models.Mask, []mask.Bitmap, error)
 }
 
+// EachBitmapSegmenter is an optional BitmapSegmenter that streams: SegmentEach hands each mask
+// and its bitmap to fn as soon as the mask is final, and returns fn's results in SegmentBitmaps'
+// order, so the caller never holds every full-resolution bitmap at once. fn may run
+// concurrently and must not keep the bitmap's Data. ok=false means this segmenter cannot stream
+// (nothing ran); the caller then uses SegmentBitmaps.
+type EachBitmapSegmenter interface {
+	SegmentEach(c Call, boxes [][4]float64, fn func(m models.Mask, b mask.Bitmap) any) (out []any, ok bool, err error)
+}
+
 // GraspPlanner turns one object mask into grasps (original-image pixels), best first.
 type GraspPlanner interface {
 	Plan(m mask.Bitmap, p models.Prompt) []api.Grasp

@@ -260,6 +260,22 @@ func (r runner) Run(role string, inputs map[string]engine.Tensor) ([]engine.Tens
 	return s.RunNamed(r.ctx, inputs)
 }
 
+// RunInto implements models.IntoRunner. A role whose session cannot write into caller buffers
+// runs as Run does (the outputs are then fresh copies, with the same values). Both wait for
+// the session under the request ctx, as Run does.
+func (r runner) RunInto(role string, inputs, into map[string]engine.Tensor) ([]engine.Tensor, error) {
+	s, ok := r.engines[role]
+	if !ok {
+		return nil, fmt.Errorf("lifecycle: no ONNX session for role %q", role)
+	}
+	if ir, ok := s.(engine.IntoRunnable); ok && len(into) > 0 {
+		return ir.RunNamedInto(r.ctx, inputs, into)
+	}
+	return s.RunNamed(r.ctx, inputs)
+}
+
+var _ models.IntoRunner = runner{}
+
 func (r runner) InputNames(role string) []string {
 	if s, ok := r.engines[role]; ok {
 		return s.InputNames()

@@ -39,3 +39,23 @@ func (s SAMBitmaps) SegmentBitmaps(c Call, boxes [][4]float64) ([]models.Mask, [
 	}
 	return masks, bitmaps, nil
 }
+
+// MaskEacher is a MaskInferer that can hand each bitmap to a callback as soon as it is final
+// instead of returning all of them (MobileSAM's InferMasksEach): fn may run concurrently and
+// must not keep b.Data; its results come back in InferMasks' order.
+type MaskEacher interface {
+	InferMasksEach(img image.Image, prompt models.Prompt, r models.Runner, fn func(b mobilesam.MaskBitmap) any) ([]any, error)
+}
+
+// SegmentEach implements EachBitmapSegmenter when the model is a MaskEacher (ok=false when it
+// is not): each mask is encoded and handed to fn with its bitmap as soon as it is final.
+func (s SAMBitmaps) SegmentEach(c Call, boxes [][4]float64, fn func(m models.Mask, b mask.Bitmap) any) (out []any, ok bool, err error) {
+	me, ok := s.Model.(MaskEacher)
+	if !ok {
+		return nil, false, nil
+	}
+	out, err = me.InferMasksEach(c.Img, models.Prompt{Boxes: boxes}, c.Runner, func(b mobilesam.MaskBitmap) any {
+		return fn(b.ToMask(), mask.Bitmap{Data: b.Data, W: b.W, H: b.H})
+	})
+	return out, true, err
+}

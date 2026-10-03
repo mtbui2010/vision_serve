@@ -28,12 +28,28 @@ package mobilesam
 // Parallelism: a fixed number of workers (not N² goroutines) feed the decoder session
 // pool, which bounds the number of decoder outputs alive at once. All calls share ONE
 // read-only zero mask_input buffer.
+//
+// Final-pass memory: each full-resolution call returns one float logit map per mask channel
+// (30 MB at 3200×2400) that is thresholded to a bitmap and dropped at once. When the Runner can
+// write outputs into caller buffers (models.IntoRunner), each final-pass worker owns ONE such
+// buffer, mapped outside the Go heap and unmapped when the pass ends (scratch_unix.go), and the
+// decoder writes into it on every call: no ORT arena block, no Go copy and no Go garbage per
+// call. When the caller does not keep the bitmaps (Infer's RLE, InferMasksEach), each worker
+// also thresholds into one reused bitmap. The pass runs one worker per decoder session (not
+// autoWorkers): a worker past the pool size would only hold its buffers while it waits.
+//
+// Measured on CPU, 3200×2400, fresh server, 5 identical requests (VmHWM): mobile-sam automask
+// 1.63 → 0.80 GB, grasp 2.06 → 0.87 GB, background method=automask 1.98 → 0.98 GB (0.36 GB
+// of it the loaded models, 0.54 GB with MiDaS); outputs byte-identical, latency unchanged
+// within noise. Part of that is the engine's memory-pattern
+// change (ort.go); the rest is the buffers above and the streaming consumers.
 
 import (
 	"fmt"
 	"image"
 	"math"
 	"sort"
+	"strings"
 	"sync"
 
 	"visionserve/internal/engine"
@@ -48,7 +64,17 @@ const (
 	autoMaxAreaFrac  = 0.95 // discard masks covering > 95% of image (background)
 	autoWorkLongSide = 256  // filter-pass frame: SAM low-res logits are 256 px over the 1024 input
 	autoWorkers      = 8    // concurrent decoder callers (decoder pool is 4; extra overlap Go-side work)
+	autoFinalWorkers = 4    // final-pass callers: one per decoder session, each owning one full-res buffer
 )
+
+// allocScratch allocates the final pass's per-worker logit buffers (allocLogits); tests swap it
+// to check that every buffer is freed, on every path, only after no decoder run can write it.
+var allocScratch = allocLogits
+
+// decodeFunc runs the decoder with its inputs bound by name. into, when non-nil, names outputs
+// to write into caller-owned buffers (models.IntoRunner); a decodeFunc that cannot do that
+// ignores it and returns fresh tensors with the same values.
+type decodeFunc func(inputs, into map[string]engine.Tensor) ([]engine.Tensor, error)
 
 // zeroMaskInput is the shared, READ-ONLY all-zero mask_input [1,1,256,256] passed with
 // has_mask_input=0 on every decoder call. ORT never writes to input buffers, so one buffer
@@ -62,6 +88,8 @@ type aCandidate struct {
 	bm   mask.Bitmap // binary mask in the frame it was decoded at
 	ext  mask.Extent // its inclusive pixel extent + area
 	conf float64
+	// nch: mask channels of the decoder output it came from (1 single, 4 multi export).
+	nch int
 	// px, py: the grid point prompt in the decoder's resized-1024 space (re-used by the
 	// final pass), idx: grid index (deterministic tie-break).
 	px, py float32
@@ -117,11 +145,11 @@ func autoSegment(
 	img image.Image,
 	embedding engine.Tensor,
 	scale float64,
-	decRun func(map[string]engine.Tensor) ([]engine.Tensor, error),
+	decRun decodeFunc,
 	decOutNames []string,
 	gridSize int,
 ) ([]MaskBitmap, error) {
-	return autoSegmentAs(img, embedding, scale, decRun, decOutNames, gridSize, keepBitmap)
+	return autoSegmentAs(img, embedding, scale, decRun, decOutNames, gridSize, keepBitmap, false)
 }
 
 // keepBitmap is the identity emit: the caller wants the bitmaps themselves.
@@ -131,14 +159,19 @@ func keepBitmap(b MaskBitmap) MaskBitmap { return b }
 // final, in the same order. With emit = MaskBitmap.ToMask the full-resolution bitmap of each
 // mask is dropped right after its RLE is made, instead of all of them being held until the end
 // (a 3200×2400 image keeps ~60 masks of 7.7 MB each).
+//
+// borrow says emit does not keep the bitmap's Data after it returns (ToMask, a streaming
+// consumer): the final pass then thresholds every mask of a worker into one reused buffer
+// instead of a new 7.7 MB bitmap per mask.
 func autoSegmentAs[T any](
 	img image.Image,
 	embedding engine.Tensor,
 	scale float64,
-	decRun func(map[string]engine.Tensor) ([]engine.Tensor, error),
+	decRun decodeFunc,
 	decOutNames []string,
 	gridSize int,
 	emit func(MaskBitmap) T,
+	borrow bool,
 ) ([]T, error) {
 	origW := img.Bounds().Dx()
 	origH := img.Bounds().Dy()
@@ -157,7 +190,7 @@ func autoSegmentAs[T any](
 		cx := (float64(i) + 0.5) / float64(N) * float64(origW)
 		cy := (float64(j) + 0.5) / float64(N) * float64(origH)
 		px, py := float32(cx*scale), float32(cy*scale)
-		c, ok, err := decodePoint(px, py, workW, workH, embedding, decRun, decOutNames)
+		c, ok, err := decodePoint(px, py, workW, workH, embedding, decRun, decOutNames, nil, nil)
 		if err != nil {
 			results[idx] = amgResult{err: fmt.Errorf("mobilesam: amg decoder at (%d,%d): %w", i, j, err)}
 			return
@@ -196,8 +229,31 @@ func autoSegmentAs[T any](
 
 	fullMin, fullMax := areaBounds(origW, origH)
 	finals := make([]amgOut[T], len(kept))
-	parallelFor(len(kept), autoWorkers, func(k int) {
-		c, ok, err := decodePoint(kept[k].px, kept[k].py, origW, origH, embedding, decRun, decOutNames)
+	// The decoder writes the masks into a worker's buffer only when they are found by name and
+	// the filter pass showed it renders them at the frame orig_im_size asks for, so the
+	// buffer's shape is exactly the one the run produces.
+	maskName := maskOutputName(decOutNames)
+	nch := kept[0].nch
+	intoOK := maskName != "" && nch > 0 && kept[0].bm.W == workW && kept[0].bm.H == workH
+	logits := make([][]float32, autoFinalWorkers) // per worker: the decoder's mask output (off-heap)
+	frees := make([]func(), autoFinalWorkers)     // unmaps logits[w]
+	bits := make([][]bool, autoFinalWorkers)      // per worker: the thresholded mask (borrow only)
+	parallelForW(len(kept), autoFinalWorkers, func(w, k int) {
+		var into map[string]engine.Tensor
+		if intoOK {
+			if logits[w] == nil {
+				logits[w], frees[w] = allocScratch(nch * origH * origW)
+			}
+			into = map[string]engine.Tensor{maskName: engine.F32(logits[w], 1, int64(nch), int64(origH), int64(origW))}
+		}
+		var dst []bool
+		if borrow {
+			if bits[w] == nil {
+				bits[w] = make([]bool, origH*origW)
+			}
+			dst = bits[w]
+		}
+		c, ok, err := decodePoint(kept[k].px, kept[k].py, origW, origH, embedding, decRun, decOutNames, into, dst)
 		if err != nil {
 			finals[k] = amgOut[T]{err: fmt.Errorf("mobilesam: amg full-res decoder: %w", err)}
 			return
@@ -209,6 +265,12 @@ func autoSegmentAs[T any](
 		c.conf = kept[k].conf // identical prompt → identical iou_predictions; keep the ranking value
 		finals[k] = amgOut[T]{v: emit(c.bitmap()), valid: true}
 	})
+	// Every worker has returned, and with it every decoder run writing into its buffer.
+	for _, free := range frees {
+		if free != nil {
+			free()
+		}
+	}
 	out := make([]T, 0, len(kept))
 	for _, r := range finals {
 		if r.err != nil {
@@ -223,6 +285,12 @@ func autoSegmentAs[T any](
 
 // parallelFor runs fn(0..n-1) on at most `workers` goroutines.
 func parallelFor(n, workers int, fn func(i int)) {
+	parallelForW(n, workers, func(_, i int) { fn(i) })
+}
+
+// parallelForW is parallelFor that also tells fn which worker (0..workers-1) runs item i, so a
+// worker can reuse state of its own across its items.
+func parallelForW(n, workers int, fn func(w, i int)) {
 	if workers > n {
 		workers = n
 	}
@@ -230,12 +298,12 @@ func parallelFor(n, workers int, fn func(i int)) {
 	next := make(chan int)
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
-		go func() {
+		go func(w int) {
 			defer wg.Done()
 			for i := range next {
-				fn(i)
+				fn(w, i)
 			}
-		}()
+		}(w)
 	}
 	for i := 0; i < n; i++ {
 		next <- i
@@ -246,13 +314,17 @@ func parallelFor(n, workers int, fn func(i int)) {
 
 // decodePoint runs one single-point decoder call with orig_im_size = (frameH, frameW)
 // and thresholds the best mask channel (logit > 0) in that frame. ok=false when the
-// decoder returned no mask tensor or the mask is empty.
+// decoder returned no mask tensor or the mask is empty. into is passed to decRun (caller
+// buffers for the mask output, or nil); the candidate never aliases it. dst, when non-nil
+// and large enough, receives the thresholded bitmap instead of a new allocation.
 func decodePoint(
 	px, py float32,
 	frameW, frameH int,
 	embedding engine.Tensor,
-	decRun func(map[string]engine.Tensor) ([]engine.Tensor, error),
+	decRun decodeFunc,
 	decOutNames []string,
+	into map[string]engine.Tensor,
+	dst []bool,
 ) (aCandidate, bool, error) {
 	dec := map[string]engine.Tensor{
 		"image_embeddings": embedding,
@@ -262,7 +334,7 @@ func decodePoint(
 		"has_mask_input":   engine.F32([]float32{0}, 1),
 		"orig_im_size":     engine.F32([]float32{float32(frameH), float32(frameW)}, 2),
 	}
-	outs, err := decRun(dec)
+	outs, err := decRun(dec, into)
 	if err != nil {
 		return aCandidate{}, false, err
 	}
@@ -270,17 +342,45 @@ func decodePoint(
 	if maskT == nil || len(maskT.Shape) != 4 {
 		return aCandidate{}, false, nil
 	}
-	c := thresholdBest(maskT, iouT)
+	c := thresholdBestInto(maskT, iouT, dst)
 	c.px, c.py = px, py
+	c.nch = int(maskT.Dim(1))
 	return c, c.ext.Area > 0, nil
+}
+
+// maskOutputName is the decoder output pickMaskAndIoU takes as the masks BY NAME, or "" when
+// none is named like one (pickMaskAndIoU then picks by shape, and the final pass does not
+// pass a buffer for it).
+func maskOutputName(names []string) string {
+	name := ""
+	for _, n := range names {
+		l := strings.ToLower(n)
+		switch {
+		case strings.Contains(l, "iou"):
+		case l == "masks" || (strings.Contains(l, "mask") && !strings.Contains(l, "low_res")):
+			name = n // the last match wins, as in pickMaskAndIoU
+		}
+	}
+	return name
 }
 
 // thresholdBest binarizes the best-IoU channel of a [1,M,H,W] mask-logit tensor.
 func thresholdBest(maskT, iouT *engine.Tensor) aCandidate {
+	return thresholdBestInto(maskT, iouT, nil)
+}
+
+// thresholdBestInto is thresholdBest writing the bitmap into dst when it holds H*W pixels.
+func thresholdBestInto(maskT, iouT *engine.Tensor, dst []bool) aCandidate {
 	bestCh, conf := bestChannel(maskT, iouT)
 	mh := int(maskT.Dim(2))
 	mw := int(maskT.Dim(3))
-	bm, ext := mask.ThresholdExtent(maskT.Data, bestCh*mh*mw, mh, mw, 0)
+	var bm mask.Bitmap
+	var ext mask.Extent
+	if len(dst) >= mh*mw {
+		bm, ext = mask.ThresholdExtentInto(dst, maskT.Data, bestCh*mh*mw, mh, mw, 0)
+	} else {
+		bm, ext = mask.ThresholdExtent(maskT.Data, bestCh*mh*mw, mh, mw, 0)
+	}
 	return aCandidate{bm: bm, ext: ext, conf: conf}
 }
 

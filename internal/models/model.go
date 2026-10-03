@@ -233,6 +233,18 @@ type Runner interface {
 	OutputNames(role string) []string
 }
 
+// IntoRunner is an optional Runner extension: RunInto is Run, except that ONNX Runtime writes
+// each output named in into straight into that caller-owned float32 buffer (its Shape must be
+// the exact shape the run produces) and the returned tensor aliases it. A model that gets the
+// same large output on many calls (MobileSAM automask's full-resolution masks) reuses one
+// buffer instead of an ORT allocation plus a Go copy per call. Callers fall back to Run when
+// the Runner does not implement it; the values are the same either way. It waits for its session
+// under the same request ctx as Run, and returns only once nothing writes into the buffers any
+// more (the run finished, failed, or never started), so the caller may then free them.
+type IntoRunner interface {
+	RunInto(role string, inputs, into map[string]engine.Tensor) ([]engine.Tensor, error)
+}
+
 // ExplainPreprocessor is an optional interface for PipelineModels that support
 // heatmap explain on one of their roles. The lifecycle creates an explain session
 // for the role named by ExplainConfig.Role; the model provides preprocess for

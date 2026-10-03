@@ -81,6 +81,27 @@ func ThresholdExtent(data []float32, off, h, w int, thr float64) (Bitmap, Extent
 	return threshold(data, off, h, w, thr, false)
 }
 
+// ThresholdExtentInto is ThresholdExtent writing the bitmap into dst (every pixel, so dst's
+// previous contents do not matter) instead of a new allocation, for a caller that thresholds
+// many same-size planes and drops each bitmap before the next. dst must hold h*w pixels; the
+// returned Bitmap's Data is dst[:h*w].
+func ThresholdExtentInto(dst []bool, data []float32, off, h, w int, thr float64) (Bitmap, Extent) {
+	b := Bitmap{Data: dst[:h*w], W: w, H: h}
+	e := emptyExtent(h, w)
+	for y := 0; y < h; y++ {
+		row := data[off+y*w : off+(y+1)*w]
+		out := b.Data[y*w : (y+1)*w]
+		for x, v := range row {
+			set := float64(v) > thr
+			out[x] = set
+			if set {
+				e.add(x, y)
+			}
+		}
+	}
+	return b, e
+}
+
 // Threshold is ThresholdExtent returning the tight bbox [x, y, w, h] (SAM: logit > 0;
 // probability maps: p > thr).
 func Threshold(data []float32, off, h, w int, thr float64) (Bitmap, [4]float64) {
