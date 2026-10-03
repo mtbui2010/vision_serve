@@ -100,6 +100,17 @@ func TestPullRemovesStaleStaging(t *testing.T) {
 		t.Error("stale staging survived a catalog pull")
 	}
 
+	// A mistyped name is an error before anything in the registry is touched.
+	other := filepath.Join(models, ".tmp-y-2")
+	mustWrite(t, filepath.Join(other, "model.onnx"), "x")
+	age(t, other, 2*time.Hour)
+	if err := Pull("no-such-model", PullOptions{ModelsDir: models, Out: &bytes.Buffer{}}); err == nil {
+		t.Fatal("pull of an unknown model succeeded")
+	}
+	if _, err := os.Lstat(other); err != nil {
+		t.Errorf("a pull of an unknown model cleaned the registry: %v", err)
+	}
+
 	cleanStaleStaging(filepath.Join(t.TempDir(), "does-not-exist"), &bytes.Buffer{}) // must not panic or create it
 }
 

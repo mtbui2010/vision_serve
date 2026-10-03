@@ -31,6 +31,10 @@ func Pull(name string, opts PullOptions) error {
 	if out == nil {
 		out = os.Stderr
 	}
+	// A mistyped name installs nothing, so it touches nothing in the registry either.
+	if _, ok := Lookup(name); !ok {
+		return UnknownModelError(name)
+	}
 	// Any install is a good moment to drop what interrupted `pull <folder>` runs left behind.
 	cleanStaleStaging(opts.ModelsDir, out)
 	return pull(name, opts, map[string]bool{})
