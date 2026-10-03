@@ -44,11 +44,11 @@ func captureStderr(fn func() error) (captured string, err error) {
 	original := os.NewFile(uintptr(saved), "stderr")
 
 	// Drain continuously (a full pipe would block ORT), routing line by line.
-	var ort strings.Builder
+	var kept strings.Builder // ORT's lines
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		route(r, original, &ort)
+		route(r, original, &kept)
 	}()
 
 	// Restore in a defer: fn may panic (the panic report must reach the real stderr) and the
@@ -59,19 +59,19 @@ func captureStderr(fn func() error) (captured string, err error) {
 		<-done
 		r.Close()
 		original.Close()
-		captured = ort.String()
+		captured = kept.String()
 	}()
 	return "", fn()
 }
 
-// route copies src line by line: ORT log lines into ort, everything else to passthrough.
-func route(src io.Reader, passthrough io.Writer, ort *strings.Builder) {
+// route copies src line by line: ORT log lines into kept, everything else to passthrough.
+func route(src io.Reader, passthrough io.Writer, kept *strings.Builder) {
 	br := bufio.NewReader(src)
 	for {
 		line, err := br.ReadString('\n')
 		if line != "" {
 			if isORTLogLine(line) {
-				ort.WriteString(line)
+				kept.WriteString(line)
 			} else {
 				_, _ = io.WriteString(passthrough, line)
 			}
