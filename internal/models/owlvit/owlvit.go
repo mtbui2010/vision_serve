@@ -23,11 +23,12 @@ import (
 	"fmt"
 	"image"
 	"math"
-	"sort"
 	"strings"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/geom"
+	"visionserve/internal/vision/nms"
 	"visionserve/pkg/api"
 )
 
@@ -162,7 +163,7 @@ func (m *owlVIT) Infer(img image.Image, prompt models.Prompt, r models.Runner) (
 		}
 
 		for p := 0; p < P && p < numPatches; p++ {
-			s := sigmoid(logits.Data[p])
+			s := geom.Sigmoid(float64(logits.Data[p]))
 			if s > patchScores[p] {
 				patchScores[p] = s
 			}
@@ -272,11 +273,9 @@ func (m *owlVIT) postprocess(
 			Conf:  patchScores[p],
 		})
 	}
-	sort.SliceStable(dets, func(i, j int) bool { return dets[i].Conf > dets[j].Conf })
-	dets = nmsDetections(dets, 0.5)
-	if len(dets) > maxDet {
-		dets = dets[:maxDet]
-	}
+	// Greedy NMS on max(IoU, containment) — a large background box that encloses a tight
+	// object box is suppressed even when their plain IoU is low — then cut to maxDet.
+	dets = nms.Detections(dets, nms.Options{IoU: 0.5, ClassAgnostic: true, Containment: true, TopK: maxDet})
 	return models.Result{Detections: dets}, nil
 }
 
@@ -310,52 +309,6 @@ func pickLogitsAndBoxes(names []string, outs []engine.Tensor) (logits, boxes *en
 		}
 	}
 	return logits, boxes
-}
-
-// nmsDetections applies greedy NMS on boxes sorted by confidence (desc).
-// Uses max(IoU, containment) as the suppression score so that a large background
-// box that encloses a tight object box is suppressed even when standard IoU is low.
-func nmsDetections(dets []api.Detection, iouThresh float64) []api.Detection {
-	keep := make([]api.Detection, 0, len(dets))
-	suppressed := make([]bool, len(dets))
-	for i := range dets {
-		if suppressed[i] {
-			continue
-		}
-		keep = append(keep, dets[i])
-		ax, ay, aw, ah := dets[i].BBox[0], dets[i].BBox[1], dets[i].BBox[2], dets[i].BBox[3]
-		aArea := aw * ah
-		for j := i + 1; j < len(dets); j++ {
-			if suppressed[j] {
-				continue
-			}
-			bx, by, bw, bh := dets[j].BBox[0], dets[j].BBox[1], dets[j].BBox[2], dets[j].BBox[3]
-			ix := math.Max(ax, bx)
-			iy := math.Max(ay, by)
-			iw := math.Min(ax+aw, bx+bw) - ix
-			ih := math.Min(ay+ah, by+bh) - iy
-			if iw <= 0 || ih <= 0 {
-				continue
-			}
-			inter := iw * ih
-			bArea := bw * bh
-			unionIoU := inter / (aArea + bArea - inter)
-			// containment: fraction of the smaller box covered by intersection
-			minArea := math.Min(aArea, bArea)
-			containIoU := 0.0
-			if minArea > 0 {
-				containIoU = inter / minArea
-			}
-			if math.Max(unionIoU, containIoU) > iouThresh {
-				suppressed[j] = true
-			}
-		}
-	}
-	return keep
-}
-
-func sigmoid(x float32) float64 {
-	return 1.0 / (1.0 + math.Exp(-float64(x)))
 }
 
 func shapesOf(ts []engine.Tensor) [][]int64 {

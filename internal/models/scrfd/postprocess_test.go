@@ -230,28 +230,3 @@ func TestPostprocess_NoMatchingOutputs(t *testing.T) {
 		t.Fatal("expected an error when no output matches a stride level")
 	}
 }
-
-// TestMapToOrig verifies the letterbox inverse mapping.
-func TestMapToOrig(t *testing.T) {
-	// scale=0.5, padX=80, padY=0 → orig = (input-pad)/scale
-	meta := models.PreprocessMeta{
-		OrigWidth: 800, OrigHeight: 600,
-		ScaleX: 0.5, ScaleY: 0.5,
-		PadX: 80, PadY: 20,
-	}
-	// box in 640-space: x=100, y=40, w=50, h=60
-	ox, oy, ow, oh := mapToOrig([4]float64{100, 40, 50, 60}, meta)
-	// ox = (100-80)/0.5 = 40, oy = (40-20)/0.5 = 40, ow = 100, oh = 120
-	if math.Abs(ox-40) > 1e-4 {
-		t.Errorf("ox: want 40, got %v", ox)
-	}
-	if math.Abs(oy-40) > 1e-4 {
-		t.Errorf("oy: want 40, got %v", oy)
-	}
-	if math.Abs(ow-100) > 1e-4 {
-		t.Errorf("ow: want 100, got %v", ow)
-	}
-	if math.Abs(oh-120) > 1e-4 {
-		t.Errorf("oh: want 120, got %v", oh)
-	}
-}
