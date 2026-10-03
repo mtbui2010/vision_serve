@@ -75,6 +75,7 @@ func ocrGen(role string, in map[string]engine.Tensor) ([]engine.Tensor, error) {
 }
 
 func TestGoldenPaddleOCR(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "paddleocr")
 	dir := filepath.Join(repoRoot, "models", "paddle-ocr")
 	for _, c := range []struct {
@@ -135,6 +136,7 @@ func owlGen(role string, in map[string]engine.Tensor) ([]engine.Tensor, error) {
 }
 
 func TestGoldenOWLv2(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "owlvit")
 	cm := []float32{0.48145466, 0.4578275, 0.40821073}
 	cs := []float32{0.26862954, 0.26130258, 0.27577711}

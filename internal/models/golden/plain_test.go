@@ -53,6 +53,7 @@ func detrOuts(seed int64, q, c int, xyxy bool) (logits, boxes engine.Tensor) {
 }
 
 func TestGoldenRFDETR(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "rfdetr")
 	mean := []float32{0.485, 0.456, 0.406}
 	std := []float32{0.229, 0.224, 0.225}
@@ -95,6 +96,7 @@ func TestGoldenRFDETR(t *testing.T) {
 }
 
 func TestGoldenRTDETR(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "rtdetr")
 	mean := []float32{0.485, 0.456, 0.406}
 	std := []float32{0.229, 0.224, 0.225}
@@ -189,6 +191,7 @@ func scrfdOuts(seed int64, w, h int, batched bool) []engine.Tensor {
 }
 
 func TestGoldenSCRFD(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "scrfd")
 	base := models.Config{Name: "scrfd", Width: 640, Height: 640, Letterbox: true,
 		Mean: []float32{127.5, 127.5, 127.5}, Std: []float32{128, 128, 128}, ConfThresh: 0.5, MaxDet: 1000}
@@ -241,6 +244,7 @@ func TestGoldenSCRFD(t *testing.T) {
 // ---------------------------------------------------------------------------------------
 
 func TestGoldenClassification(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "classification")
 	mean := []float32{0.485, 0.456, 0.406}
 	std := []float32{0.229, 0.224, 0.225}
@@ -269,6 +273,7 @@ func TestGoldenClassification(t *testing.T) {
 }
 
 func TestGoldenDepth(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "depth")
 	mean := []float32{0.485, 0.456, 0.406}
 	std := []float32{0.229, 0.224, 0.225}
@@ -303,6 +308,7 @@ func TestGoldenDepth(t *testing.T) {
 }
 
 func TestGoldenCLIPImage(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "clip")
 	cm := []float32{0.48145466, 0.4578275, 0.40821073}
 	cs := []float32{0.26862954, 0.26130258, 0.27577711}

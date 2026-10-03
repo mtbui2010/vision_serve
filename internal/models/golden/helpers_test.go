@@ -34,6 +34,7 @@ func randMask(r *rand.Rand, w, h int) []bool {
 // TestGoldenRLEAndMorph pins the public RLE codec (pkg/api) and the mask morphology that
 // re-encodes RLE + recomputes the tight bbox (internal/morph).
 func TestGoldenRLEAndMorph(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "rle_morph")
 	r := rand.New(rand.NewSource(41))
 	for _, sz := range [][2]int{{1, 1}, {7, 5}, {64, 48}, {333, 217}} {
@@ -71,6 +72,7 @@ func itoa(i int) string {
 
 // TestGoldenExplain pins the explain heatmaps (min-max normalise + nearest upsample).
 func TestGoldenExplain(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "explain")
 	r := rand.New(rand.NewSource(51))
 

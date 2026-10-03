@@ -109,6 +109,7 @@ type maskInferer interface {
 }
 
 func TestGoldenMobileSAM(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "mobilesam")
 	cfg := models.Config{Name: "mobile-sam", Width: 1024, Height: 1024,
 		Files: map[string]string{"encoder": "enc.onnx", "decoder": "dec.onnx"}}
@@ -216,6 +217,7 @@ func efficientSAMGen(div int) genFunc {
 }
 
 func TestGoldenEfficientSAM(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "efficientsam")
 	cfg := models.Config{Name: "efficient-sam", Width: 1024, Height: 1024,
 		Files: map[string]string{"encoder": "enc.onnx", "decoder": "dec.onnx"}}
@@ -255,6 +257,7 @@ func nanoSAMGen(role string, in map[string]engine.Tensor) ([]engine.Tensor, erro
 }
 
 func TestGoldenNanoSAM(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "nanosam")
 	cfg := models.Config{Name: "nano-sam", Width: 1024, Height: 1024,
 		Files: map[string]string{"encoder": "enc.onnx", "decoder": "dec.onnx"}}
@@ -296,6 +299,7 @@ func sam2Gen(role string, in map[string]engine.Tensor) ([]engine.Tensor, error) 
 }
 
 func TestGoldenSAM2(t *testing.T) {
+	t.Parallel()
 	g := newGolden(t, "sam2")
 	cfg := models.Config{Name: "sam2", Width: 1024, Height: 1024,
 		Files: map[string]string{"encoder": "enc.onnx", "decoder": "dec.onnx"}}
