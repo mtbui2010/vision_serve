@@ -42,6 +42,10 @@ type Manager struct {
 	// per-manifest value. Set once at startup via SetIdleUnloadOverride.
 	idleOverrideSec int
 
+	// openRunnable creates the ONNX session(s) for one weights file; nil means newRunnable. Tests
+	// replace it to load models without ONNX Runtime.
+	openRunnable func(path string, inputNames, outputNames []string, n int, providers []engine.Provider) (engine.Runnable, error)
+
 	stop chan struct{}
 	once sync.Once
 }

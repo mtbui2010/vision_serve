@@ -25,31 +25,29 @@ type ExplainResult struct {
 	Height  int
 }
 
-// loadExplainSession lazily creates the explain session (all outputs including explain tensors).
-// Thread-safe — multiple concurrent /api/explain calls race to create it; only one wins.
-func (m *Manager) loadExplainSession(name string) error {
-	s, release, err := m.acquire(name)
-	if err != nil {
-		return err
-	}
-	defer release()
-	if s.ExplainEngine() != nil {
-		return nil // already created
+// explainEngineOrLoad returns the session's explain session (the same ONNX file loaded with ALL outputs,
+// explain tensors included), creating it on first use. The caller must hold a lease on s, which
+// keeps s from being closed while the explain session is being attached to it.
+//
+// It works on the leased Session itself, never by model name: looking the model up again could
+// hand back a different Session (unloaded and reloaded in between) that has no explain session,
+// and the Run on it would dereference nil.
+//
+// Thread-safe — concurrent /api/explain calls race to create it; only one wins.
+func (s *Session) explainEngineOrLoad() (engine.Runnable, error) {
+	if ex := s.ExplainEngine(); ex != nil {
+		return ex, nil // already created
 	}
 
-	entry, ok := m.reg.Get(name)
-	if !ok {
-		return fmt.Errorf("lifecycle: model %q not in registry", name)
-	}
-	man := entry.Manifest
-
-	if man.Explain == nil {
-		return fmt.Errorf("model %q does not support explain (no explain block in manifest)", name)
+	// The manifest the live sessions were built from (see Session.man), not the registry.
+	man := s.man
+	if man == nil || man.Explain == nil {
+		return nil, fmt.Errorf("model %q does not support explain (no explain block in manifest)", s.name)
 	}
 
 	providers, err := man.Providers()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var explainEng engine.Runnable
@@ -57,29 +55,29 @@ func (m *Manager) loadExplainSession(name string) error {
 	if s.pipeline != nil {
 		// PipelineModel: create explain session for the role that owns the explain outputs.
 		if man.Explain.Role == "" {
-			return fmt.Errorf("model %q is a pipeline model — explain block must set 'role' (e.g. role: rfdetr)", name)
+			return nil, fmt.Errorf("model %q is a pipeline model — explain block must set 'role' (e.g. role: rfdetr)", s.name)
 		}
 		filesAbs := man.FilesAbs()
 		rolePath, ok := filesAbs[man.Explain.Role]
 		if !ok {
-			return fmt.Errorf("lifecycle: explain role %q not in files map for model %q", man.Explain.Role, name)
+			return nil, fmt.Errorf("lifecycle: explain role %q not in files map for model %q", man.Explain.Role, s.name)
 		}
 		explainEng, err = engine.NewSession(rolePath, nil, nil, providers)
 		if err != nil {
-			return fmt.Errorf("lifecycle: failed to create explain session for role %q in %q: %w", man.Explain.Role, name, err)
+			return nil, fmt.Errorf("lifecycle: failed to create explain session for role %q in %q: %w", man.Explain.Role, s.name, err)
 		}
 	} else {
 		// Plain Model: create session with ALL outputs (detect + explain tensors).
 		explainEng, err = engine.NewSession(man.ModelFilePath(), nil, nil, providers)
 		if err != nil {
-			return fmt.Errorf("lifecycle: failed to create explain session for %q: %w", name, err)
+			return nil, fmt.Errorf("lifecycle: failed to create explain session for %q: %w", s.name, err)
 		}
 	}
 
 	if !s.SetExplainEngine(explainEng) {
 		_ = explainEng.Close() // another request won the race, discard ours
 	}
-	return nil
+	return s.ExplainEngine(), nil
 }
 
 // Explain runs heatmap inference for the named model.
@@ -89,22 +87,21 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 	if err := m.Load(name); err != nil {
 		return ExplainResult{}, err
 	}
-	// Ensure explain session exists (lazy).
-	if err := m.loadExplainSession(name); err != nil {
-		return ExplainResult{}, err
-	}
-
 	s, release, err := m.acquire(name)
 	if err != nil {
 		return ExplainResult{}, err
 	}
 	defer release()
 
-	entry, ok := m.reg.Get(name)
-	if !ok {
-		return ExplainResult{}, fmt.Errorf("lifecycle: model %q not in registry", name)
+	// Ensure explain session exists (lazy), on the session this request holds.
+	explainEng, err := s.explainEngineOrLoad()
+	if err != nil {
+		return ExplainResult{}, err
 	}
-	man := entry.Manifest
+
+	// The load-time snapshot, not the registry: the explain session, the outputs it exposes and
+	// the detect session's output filter were all derived from it.
+	man := s.man
 
 	// Build the Explainer from the manifest config.
 	exp, err := explain.New(man.Explain)
@@ -163,7 +160,6 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 	}
 
 	// Run the explain session (all outputs: detect + explain tensors).
-	explainEng := s.ExplainEngine()
 	outputs, err := explainEng.Run([]engine.Tensor{inputTensor})
 	if err != nil {
 		return ExplainResult{}, fmt.Errorf("lifecycle: explain session inference failed: %w", err)

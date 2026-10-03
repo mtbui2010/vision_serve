@@ -61,6 +61,11 @@ func (m *Manager) load(name string) error {
 	now := time.Now()
 	task := api.Task(man.Task)
 
+	open := m.openRunnable
+	if open == nil {
+		open = newRunnable
+	}
+
 	// Build the appropriate session kind (heavy ONNX sessions all created here so
 	// lifecycle owns them — CLAUDE.md: sessions must go through the Manager).
 	var sess *Session
@@ -92,7 +97,7 @@ func (m *Manager) load(name string) error {
 				closeEngines(engines)
 				return fmt.Errorf("lifecycle: role %q of model %q not found in manifest 'files'", role, name)
 			}
-			run, err := newRunnable(path, nil, nil, poolSizes[role], providers)
+			run, err := open(path, nil, nil, poolSizes[role], providers)
 			if err != nil {
 				closeEngines(engines)
 				return err
@@ -125,7 +130,7 @@ func (m *Manager) load(name string) error {
 
 		// VS_POOL_OVERRIDE>1 wraps N identical sessions in a pool so a single-session
 		// (classification/detection) model can serve inferences concurrently (eval sweep).
-		run, err := newRunnable(man.ModelFilePath(), inName, detectOutNames, poolOverride(), providers)
+		run, err := open(man.ModelFilePath(), inName, detectOutNames, poolOverride(), providers)
 		if err != nil {
 			return err
 		}
@@ -133,6 +138,7 @@ func (m *Manager) load(name string) error {
 	default:
 		return fmt.Errorf("lifecycle: model %q implements neither Model nor PipelineModel", name)
 	}
+	sess.man = man // snapshot: explain must describe what was loaded, not today's manifest on disk
 
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -8,6 +8,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/registry"
 	"visionserve/pkg/api"
 )
 
@@ -24,6 +25,11 @@ type Session struct {
 	task        api.Task
 	device      string // "gpu:0" or "cpu" — set from the active EP on load
 	idleTimeout time.Duration
+
+	// man is the manifest this session was built from, captured at load time. Everything that
+	// runs against the loaded sessions (explain) reads it, never the registry: a rescan may have
+	// replaced the entry with an edited manifest that no longer matches what is in memory.
+	man *registry.Manifest
 
 	model  models.Model    // simple mode
 	engine engine.Runnable // simple mode (a single session, or a pool when VS_POOL_OVERRIDE>1)
