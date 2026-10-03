@@ -8,6 +8,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/geom"
 )
 
 // Real I/O shapes of models/owlvit-base/owlv2_base_patch16.onnx (inspected with onnxruntime):
@@ -248,7 +249,7 @@ func TestInfer_RealShapesTwoTemplates(t *testing.T) {
 			}
 		}
 	}
-	if math.Abs(res.Detections[0].Conf-sigmoid(3)) > 1e-9 {
+	if math.Abs(res.Detections[0].Conf-geom.Sigmoid(3)) > 1e-9 {
 		t.Fatalf("conf %v, want sigmoid(3)", res.Detections[0].Conf)
 	}
 }

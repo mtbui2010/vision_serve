@@ -3,7 +3,6 @@ package mobilesam
 import (
 	"fmt"
 	"image"
-	"math/rand"
 	"sync"
 	"testing"
 
@@ -171,52 +170,6 @@ func TestAutoSegmentSmallImageSinglePass(t *testing.T) {
 	}
 	if len(out) == 0 || out[0].W != W || out[0].H != H || out[0].BBox != [4]float64{20, 20, 60, 40} {
 		t.Fatalf("unexpected output %+v", out)
-	}
-}
-
-// candIoU (bbox-restricted) must equal brute-force pixel IoU, and iouMayExceed must never
-// reject a pair whose true IoU exceeds the threshold.
-func TestCandIoUMatchesBruteForce(t *testing.T) {
-	rng := rand.New(rand.NewSource(1))
-	const w, h = 40, 30
-	mk := func() aCandidate {
-		x0, y0 := rng.Intn(w), rng.Intn(h)
-		x1, y1 := x0+rng.Intn(w-x0), y0+rng.Intn(h-y0)
-		bin := make([]bool, w*h)
-		for y := y0; y <= y1; y++ {
-			for x := x0; x <= x1; x++ {
-				bin[y*w+x] = rng.Float64() < 0.8
-			}
-		}
-		bin[y0*w+x0] = true
-		ten := engine.F32(make([]float32, w*h), 1, 1, h, w)
-		for i, v := range bin {
-			if v {
-				ten.Data[i] = 1
-			}
-		}
-		return thresholdBest(&ten, nil)
-	}
-	for it := 0; it < 2000; it++ {
-		a, b := mk(), mk()
-		inter, union := 0, 0
-		for i := range a.bin {
-			if a.bin[i] && b.bin[i] {
-				inter++
-			}
-			if a.bin[i] || b.bin[i] {
-				union++
-			}
-		}
-		want := float64(inter) / float64(union)
-		if got := candIoU(&a, &b); got != want {
-			t.Fatalf("candIoU=%v brute=%v", got, want)
-		}
-		for _, th := range []float64{0, 0.3, 0.7} {
-			if want > th && !iouMayExceed(&a, &b, th) {
-				t.Fatalf("iouMayExceed rejected IoU %v > %v", want, th)
-			}
-		}
 	}
 }
 

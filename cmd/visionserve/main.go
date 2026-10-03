@@ -15,6 +15,7 @@ import (
 	_ "visionserve/internal/models/classification"
 	_ "visionserve/internal/models/clip"
 	_ "visionserve/internal/models/depth"
+	_ "visionserve/internal/models/detr" // rf-detr + rt-detr
 	_ "visionserve/internal/models/efficientsam"
 	_ "visionserve/internal/models/grasp"
 	_ "visionserve/internal/models/groundedsam"
@@ -24,8 +25,6 @@ import (
 	_ "visionserve/internal/models/nanosam"
 	_ "visionserve/internal/models/owlvit"
 	_ "visionserve/internal/models/paddleocr"
-	_ "visionserve/internal/models/rfdetr"
-	_ "visionserve/internal/models/rtdetr"
 	_ "visionserve/internal/models/sam2"
 	_ "visionserve/internal/models/scrfd"
 	_ "visionserve/internal/models/siglip"

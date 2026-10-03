@@ -6,6 +6,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/mask"
 )
 
 // attentionExplainer reads cross-attention weights from transformer decoder
@@ -81,6 +82,6 @@ func (e *attentionExplainer) Heatmap(
 	}
 
 	spatialMap = Normalize(spatialMap)
-	heatmap := upsampleNearest(spatialMap, sW, sH, origW, origH)
+	heatmap := mask.UpsampleNearest(spatialMap, sH, sW, origH, origW)
 	return heatmap, origW, origH, nil
 }

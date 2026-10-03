@@ -1,4 +1,4 @@
-package rtdetr
+package detr
 
 import (
 	"math"
@@ -10,8 +10,8 @@ import (
 
 // Tests DETR decoding + mapping boxes back to ORIGINAL image coords (the trickiest part).
 // RT-DETR uses COCO-80 (indices 0-79, no N/A gap) — label index maps directly to cfg.Labels.
-func TestPostprocessDecodeAndMapToOriginal(t *testing.T) {
-	m := &rtDETR{cfg: models.Config{
+func TestRTDETRPostprocessDecodeAndMapToOriginal(t *testing.T) {
+	m := &detr{v: rtVariant, cfg: models.Config{
 		Name:       "rt-detr",
 		Width:      640,
 		Height:     640,
@@ -63,8 +63,8 @@ func TestPostprocessDecodeAndMapToOriginal(t *testing.T) {
 }
 
 // Queries below the confidence threshold must be filtered out.
-func TestPostprocessConfidenceFiltering(t *testing.T) {
-	m := &rtDETR{cfg: models.Config{
+func TestRTDETRPostprocessConfidenceFiltering(t *testing.T) {
+	m := &detr{v: rtVariant, cfg: models.Config{
 		Width: 640, Height: 640,
 		BoxFormat:  "cxcywh",
 		ConfThresh: 0.9,
@@ -90,8 +90,8 @@ func TestPostprocessConfidenceFiltering(t *testing.T) {
 }
 
 // No output tensor has last dim == 4 -> must return an error, NOT guess.
-func TestPostprocessRejectsUnknownShape(t *testing.T) {
-	m := &rtDETR{cfg: models.Config{Width: 640, Height: 640}}
+func TestRTDETRPostprocessRejectsUnknownShape(t *testing.T) {
+	m := &detr{v: rtVariant, cfg: models.Config{Width: 640, Height: 640}}
 	a := engine.Tensor{Data: make([]float32, 6), Shape: []int64{1, 2, 3}}
 	b := engine.Tensor{Data: make([]float32, 6), Shape: []int64{1, 2, 3}}
 	if _, err := m.postprocess([]engine.Tensor{a, b}, models.PreprocessMeta{}); err == nil {
@@ -100,8 +100,8 @@ func TestPostprocessRejectsUnknownShape(t *testing.T) {
 }
 
 // Wrong number of output tensors -> must return an error.
-func TestPostprocessRejectsWrongOutputCount(t *testing.T) {
-	m := &rtDETR{cfg: models.Config{Width: 640, Height: 640}}
+func TestRTDETRPostprocessRejectsWrongOutputCount(t *testing.T) {
+	m := &detr{v: rtVariant, cfg: models.Config{Width: 640, Height: 640}}
 	single := engine.Tensor{Data: make([]float32, 4), Shape: []int64{1, 1, 4}}
 	if _, err := m.postprocess([]engine.Tensor{single}, models.PreprocessMeta{}); err == nil {
 		t.Fatal("want an error when only 1 output tensor is provided")
@@ -109,8 +109,8 @@ func TestPostprocessRejectsWrongOutputCount(t *testing.T) {
 }
 
 // MaxDet cap: only the top-N detections by confidence should be returned.
-func TestPostprocessMaxDetCap(t *testing.T) {
-	m := &rtDETR{cfg: models.Config{
+func TestRTDETRPostprocessMaxDetCap(t *testing.T) {
+	m := &detr{v: rtVariant, cfg: models.Config{
 		Width: 100, Height: 100,
 		BoxFormat:  "cxcywh",
 		ConfThresh: 0.0,

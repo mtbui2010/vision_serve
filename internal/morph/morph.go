@@ -5,7 +5,10 @@
 // segmentation masks via a single signed `dilate` parameter.
 package morph
 
-import "visionserve/pkg/api"
+import (
+	"visionserve/internal/vision/mask"
+	"visionserve/pkg/api"
+)
 
 // Dilate grows (radius>0) or erodes (radius<0) a ROW-MAJOR bool mask by |radius| pixels with
 // a square structuring element. radius==0 returns the input unchanged. Out-of-image is
@@ -92,36 +95,9 @@ func ApplyToMasks(masks []api.Mask, w, h, radius int) {
 		return
 	}
 	for i := range masks {
-		bin := api.DecodeMaskRLE(masks[i].RLE, w, h)
-		bin = Dilate(bin, w, h, radius)
-		masks[i].RLE = api.EncodeMaskRLE(bin, w, h)
-		masks[i].BBox = tightBBox(bin, w, h)
+		b := mask.DecodeRLE(masks[i].RLE, h, w)
+		b.Data = Dilate(b.Data, w, h, radius)
+		masks[i].RLE = mask.EncodeRLE(b)
+		masks[i].BBox = b.BBox()
 	}
-}
-
-func tightBBox(bin []bool, w, h int) [4]float64 {
-	minX, minY, maxX, maxY := w, h, -1, -1
-	for y := 0; y < h; y++ {
-		row := y * w
-		for x := 0; x < w; x++ {
-			if bin[row+x] {
-				if x < minX {
-					minX = x
-				}
-				if x > maxX {
-					maxX = x
-				}
-				if y < minY {
-					minY = y
-				}
-				if y > maxY {
-					maxY = y
-				}
-			}
-		}
-	}
-	if maxX < 0 {
-		return [4]float64{}
-	}
-	return [4]float64{float64(minX), float64(minY), float64(maxX - minX + 1), float64(maxY - minY + 1)}
 }

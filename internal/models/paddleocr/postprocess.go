@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"visionserve/internal/engine"
+	"visionserve/internal/vision/mask"
 )
 
 const (
@@ -49,11 +50,9 @@ func extractBBoxes(probMap []float32, h, w int, thresh, unclipRatio float64) ([]
 		return nil, fmt.Errorf("paddleocr: probability map has %d values, want %d (%dx%d)", len(probMap), h*w, w, h)
 	}
 
-	// Build binary mask.
-	mask := make([]bool, h*w)
-	for i, v := range probMap {
-		mask[i] = float64(v) > thresh
-	}
+	// Binary text mask: float64(p) > thresh.
+	bm, _ := mask.Threshold(probMap, 0, h, w, thresh)
+	fg := bm.Data
 
 	// visited is set when a pixel is ENQUEUED, so each pixel enters the queue at most once
 	// (marking on dequeue let one pixel be queued by up to 8 neighbours). The queue is
@@ -66,7 +65,7 @@ func extractBBoxes(probMap []float32, h, w int, thresh, unclipRatio float64) ([]
 	for startY := 0; startY < h; startY++ {
 		for startX := 0; startX < w; startX++ {
 			idx := startY*w + startX
-			if !mask[idx] || visited[idx] {
+			if !fg[idx] || visited[idx] {
 				continue
 			}
 
@@ -99,7 +98,7 @@ func extractBBoxes(probMap []float32, h, w int, thresh, unclipRatio float64) ([]
 						nx, ny := p.x+dx, p.y+dy
 						if nx >= 0 && nx < w && ny >= 0 && ny < h {
 							nidx := ny*w + nx
-							if !visited[nidx] && mask[nidx] {
+							if !visited[nidx] && fg[nidx] {
 								visited[nidx] = true
 								queue = append(queue, point{nx, ny})
 							}
@@ -133,19 +132,15 @@ func extractBBoxes(probMap []float32, h, w int, thresh, unclipRatio float64) ([]
 // mapBoxToOriginal maps a box [x, y, w, h] from the detection model input space back to
 // original image coordinates using detPreprocessMeta.
 func mapBoxToOriginal(box [4]float64, meta detPreprocessMeta) [4]float64 {
-	sx := meta.ScaleX
-	sy := meta.ScaleY
-	if sx <= 0 {
-		sx = 1
+	toOrig := meta.Affine()
+	if toOrig.ScaleX <= 0 {
+		toOrig.ScaleX = 1
 	}
-	if sy <= 0 {
-		sy = 1
+	if toOrig.ScaleY <= 0 {
+		toOrig.ScaleY = 1
 	}
-
-	x := (box[0] - float64(meta.PadX)) / sx
-	y := (box[1] - float64(meta.PadY)) / sy
-	bw := box[2] / sx
-	bh := box[3] / sy
+	b := toOrig.BoxToOrig(box)
+	x, y, bw, bh := b[0], b[1], b[2], b[3]
 
 	// Clamp to original image bounds.
 	origW := float64(meta.OrigWidth)

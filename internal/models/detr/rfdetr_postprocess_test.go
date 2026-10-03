@@ -1,4 +1,4 @@
-package rfdetr
+package detr
 
 import (
 	"math"
@@ -10,7 +10,7 @@ import (
 
 // Tests DETR decoding + mapping boxes back to ORIGINAL image coords (the trickiest part).
 func TestPostprocessDecodeAndMapToOriginal(t *testing.T) {
-	m := &rfDETR{cfg: models.Config{
+	m := &detr{v: rfVariant, cfg: models.Config{
 		Name:       "rf-detr",
 		Width:      100,
 		Height:     100,
@@ -56,7 +56,7 @@ func TestPostprocessDecodeAndMapToOriginal(t *testing.T) {
 // letterbox path never exercised: the box must come back with each axis divided by ITS OWN
 // scale, and a box covering the whole input must cover the whole original image.
 func TestPostprocessSquashNonSquareRoundTrip(t *testing.T) {
-	m := &rfDETR{cfg: models.Config{
+	m := &detr{v: rfVariant, cfg: models.Config{
 		Width: 64, Height: 64, Letterbox: false,
 		BoxFormat: "cxcywh", ConfThresh: 0.5, Labels: []string{"a"},
 	}}
@@ -106,7 +106,7 @@ func TestPostprocessSquashNonSquareRoundTrip(t *testing.T) {
 
 // No output tensor has a last dim == 4 -> must return an error, NOT guess.
 func TestPostprocessRejectsUnknownShape(t *testing.T) {
-	m := &rfDETR{cfg: models.Config{Width: 100, Height: 100}}
+	m := &detr{v: rfVariant, cfg: models.Config{Width: 100, Height: 100}}
 	a := engine.Tensor{Data: make([]float32, 6), Shape: []int64{1, 2, 3}}
 	b := engine.Tensor{Data: make([]float32, 6), Shape: []int64{1, 2, 3}}
 	if _, err := m.postprocess([]engine.Tensor{a, b}, models.PreprocessMeta{}); err == nil {

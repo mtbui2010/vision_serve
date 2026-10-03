@@ -25,6 +25,7 @@ import (
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/registry"
+	"visionserve/internal/vision/mask"
 )
 
 // Explainer computes a spatial heatmap from the raw ONNX outputs of an explain session.
@@ -161,30 +162,9 @@ func clampUint8(v float32) uint8 {
 	return uint8(v)
 }
 
-// Normalize maps slice values to [0,1]. Returns a zero slice when min==max.
-func Normalize(xs []float32) []float32 {
-	if len(xs) == 0 {
-		return xs
-	}
-	mn, mx := xs[0], xs[0]
-	for _, v := range xs[1:] {
-		if v < mn {
-			mn = v
-		}
-		if v > mx {
-			mx = v
-		}
-	}
-	out := make([]float32, len(xs))
-	rng := mx - mn
-	if rng < 1e-8 {
-		return out // all-zero: uniform activation, no meaningful saliency
-	}
-	for i, v := range xs {
-		out[i] = (v - mn) / rng
-	}
-	return out
-}
+// Normalize maps slice values to [0,1]. Returns a zero slice when max-min < 1e-8
+// (uniform activation, no meaningful saliency).
+func Normalize(xs []float32) []float32 { return mask.MinMaxNormalize(xs, 1e-8) }
 
 // findOutput locates a tensor by output name. Returns an error if not found.
 func findOutput(outputs []engine.Tensor, names []string, target string) (engine.Tensor, error) {
@@ -197,23 +177,4 @@ func findOutput(outputs []engine.Tensor, names []string, target string) (engine.
 		}
 	}
 	return engine.Tensor{}, fmt.Errorf("explain: output %q not found — session outputs are %v", target, names)
-}
-
-// upsampleNearest nearest-neighbor resizes src (srcW×srcH) to dst (dstW×dstH).
-func upsampleNearest(src []float32, srcW, srcH, dstW, dstH int) []float32 {
-	dst := make([]float32, dstW*dstH)
-	for dy := 0; dy < dstH; dy++ {
-		sy := dy * srcH / dstH
-		if sy >= srcH {
-			sy = srcH - 1
-		}
-		for dx := 0; dx < dstW; dx++ {
-			sx := dx * srcW / dstW
-			if sx >= srcW {
-				sx = srcW - 1
-			}
-			dst[dy*dstW+dx] = src[sy*srcW+sx]
-		}
-	}
-	return dst
 }

@@ -320,7 +320,12 @@ sha256sum /tmp/pulltest/my-model/model.onnx      # must match the manifest pin
 - **Do NOT guess the ONNX output format.** Verify the real tensor shapes before writing
   postprocess. If unsure → write a stub + `TODO`, do not fabricate.
 - RF-DETR is **NMS-free** — do not apply YOLO-style NMS. Anchor-based models may use
-  `imageproc.NMS`.
+  `nms.Detections` (`internal/vision/nms`).
+- Do not re-implement shared geometry/mask code in a model package: use
+  `internal/vision/geom` (sigmoid, normalized box → input pixels, `meta.Affine()` to map
+  back to the original image, clamp, IoU) and `internal/vision/mask` (threshold → bitmap +
+  bbox, the one column-major RLE encoder, PyTorch-bilinear / nearest upsampling, min-max
+  normalisation).
 - Running a session is **not** the model's job for plain `Model`s — engine + lifecycle
   handle it; the model does pre/post only. `PipelineModel`s orchestrate via `Runner`, but
   lifecycle still owns and frees the sessions.

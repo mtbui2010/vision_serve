@@ -2,11 +2,11 @@ package mobilesam
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/mask"
 )
 
 // pointSet is one prompt for a single decoder run: point coordinates in ORIGINAL
@@ -68,7 +68,7 @@ func promptToPointSets(p models.Prompt) ([]pointSet, error) {
 // pickMaskAndIoU finds the masks and iou_predictions tensors among decoder outputs.
 // Prefers matching by name; falls back to shape (masks = 4-D with the largest area so
 // it is not confused with low_res_masks [.,.,256,256]; iou = 2-D).
-func pickMaskAndIoU(names []string, outs []engine.Tensor) (mask, iou *engine.Tensor) {
+func pickMaskAndIoU(names []string, outs []engine.Tensor) (maskT, iouT *engine.Tensor) {
 	for i := range outs {
 		name := ""
 		if i < len(names) {
@@ -76,32 +76,32 @@ func pickMaskAndIoU(names []string, outs []engine.Tensor) (mask, iou *engine.Ten
 		}
 		switch {
 		case strings.Contains(name, "iou"):
-			iou = &outs[i]
+			iouT = &outs[i]
 		case name == "masks" || (strings.Contains(name, "mask") && !strings.Contains(name, "low_res")):
-			mask = &outs[i]
+			maskT = &outs[i]
 		}
 	}
-	if mask == nil {
+	if maskT == nil {
 		var bestArea int64 = -1
 		for i := range outs {
 			if len(outs[i].Shape) == 4 {
 				area := outs[i].Dim(2) * outs[i].Dim(3)
 				if area > bestArea {
 					bestArea = area
-					mask = &outs[i]
+					maskT = &outs[i]
 				}
 			}
 		}
 	}
-	if iou == nil {
+	if iouT == nil {
 		for i := range outs {
 			if len(outs[i].Shape) == 2 {
-				iou = &outs[i]
+				iouT = &outs[i]
 				break
 			}
 		}
 	}
-	return mask, iou
+	return maskT, iouT
 }
 
 // MaskBitmap is a binary mask at ORIGINAL-image resolution (row-major, len W*H),
@@ -119,7 +119,7 @@ type MaskBitmap struct {
 // ToMask encodes a MaskBitmap into the public models.Mask (column-major RLE + bbox + conf).
 func (b MaskBitmap) ToMask() models.Mask {
 	return models.Mask{
-		RLE:  encodeRLEColumnMajor(b.Data, b.H, b.W),
+		RLE:  mask.EncodeRLE(mask.Bitmap{Data: b.Data, W: b.W, H: b.H}),
 		BBox: b.BBox,
 		Conf: b.Conf,
 	}
@@ -128,76 +128,18 @@ func (b MaskBitmap) ToMask() models.Mask {
 // maskToBitmap thresholds the best mask (logit>0) and computes a tight bbox +
 // confidence (from iou_predictions). It stops short of RLE encoding so callers can
 // consume the raw bitmap directly.
-func maskToBitmap(mask, iou *engine.Tensor) (MaskBitmap, error) {
-	n := int(mask.Dim(1))
-	h := int(mask.Dim(2))
-	w := int(mask.Dim(3))
+func maskToBitmap(maskT, iou *engine.Tensor) (MaskBitmap, error) {
+	n := int(maskT.Dim(1))
+	h := int(maskT.Dim(2))
+	w := int(maskT.Dim(3))
 	if n < 1 || h <= 0 || w <= 0 {
-		return MaskBitmap{}, fmt.Errorf("mobilesam: unexpected mask shape %v", mask.Shape)
+		return MaskBitmap{}, fmt.Errorf("mobilesam: unexpected mask shape %v", maskT.Shape)
 	}
 
-	best, conf := bestChannel(mask, iou)
-	off := best * h * w
-	bin := make([]bool, h*w)
-	minX, minY, maxX, maxY := w, h, -1, -1
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			if mask.Data[off+y*w+x] > 0 {
-				bin[y*w+x] = true
-				if x < minX {
-					minX = x
-				}
-				if x > maxX {
-					maxX = x
-				}
-				if y < minY {
-					minY = y
-				}
-				if y > maxY {
-					maxY = y
-				}
-			}
-		}
+	best, conf := bestChannel(maskT, iou)
+	if len(maskT.Data) < (best+1)*h*w {
+		return MaskBitmap{}, fmt.Errorf("mobilesam: mask data length %d < %d (shape %v)", len(maskT.Data), (best+1)*h*w, maskT.Shape)
 	}
-
-	var bbox [4]float64
-	if maxX >= 0 {
-		bbox = [4]float64{float64(minX), float64(minY), float64(maxX - minX + 1), float64(maxY - minY + 1)}
-	}
-
-	return MaskBitmap{Data: bin, W: w, H: h, BBox: bbox, Conf: conf}, nil
-}
-
-// encodeRLEColumnMajor encodes a binary mask as COCO-style uncompressed RLE: counts of
-// alternating runs read in COLUMN-major (Fortran) order, always starting with a
-// background (0) run. Serialized as space-separated decimal counts.
-func encodeRLEColumnMajor(bin []bool, h, w int) string {
-	if len(bin) == 0 {
-		return ""
-	}
-	var counts []int
-	prev := false // runs start with background
-	run := 0
-	for x := 0; x < w; x++ {
-		for y := 0; y < h; y++ {
-			v := bin[y*w+x]
-			if v == prev {
-				run++
-			} else {
-				counts = append(counts, run)
-				prev = v
-				run = 1
-			}
-		}
-	}
-	counts = append(counts, run)
-
-	var sb strings.Builder
-	for i, c := range counts {
-		if i > 0 {
-			sb.WriteByte(' ')
-		}
-		sb.WriteString(strconv.Itoa(c))
-	}
-	return sb.String()
+	bm, bbox := mask.Threshold(maskT.Data, best*h*w, h, w, 0)
+	return MaskBitmap{Data: bm.Data, W: w, H: h, BBox: bbox, Conf: conf}, nil
 }

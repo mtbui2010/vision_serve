@@ -5,8 +5,9 @@ import (
 	"math"
 
 	"visionserve/internal/engine"
-	"visionserve/internal/imageproc"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/geom"
+	"visionserve/internal/vision/nms"
 )
 
 // scrfdStride describes one scale level of SCRFD's feature pyramid.
@@ -134,18 +135,18 @@ func postprocess(outs []engine.Tensor, meta models.PreprocessMeta, cfg models.Co
 	}
 
 	// Step 3: NMS (all faces share the same class "face"), IoU 0.4 as InsightFace.
-	kept := imageproc.NMS(candidates, 0.4)
+	kept := nms.Detections(candidates, nms.Options{IoU: 0.4})
 
 	// Step 4: map from network-input space (letterboxed) back to ORIGINAL image coordinates
 	// and clamp to the image.
+	toOrig := meta.Affine()
 	out := kept[:0]
 	for i := range kept {
-		ox, oy, ow, oh := mapToOrig(kept[i].BBox, meta)
-		ox, oy, ow, oh = clampBox(ox, oy, ow, oh, meta.OrigWidth, meta.OrigHeight)
-		if ow <= 0 || oh <= 0 {
+		b := geom.Clamp(toOrig.BoxToOrig(kept[i].BBox), meta.OrigWidth, meta.OrigHeight)
+		if b[2] <= 0 || b[3] <= 0 {
 			continue // entirely inside the letterbox padding
 		}
-		kept[i].BBox = [4]float64{ox, oy, ow, oh}
+		kept[i].BBox = b
 		out = append(out, kept[i])
 	}
 
@@ -238,40 +239,4 @@ func decodeStride(
 		})
 	}
 	return dets, nil
-}
-
-// mapToOrig maps a box [x,y,w,h] from letterboxed-640 space back to original image coords.
-// Relation (from letterbox.go): input_coord = orig_coord * Scale + Pad
-// Inverse:                       orig_coord  = (input_coord - Pad) / Scale
-func mapToOrig(box [4]float64, meta models.PreprocessMeta) (ox, oy, ow, oh float64) {
-	ox = (box[0] - float64(meta.PadX)) / meta.ScaleX
-	oy = (box[1] - float64(meta.PadY)) / meta.ScaleY
-	ow = box[2] / meta.ScaleX
-	oh = box[3] / meta.ScaleY
-	return
-}
-
-// clampBox ensures the box stays within the original image boundaries.
-func clampBox(x, y, w, h float64, maxW, maxH int) (float64, float64, float64, float64) {
-	if x < 0 {
-		w += x
-		x = 0
-	}
-	if y < 0 {
-		h += y
-		y = 0
-	}
-	if x+w > float64(maxW) {
-		w = float64(maxW) - x
-	}
-	if y+h > float64(maxH) {
-		h = float64(maxH) - y
-	}
-	if w < 0 {
-		w = 0
-	}
-	if h < 0 {
-		h = 0
-	}
-	return x, y, w, h
 }

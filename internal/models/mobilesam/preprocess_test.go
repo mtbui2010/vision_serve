@@ -109,7 +109,7 @@ func TestPromptTextOnlyErrors(t *testing.T) {
 }
 
 // RLE is column-major, starts with a background run, and its counts sum to H*W.
-func TestEncodeRLEColumnMajor(t *testing.T) {
+func TestToMaskRLEColumnMajor(t *testing.T) {
 	// 2x2 mask, column-major order. Set pixel (x=0,y=1) and (x=1,y=1) foreground.
 	// bin index = y*w+x. w=h=2.
 	h, w := 2, 2
@@ -118,7 +118,7 @@ func TestEncodeRLEColumnMajor(t *testing.T) {
 	bin[1*w+1] = true // (1,1)
 	// Column-major read: col0 -> (0,0)F=0,(0,1)T ; col1 -> (1,0)F,(1,1)T
 	// sequence: 0,1,0,1 -> runs starting background: [1,1,1,1]
-	rle := encodeRLEColumnMajor(bin, h, w)
+	rle := MaskBitmap{Data: bin, W: w, H: h}.ToMask().RLE
 	if rle != "1 1 1 1" {
 		t.Fatalf("rle=%q, want \"1 1 1 1\"", rle)
 	}
