@@ -66,6 +66,7 @@ import (
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/models/clip"
+	"visionserve/internal/models/detr"
 	"visionserve/internal/models/promptens"
 	"visionserve/internal/vision/util"
 )
@@ -283,12 +284,13 @@ func (m *textAlign) Infer(img image.Image, prompt models.Prompt, r models.Runner
 		return models.Result{}, fmt.Errorf("textalign: detector inference: %w", err)
 	}
 
-	boxes, feats, err := splitOutputs(outs, m.proj.DFeat)
+	o, err := detectorOutputs(outs, m.proj.DFeat, len(m.cfg.Labels))
 	if err != nil {
 		return models.Result{}, err
 	}
+	boxes, feats := o.Boxes, o.Feats
 	if mode == modeGated || mode == modeDual {
-		cls, err := classLogits(outs, boxes, m.proj.DFeat, len(m.cfg.Labels))
+		cls, err := classHead(o, len(m.cfg.Labels))
 		if err != nil {
 			return models.Result{}, err
 		}
@@ -338,50 +340,37 @@ func parseMethod(method string) (scoreMode, error) {
 	}
 }
 
-// splitOutputs picks the box tensor and the query-feature tensor out of the detector's
-// outputs BY SHAPE (names differ between exports): boxes = last dim 4, query_feats = last
-// dim DFeat with the same query count. `labels` (the frozen class head) and
-// `cross_attn_weights` are ignored — head B replaces the former for naming. modeGated wants
-// `labels` back for SELECTION; it asks for it separately via classLogits.
-func splitOutputs(outs []engine.Tensor, dFeat int) (boxes, feats engine.Tensor, err error) {
-	for _, t := range outs {
-		if t.Dim(-1) == 4 && boxes.Data == nil {
-			boxes = t
-		}
+// detectorOutputs identifies the detector's boxes, class head and query features with
+// detr.SplitOutputs — the rule the router shares — and insists on query_feats, which every mode
+// scores. `labels` (the frozen class head) is only read back by modeGated/modeDual, for
+// SELECTION, through classHead; `cross_attn_weights` is ignored.
+func detectorOutputs(outs []engine.Tensor, dFeat, nLabels int) (detr.Outputs, error) {
+	o, err := detr.SplitOutputs(outs, nLabels, dFeat)
+	if err != nil {
+		return o, fmt.Errorf("textalign: %w", err)
 	}
-	if boxes.Data == nil {
-		return boxes, feats, fmt.Errorf("textalign: no detector output has a last dimension of 4 (boxes)")
-	}
-	q := boxes.Dim(1)
-	for _, t := range outs {
-		if len(t.Shape) == 3 && t.Dim(-1) == int64(dFeat) && t.Dim(1) == q && feats.Data == nil {
-			feats = t
-		}
-	}
-	if feats.Data == nil {
-		return boxes, feats, fmt.Errorf(
+	if o.Feats.Data == nil {
+		return o, fmt.Errorf(
 			"textalign: no detector output of shape [1,%d,%d] (query_feats) — the manifest's files.%s must point at an export that exposes it, e.g. models/rfdetr-small-etri-qf/model.onnx",
-			q, dFeat, roleDetector)
+			o.Boxes.Dim(1), dFeat, roleDetector)
 	}
-	return boxes, feats, nil
+	return o, nil
 }
 
-// classLogits finds the detector's OWN class head among its outputs: the [1,Q,C] tensor that
-// is neither the boxes (C=4) nor query_feats (C=DFeat). Only modeGated needs it.
+// classHead returns the detector's OWN class head — the [1,Q,C] output with C = the manifest's
+// label count — which modeGated and modeDual select with.
 //
-// It is matched against the manifest's label count rather than "whatever is left", so a
-// mismatch between the export and labels.txt is reported here instead of silently scoring
-// the wrong columns.
-func classLogits(outs []engine.Tensor, boxes engine.Tensor, dFeat, nLabels int) (engine.Tensor, error) {
-	q := boxes.Dim(1)
-	for _, t := range outs {
-		if len(t.Shape) == 3 && t.Dim(1) == q && t.Dim(-1) == int64(nLabels) && int(t.Dim(-1)) != dFeat {
-			return t, nil
-		}
+// It is matched against the label count rather than taken as "whatever is left", so a mismatch
+// between the export and labels.txt is reported here instead of silently scoring the wrong
+// columns.
+func classHead(o detr.Outputs, nLabels int) (engine.Tensor, error) {
+	q, cls := o.Boxes.Dim(1), o.Logits
+	if cls.Data == nil || len(cls.Shape) != 3 || cls.Dim(1) != q || cls.Dim(-1) != int64(nLabels) {
+		return engine.Tensor{}, fmt.Errorf(
+			"textalign: method \"gated\" needs the detector's own class head, but no output has shape [1,%d,%d] (the manifest lists %d labels) — use method \"exact\" or \"folded\" with this export",
+			q, nLabels, nLabels)
 	}
-	return engine.Tensor{}, fmt.Errorf(
-		"textalign: method \"gated\" needs the detector's own class head, but no output has shape [1,%d,%d] (the manifest lists %d labels) — use method \"exact\" or \"folded\" with this export",
-		q, nLabels, nLabels)
+	return cls, nil
 }
 
 // headFor returns the compiled head for a vocabulary, embedding the class names through

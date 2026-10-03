@@ -220,26 +220,33 @@ func TestDecodeGatedSelectsByObjectness(t *testing.T) {
 	}
 }
 
-func TestClassLogitsRejectsMismatchedLabels(t *testing.T) {
+func TestClassHeadRejectsMismatchedLabels(t *testing.T) {
 	const q, dFeat = 4, 8
 	dets := engine.F32(make([]float32, q*4), 1, q, 4)
 	labels := engine.F32(make([]float32, q*23), 1, q, 23)
 	qf := engine.F32(make([]float32, q*dFeat), 1, q, dFeat)
 	outs := []engine.Tensor{dets, labels, qf}
 
-	got, err := classLogits(outs, dets, dFeat, 23)
+	head := func(outs []engine.Tensor, nLabels int) (engine.Tensor, error) {
+		o, err := detectorOutputs(outs, dFeat, nLabels)
+		if err != nil {
+			return engine.Tensor{}, err
+		}
+		return classHead(o, nLabels)
+	}
+	got, err := head(outs, 23)
 	if err != nil {
-		t.Fatalf("classLogits: %v", err)
+		t.Fatalf("classHead: %v", err)
 	}
 	if got.Dim(-1) != 23 {
 		t.Errorf("picked shape %v, want the [1,Q,23] class head", got.Shape)
 	}
 	// 91 labels against a 23-wide head is the manifest/export mismatch that must be caught.
-	if _, err := classLogits(outs, dets, dFeat, 91); err == nil {
+	if _, err := head(outs, 91); err == nil {
 		t.Error("expected an error when the label count does not match any output")
 	}
 	// A stripped export (no class head) must say so rather than fall back silently.
-	if _, err := classLogits([]engine.Tensor{dets, qf}, dets, dFeat, 23); err == nil {
+	if _, err := head([]engine.Tensor{dets, qf}, 23); err == nil {
 		t.Error("expected an error when the export has no class head")
 	}
 }

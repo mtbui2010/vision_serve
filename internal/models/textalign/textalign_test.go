@@ -97,22 +97,22 @@ func TestSplitOutputs(t *testing.T) {
 	qf := engine.F32(make([]float32, q*dFeat), 1, q, dFeat)
 	qf.Data[0] = 7 // identity marker
 
-	boxes, feats, err := splitOutputs([]engine.Tensor{dets, labels, attn, qf}, dFeat)
+	o, err := detectorOutputs([]engine.Tensor{dets, labels, attn, qf}, dFeat, 23)
 	if err != nil {
-		t.Fatalf("splitOutputs: %v", err)
+		t.Fatalf("detectorOutputs: %v", err)
 	}
-	if !reflect.DeepEqual(boxes.Shape, dets.Shape) {
-		t.Errorf("boxes shape = %v, want %v", boxes.Shape, dets.Shape)
+	if !reflect.DeepEqual(o.Boxes.Shape, dets.Shape) {
+		t.Errorf("boxes shape = %v, want %v", o.Boxes.Shape, dets.Shape)
 	}
-	if feats.Data[0] != 7 {
-		t.Errorf("picked the wrong tensor as query_feats (shape %v)", feats.Shape)
+	if o.Feats.Data[0] != 7 {
+		t.Errorf("picked the wrong tensor as query_feats (shape %v)", o.Feats.Shape)
 	}
 
 	// A detector WITHOUT query_feats must fail loudly, not silently score garbage.
-	if _, _, err := splitOutputs([]engine.Tensor{dets, labels}, dFeat); err == nil {
+	if _, err := detectorOutputs([]engine.Tensor{dets, labels}, dFeat, 23); err == nil {
 		t.Errorf("expected an error when no output has shape [1,Q,d_feat]")
 	}
-	if _, _, err := splitOutputs([]engine.Tensor{labels}, dFeat); err == nil {
+	if _, err := detectorOutputs([]engine.Tensor{labels}, dFeat, 23); err == nil {
 		t.Errorf("expected an error when no output has a last dimension of 4")
 	}
 }

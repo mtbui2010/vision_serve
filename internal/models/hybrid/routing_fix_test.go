@@ -127,7 +127,7 @@ type lockProbeRunner struct {
 func (r *lockProbeRunner) Run(role string, in map[string]engine.Tensor) ([]engine.Tensor, error) {
 	switch role {
 	case roleRFDETR:
-		return []engine.Tensor{engine.F32(make([]float32, 4), 1, 1, 4)}, nil
+		return []engine.Tensor{engine.F32(make([]float32, 4), 1, 1, 4), engine.F32(make([]float32, 1), 1, 1, 1)}, nil
 	case roleGDINO:
 		held := !groundingdino.PipelineMu.TryLock()
 		if !held {

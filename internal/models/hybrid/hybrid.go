@@ -22,6 +22,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/models/detr"
 	"visionserve/internal/models/groundingdino"
 	"visionserve/internal/models/mobilesam"
 	"visionserve/internal/vision/util"
@@ -385,26 +386,22 @@ func (m *hybrid) detectRFDETRWithFeats(img image.Image, r models.Runner) (
 	if err != nil {
 		return nil, boxes, feats, meta, err
 	}
-	// Identify the tensors by SHAPE, exactly as rfdetr/postprocess.go does: boxes are the one
-	// whose last dimension is 4, and query features are the [1, Q, D] output that is neither the
-	// boxes nor the class logits. Indexing by position would break the moment an export adds an
-	// output, which is how a 17-class cache once served a 22-class model.
-	for _, o := range outs {
-		if len(o.Shape) == 3 && o.Dim(-1) == 4 {
-			boxes = o
-		}
-	}
-	nCls := len(m.cfg.Labels)
-	for _, o := range outs {
-		if len(o.Shape) == 3 && o.Dim(-1) != 4 && int(o.Dim(-1)) != nCls {
-			feats = o
-		}
-	}
-	res, err := m.rf.Postprocess(outs, meta)
+	// Identify the tensors by SHAPE (detr.SplitOutputs, the rule textalign shares): boxes are the
+	// output whose last dimension is 4, the class logits the one matching the label count, and
+	// query features the [1, Q, D] output that is neither. Indexing by position would break the
+	// moment an export adds an output, which is how a 17-class cache once served a 22-class model.
+	o, err := detr.SplitOutputs(outs, len(m.cfg.Labels), 0)
 	if err != nil {
 		return nil, boxes, feats, meta, err
 	}
-	return res.Detections, boxes, feats, meta, nil
+	if o.Logits.Data == nil {
+		return nil, boxes, feats, meta, fmt.Errorf("hybrid: rf-detr session %q emitted no class logits (outputs %v)", roleRFDETR, util.ShapesOf(outs))
+	}
+	res, err := m.rf.Postprocess([]engine.Tensor{o.Boxes, o.Logits}, meta)
+	if err != nil {
+		return nil, boxes, feats, meta, err
+	}
+	return res.Detections, o.Boxes, o.Feats, meta, nil
 }
 
 // detectGDINO runs GroundingDINO (text-prompted) for boxes + labels. It uses GroundingDINO's
