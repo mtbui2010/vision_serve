@@ -205,7 +205,8 @@ var createORTSession = createSession
 // CPU is always the last candidate, so a session is always created. Must run on the worker thread.
 //
 // ORT prints RED errors to stderr while an EP fails over. On eventual success we swallow that
-// noise (it is normal fallback); if ALL EPs are exhausted we reprint the last error.
+// noise (it is normal fallback); if ALL EPs are exhausted we reprint the last error. Only ORT's
+// own log lines are held back — see stderr.go for the capture and why it is still an fd swap.
 func createSession(modelPath string, inputNames, outputNames []string, providers []Provider) (*ort.DynamicAdvancedSession, Provider, error) {
 	candidates := availableProviders(providers)
 	if Trace {
@@ -234,11 +235,21 @@ func createSession(modelPath string, inputNames, outputNames []string, providers
 			}
 			continue
 		}
-		captured, runErr := captureStderr(func() error {
+		create := func() error {
 			var e error
 			s, e = ort.NewDynamicAdvancedSession(modelPath, inputNames, outputNames, opts)
 			return e
-		})
+		}
+		var captured string
+		var runErr error
+		if ep == ProviderCPU {
+			// The CPU EP cannot be dropped and has no next EP to fall back to, so there is nothing to
+			// capture — and skipping the process-wide fd swap (and its lock) lets CPU loads run in
+			// parallel. See stderr.go.
+			runErr = create()
+		} else {
+			captured, runErr = captureStderr(create)
+		}
 		opts.Destroy()
 		if runErr == nil {
 			sess, activeEP = s, ep

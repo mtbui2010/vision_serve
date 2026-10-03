@@ -3,23 +3,25 @@
 package engine
 
 import (
-	"bytes"
+	"bufio"
 	"io"
 	"os"
+	"strings"
 	"sync"
 
 	"golang.org/x/sys/unix"
 )
 
-// stderrMu serializes the (process-wide) fd 2 redirection across session creations.
+// stderrMu serializes the (process-wide) fd 2 redirection across session creations. See stderr.go
+// for why the redirection exists and why it cannot be shared between overlapping creations.
 var stderrMu sync.Mutex
 
-// captureStderr runs fn while temporarily redirecting fd 2 (including ORT's C/C++ side) into
-// a pipe, collected into a buffer. It returns the captured stderr content + fn's error.
+// captureStderr runs fn while fd 2 (including ORT's C/C++ side) points into a pipe. Lines in ORT's
+// log format are collected and returned with fn's error; every other line is written through to
+// the original stderr as soon as it arrives. fd 2 is restored even if fn panics.
 //
-// Used to swallow ORT's "red" logs on GPU EP fallback (but still reprints them if fn truly fails).
 // If setting up the redirection fails, fn runs normally (without capture) — which is safe.
-func captureStderr(fn func() error) (string, error) {
+func captureStderr(fn func() error) (captured string, err error) {
 	stderrMu.Lock()
 	defer stderrMu.Unlock()
 
@@ -39,21 +41,43 @@ func captureStderr(fn func() error) (string, error) {
 		w.Close()
 		return "", fn()
 	}
+	original := os.NewFile(uintptr(saved), "stderr")
 
-	// continuously drain in a goroutine to avoid filling the pipe buffer and blocking.
-	var buf bytes.Buffer
+	// Drain continuously (a full pipe would block ORT), routing line by line.
+	var ort strings.Builder
 	done := make(chan struct{})
 	go func() {
-		_, _ = io.Copy(&buf, r)
-		close(done)
+		defer close(done)
+		route(r, original, &ort)
 	}()
 
-	runErr := fn()
+	// Restore in a defer: fn may panic (the panic report must reach the real stderr) and the
+	// lock must be released either way. captured is read only once the drain has finished.
+	defer func() {
+		_ = unix.Dup3(saved, 2, 0) // fd 2 -> the original stderr again
+		w.Close()                  // with fd 2 restored this was the last write end: the drain sees EOF
+		<-done
+		r.Close()
+		original.Close()
+		captured = ort.String()
+	}()
+	return "", fn()
+}
 
-	_ = unix.Dup3(saved, 2, 0) // restore the original fd 2
-	unix.Close(saved)
-	w.Close()
-	<-done
-	r.Close()
-	return buf.String(), runErr
+// route copies src line by line: ORT log lines into ort, everything else to passthrough.
+func route(src io.Reader, passthrough io.Writer, ort *strings.Builder) {
+	br := bufio.NewReader(src)
+	for {
+		line, err := br.ReadString('\n')
+		if line != "" {
+			if isORTLogLine(line) {
+				ort.WriteString(line)
+			} else {
+				_, _ = io.WriteString(passthrough, line)
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
