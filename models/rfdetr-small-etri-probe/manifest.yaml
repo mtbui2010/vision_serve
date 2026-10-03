@@ -28,8 +28,5 @@ runtime:
   prefer: [cuda, cpu]
   idle_unload_seconds: 300
 
-explain:
-  type: attention
-  outputs:
-    attention: cross_attn_weights
-  spatial_stride: 16
+# No explain: block — model.onnx (shared with rfdetr-small-etri) has no cross_attn_weights output;
+# use rfdetr-small-etri-qf for /api/explain.
