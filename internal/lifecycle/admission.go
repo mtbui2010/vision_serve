@@ -20,7 +20,7 @@ import (
 //     the behaviour before it existed — e.g. for a pool×concurrency benchmark sweep). Anything
 //     else is ignored with a warning.
 //   - otherwise automatic: 2 × the model's inference slots (the largest session pool among its
-//     roles; 1 for a single session), and never below defaultMinQueue.
+//     roles; 1 for a single session or an Exclusive pipeline), and never below defaultMinQueue.
 //     A model that is not loaded yet counts 1 slot.
 //
 // A refused request fails at once with ErrOverloaded (HTTP 503) — it never waits for a slot.

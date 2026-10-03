@@ -36,6 +36,11 @@ type Session struct {
 
 	pipeline models.PipelineModel       // pipeline mode
 	engines  map[string]engine.Runnable // pipeline mode (role → session or pool)
+	// exclusive (pipeline mode): the model implements models.Exclusive and asked for it, so its
+	// Infer runs under inferMu — one request at a time on THIS loaded model, other models and
+	// other models' sessions unaffected. Decided once at load.
+	exclusive bool
+	inferMu   sync.Mutex
 
 	// explainEngine is the same ONNX file loaded with all outputs including explain tensors.
 	// nil until the first /api/explain call (lazy load). Lifecycle owns it.
@@ -70,15 +75,26 @@ func newPipelineSession(name string, task api.Task, p models.PipelineModel, engs
 		dev = engine.DeviceString(e.ActiveEP())
 		break
 	}
+	ex, ok := p.(models.Exclusive)
 	return &Session{
 		name:        name,
 		task:        task,
 		device:      dev,
 		pipeline:    p,
 		engines:     engs,
+		exclusive:   ok && ex.Exclusive(),
 		idleTimeout: idle,
 		lastUsed:    now,
 	}
+}
+
+// inferPipeline runs the pipeline model's Infer, under the session's lock when it is Exclusive.
+func (s *Session) inferPipeline(img image.Image, prompt models.Prompt) (api.Result, error) {
+	if s.exclusive {
+		s.inferMu.Lock()
+		defer s.inferMu.Unlock()
+	}
+	return s.pipeline.Infer(img, prompt, runner{s.engines})
 }
 
 // Predict runs the full pipeline: preprocess → infer (ORT) → postprocess (simple), or
@@ -91,7 +107,7 @@ func (s *Session) Predict(img image.Image, prompt models.Prompt, now time.Time) 
 		err error
 	)
 	if s.pipeline != nil {
-		res, err = s.pipeline.Infer(img, prompt, runner{s.engines})
+		res, err = s.inferPipeline(img, prompt)
 	} else {
 		res, err = s.predictSimple(img)
 	}
@@ -161,8 +177,12 @@ func (s *Session) predictSimple(img image.Image) (api.Result, error) {
 }
 
 // slots is how many requests this model can run at once: the largest session pool among its
-// roles (1 for single sessions). Admission control bounds each model at a multiple of it.
+// roles (1 for single sessions, and for an Exclusive model whatever its pools). Admission control
+// bounds each model at a multiple of it.
 func (s *Session) slots() int {
+	if s.exclusive {
+		return 1
+	}
 	n := runnableSlots(s.engine)
 	for _, e := range s.engines {
 		n = max(n, runnableSlots(e))

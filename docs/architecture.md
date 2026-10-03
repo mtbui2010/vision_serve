@@ -121,7 +121,10 @@ gateway that exposes those sessions by role (`Run(role, inputs)`, `InputNames(ro
 `OutputNames(role)`) **without** transferring ownership. The model chains stages
 (e.g. SAM: encoder → decoder) by calling the Runner per role. Each `engine.Session.Run`
 locks a mutex, so concurrent requests are safely serialized, and the idle reaper
-unloads *all* of a model's sessions together.
+unloads *all* of a model's sessions together. A pipeline whose whole `Infer` must not run
+concurrently implements `models.Exclusive` (returning `true`); lifecycle then holds a
+per-loaded-model lock around `Infer` — the policy lives in the runtime, not in a
+package-level mutex in the model.
 
 **Idle-unload override.** Each manifest declares an `idle_unload_seconds` (default
 300s) after which the reaper auto-unloads a model. The `serve` command can override
@@ -134,8 +137,8 @@ model to `N` seconds. The reaper still skips any model whose effective idle time
 **Admission control.** `Manager.Admit(model)` reserves a slot before the server decodes an
 upload, so memory does not grow with the number of requests queued behind a busy model. Each
 model admits at most `VISIONSERVE_MAX_QUEUE` requests (running + waiting); unset, the bound is
-`2 × the model's inference slots` (its largest session pool, 1 for a single session) and
-never below 4. `VISIONSERVE_MAX_QUEUE=0` turns the bound off. A
+`2 × the model's inference slots` (its largest session pool, 1 for a single session or an
+`Exclusive` pipeline) and never below 4. `VISIONSERVE_MAX_QUEUE=0` turns the bound off. A
 refused request fails at once with `lifecycle.ErrOverloaded` (HTTP 503); it never waits.
 
 ## Hardware / execution providers
