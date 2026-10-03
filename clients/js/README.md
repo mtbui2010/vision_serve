@@ -47,7 +47,7 @@ make serve                       # listens on :11435
 
 ```ts
 import { Client } from "visionserve";
-const client = new Client("http://localhost:11435");
+const client = new Client("http://127.0.0.1:11435");
 ```
 
 ### Image inputs
@@ -197,7 +197,7 @@ class Result {
 Installing the package globally (or running it via `npx`) exposes a `visionserve`
 command — a thin HTTP client over the same REST API. It does **not** run inference; it
 talks to a running VisionServe server (the Go binary `visionserve serve`, default
-`http://localhost:11435`). Zero runtime dependencies (built-in `fetch`/`FormData`),
+`http://127.0.0.1:11435`). Zero runtime dependencies (built-in `fetch`/`FormData`),
 **Node >= 18**.
 
 ```bash
@@ -221,7 +221,7 @@ npx visionserve --help
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--host <url>` | `http://localhost:11435` | Server base URL |
+| `--host <url>` | `http://127.0.0.1:11435` | Server base URL |
 | `--timeout <sec>` | `120` | Per-request timeout in seconds |
 | `-h`, `--help` | | Show help |
 | `--version` | | Print the client version |

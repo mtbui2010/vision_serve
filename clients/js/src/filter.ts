@@ -75,7 +75,7 @@ export function getDepthAtDetection(
     if (mode === "mean") return valid.reduce((s, v) => s + v, 0) / valid.length;
     const sorted = valid.slice().sort((a, b) => a - b);
     const mid = Math.floor(sorted.length / 2);
-    return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+    return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
   };
 
   const bboxes =
@@ -84,14 +84,15 @@ export function getDepthAtDetection(
       : detResult.masks.map((m) => m.bbox);
 
   return bboxes.map((bbox) => {
-    const x0 = Math.max(0, Math.floor(bbox[0]));
-    const y0 = Math.max(0, Math.floor(bbox[1]));
-    const x1 = Math.min(depthWidth, Math.ceil(bbox[0] + bbox[2]));
-    const y1 = Math.min(depthHeight, Math.ceil(bbox[1] + bbox[3]));
+    const [bx = 0, by = 0, bw = 0, bh = 0] = bbox;
+    const x0 = Math.max(0, Math.floor(bx));
+    const y0 = Math.max(0, Math.floor(by));
+    const x1 = Math.min(depthWidth, Math.ceil(bx + bw));
+    const y1 = Math.min(depthHeight, Math.ceil(by + bh));
     const pixels: number[] = [];
     for (let y = y0; y < y1; y++) {
       for (let x = x0; x < x1; x++) {
-        pixels.push(depthMap[y * depthWidth + x]);
+        pixels.push(depthMap[y * depthWidth + x] ?? 0);
       }
     }
     return aggregate(pixels);

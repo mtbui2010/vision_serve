@@ -1,7 +1,7 @@
 /** Segmentation example: MobileSAM with a box prompt → a decoded mask. */
 import { Client } from "../src/index.js";
 
-const client = new Client("http://localhost:11435");
+const client = new Client("http://127.0.0.1:11435");
 
 // Box is [x, y, w, h] in ORIGINAL image coordinates.
 const res = await client.predict("mobile-sam", "image.jpg", { box: [34, 58, 120, 240] });

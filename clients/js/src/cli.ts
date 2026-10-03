@@ -4,7 +4,7 @@
  *
  * This is a thin CLI over {@link Client} — it performs NO inference itself, it
  * talks to a running VisionServe server (the Go runtime) over HTTP (default
- * `http://localhost:11435`). Start the server first with `visionserve serve`
+ * `http://127.0.0.1:11435`). Start the server first with `visionserve serve`
  * (the Go binary), then use this CLI to drive it from Node.
  *
  * Installed as the `visionserve` command (see `package.json` "bin"):
@@ -36,7 +36,7 @@ import { Result, ModelInfo } from "./types.js";
 import { toSVG } from "./visualize.js";
 
 const CLIENT_TYPE = "js";
-const DEFAULT_HOST = "http://localhost:11435";
+const DEFAULT_HOST = "http://127.0.0.1:11435";
 
 const USAGE = `visionserve — VisionServe JavaScript client CLI
 

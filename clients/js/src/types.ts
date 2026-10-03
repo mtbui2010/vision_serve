@@ -300,12 +300,10 @@ export class Result {
   }
 
   nms(iouThreshold = 0.5): Result {
-    const toX1Y1X2Y2 = (bbox: number[]): [number, number, number, number] => [
-      bbox[0],
-      bbox[1],
-      bbox[0] + bbox[2],
-      bbox[1] + bbox[3],
-    ];
+    const toX1Y1X2Y2 = (bbox: number[]): [number, number, number, number] => {
+      const [x = 0, y = 0, w = 0, h = 0] = bbox;
+      return [x, y, x + w, y + h];
+    };
 
     const iou = (a: number[], b: number[]): number => {
       const [ax1, ay1, ax2, ay2] = toX1Y1X2Y2(a);
@@ -351,15 +349,13 @@ export class Result {
     const groups: Record<string, { detections: Detection[]; masks: Mask[] }> = {};
 
     for (const det of this.detections) {
-      if (!groups[det.cls]) groups[det.cls] = { detections: [], masks: [] };
-      groups[det.cls].detections.push(det);
+      (groups[det.cls] ??= { detections: [], masks: [] }).detections.push(det);
     }
     for (const mask of this.masks) {
       const key = mask.bbox.join(",");
       const matchingDet = this.detections.find((d) => d.bbox.join(",") === key);
       const cls = matchingDet?.cls ?? "";
-      if (!groups[cls]) groups[cls] = { detections: [], masks: [] };
-      groups[cls].masks.push(mask);
+      (groups[cls] ??= { detections: [], masks: [] }).masks.push(mask);
     }
 
     const result: Record<string, Result> = {};

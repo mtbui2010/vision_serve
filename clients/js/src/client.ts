@@ -49,9 +49,9 @@ export class Client {
   readonly timeoutMs: number;
 
   /**
-   * @param host base URL of the server, e.g. `http://localhost:11435`.
+   * @param host base URL of the server, e.g. `http://127.0.0.1:11435`.
    */
-  constructor(host = "http://localhost:11435", opts: ClientOptions = {}) {
+  constructor(host = "http://127.0.0.1:11435", opts: ClientOptions = {}) {
     this.host = host.replace(/\/+$/, "");
     this.timeoutMs = opts.timeoutMs ?? 120_000;
   }
