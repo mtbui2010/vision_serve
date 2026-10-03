@@ -32,10 +32,11 @@ type Manager struct {
 
 	mu   sync.Mutex
 	live map[string]*Session
-	// loading holds one channel per model currently being loaded; it is closed when that load
-	// finishes, successfully or not (see Load).
-	loading    map[string]chan struct{}
+	// loading holds the in-progress load of each model being loaded (see Load).
+	loading    map[string]*loadCall
 	lastRescan time.Time // last on-demand registry rescan (see rescanAllowed)
+	// closed is set by Close: nothing may load afterwards.
+	closed bool
 
 	// idleOverrideSec, when >= 0, overrides every model's manifest
 	// idle_unload_seconds at Load time (0 = never auto-unload). -1 keeps the
@@ -55,7 +56,7 @@ func NewManager(reg *registry.Registry) *Manager {
 	m := &Manager{
 		reg:             reg,
 		live:            map[string]*Session{},
-		loading:         map[string]chan struct{}{},
+		loading:         map[string]*loadCall{},
 		idleOverrideSec: -1, // -1 = use each manifest's idle_unload_seconds
 		stop:            make(chan struct{}),
 	}
@@ -141,10 +142,15 @@ func (m *Manager) IsLoaded(name string) bool {
 	return ok
 }
 
-// Close stops the reaper and releases all models (called on server shutdown).
+// Close stops the reaper and releases all models (called on server shutdown). A load still in
+// progress is cancelled: its sessions are closed when it finishes, and no new load starts.
 func (m *Manager) Close() {
 	m.once.Do(func() { close(m.stop) })
 	m.mu.Lock()
+	m.closed = true
+	for _, call := range m.loading {
+		call.cancelled = true
+	}
 	var idle []*Session
 	for name := range m.live {
 		if s := m.retireLocked(name); s != nil {

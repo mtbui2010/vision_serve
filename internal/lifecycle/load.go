@@ -2,7 +2,9 @@ package lifecycle
 
 import (
 	"fmt"
+	"log"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -13,6 +15,18 @@ import (
 	"visionserve/pkg/api"
 )
 
+// loadCall is one in-progress load of a model (see Load). done is closed when the load has
+// finished, successfully or not; the other fields are guarded by Manager.mu.
+type loadCall struct {
+	done chan struct{}
+	// cancelled is set by Unload (or Close) while the load runs: its session must not go live.
+	cancelled bool
+	// err is the load's result, readable once done is closed.
+	err error
+	// waiters counts the requests waiting on this load (diagnostics and tests).
+	waiters int
+}
+
 // Load loads a model into memory (idempotent: returns immediately if already loaded).
 // This is where models.Model is built from the manifest and engine.Session is created.
 func (m *Manager) Load(name string) error {
@@ -21,36 +35,80 @@ func (m *Manager) Load(name string) error {
 	// Waiters re-check after the leader finishes; if it failed, the next one retries the load.
 	for {
 		m.mu.Lock()
+		if m.closed {
+			m.mu.Unlock()
+			return fmt.Errorf("lifecycle: cannot load %q: the server is shutting down", name)
+		}
 		if _, ok := m.live[name]; ok {
 			m.mu.Unlock()
 			return nil
 		}
-		wait, busy := m.loading[name]
+		call, busy := m.loading[name]
 		if !busy {
-			done := make(chan struct{})
-			m.loading[name] = done
+			call = &loadCall{done: make(chan struct{})}
+			if m.loading == nil {
+				m.loading = map[string]*loadCall{}
+			}
+			m.loading[name] = call
 			m.mu.Unlock()
-			err := m.load(name)
-			m.mu.Lock()
-			delete(m.loading, name)
-			close(done)
-			m.mu.Unlock()
-			return err
+			return m.lead(name, call)
 		}
+		call.waiters++
 		m.mu.Unlock()
-		<-wait
+		<-call.done
+		// Nothing writes call after done is closed (it has left m.loading), so no lock is needed.
+		if call.cancelled {
+			// Unloaded while it was loading. This request asked for THAT load; loading the model
+			// again for it would undo the unload the moment it returned.
+			return call.err
+		}
 	}
 }
 
-// load builds the model and its sessions; only Load (which guarantees one per name) calls it.
-func (m *Manager) load(name string) error {
+// lead runs the load for the request that started it and publishes the result: the session goes
+// live, unless an Unload or Close arrived meanwhile — then it is closed and the load fails.
+// A panic while building (a model factory, a binding) becomes an error: it used to leave the
+// name in m.loading forever, so every later request for that model hung.
+func (m *Manager) lead(name string, call *loadCall) (err error) {
+	var sess *Session
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("lifecycle: loading %q panicked: %v\n%s", name, r, debug.Stack())
+			sess, err = nil, fmt.Errorf("lifecycle: loading %q panicked: %v", name, r)
+		}
+		var drop *Session
+		m.mu.Lock()
+		delete(m.loading, name)
+		switch {
+		case err != nil:
+		case call.cancelled:
+			drop = sess
+			err = fmt.Errorf("lifecycle: model %q was unloaded while it was loading", name)
+		case m.live[name] != nil: // cannot happen under singleflight; never replace a live session
+			drop = sess
+		default:
+			m.live[name] = sess
+		}
+		call.err = err
+		close(call.done)
+		m.mu.Unlock()
+		if drop != nil {
+			_ = drop.close() // outside m.mu: closing a GPU session takes a while
+		}
+	}()
+	sess, err = m.load(name)
+	return err
+}
+
+// load builds the model and its sessions without publishing them; only lead calls it.
+func (m *Manager) load(name string) (*Session, error) {
 	base, man, err := m.buildModel(name)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	providers, err := man.Providers()
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	idleSec := man.Runtime.IdleUnloadSeconds
@@ -73,7 +131,7 @@ func (m *Manager) load(name string) error {
 	case models.PipelineModel:
 		filesAbs := man.FilesAbs()
 		if len(filesAbs) == 0 {
-			return fmt.Errorf("lifecycle: model %q is multi-session but its manifest has no 'files' map", name)
+			return nil, fmt.Errorf("lifecycle: model %q is multi-session but its manifest has no 'files' map", name)
 		}
 		// Collect per-role pool sizes (default 1 = single session).
 		// Copied, never aliased: a model may return nil (hybrid without SAM) or its own map, and
@@ -91,20 +149,25 @@ func (m *Manager) load(name string) error {
 			}
 		}
 		engines := map[string]engine.Runnable{}
+		built := false
+		defer func() { // on an error or a panic, release the roles already opened
+			if !built {
+				closeEngines(engines)
+			}
+		}()
 		for _, role := range mdl.Roles() {
 			path, ok := filesAbs[role]
 			if !ok {
-				closeEngines(engines)
-				return fmt.Errorf("lifecycle: role %q of model %q not found in manifest 'files'", role, name)
+				return nil, fmt.Errorf("lifecycle: role %q of model %q not found in manifest 'files'", role, name)
 			}
 			run, err := open(path, nil, nil, poolSizes[role], providers)
 			if err != nil {
-				closeEngines(engines)
-				return err
+				return nil, err
 			}
 			engines[role] = run
 		}
 		sess = newPipelineSession(man.Name, task, mdl, engines, idle, now)
+		built = true
 	case models.Model:
 		inName, outNames := nilIfEmpty(mdl.InputName()), mdl.OutputNames()
 
@@ -132,23 +195,14 @@ func (m *Manager) load(name string) error {
 		// (classification/detection) model can serve inferences concurrently (eval sweep).
 		run, err := open(man.ModelFilePath(), inName, detectOutNames, poolOverride(), providers)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		sess = newSimpleSession(man.Name, task, mdl, run, idle, now)
 	default:
-		return fmt.Errorf("lifecycle: model %q implements neither Model nor PipelineModel", name)
+		return nil, fmt.Errorf("lifecycle: model %q implements neither Model nor PipelineModel", name)
 	}
 	sess.man = man // snapshot: explain must describe what was loaded, not today's manifest on disk
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	// Re-check: another request may have finished loading while we built ours.
-	if _, ok := m.live[name]; ok {
-		_ = sess.close() // drop the extra one we just built
-		return nil
-	}
-	m.live[name] = sess
-	return nil
+	return sess, nil
 }
 
 // newRunnable creates the ONNX session(s) for one weights file: ONE session when n <= 1, otherwise

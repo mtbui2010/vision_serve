@@ -6,8 +6,16 @@ import (
 )
 
 // Unload releases a model from memory. Not an error if the model is not loaded.
+//
+// A model still LOADING is unloaded too: Unload does not wait for it (a TensorRT build takes
+// minutes), it marks the load cancelled, and the load closes what it built instead of making it
+// live. Without that, the load finished after Unload had reported success and the model stayed
+// resident.
 func (m *Manager) Unload(name string) error {
 	m.mu.Lock()
+	if call := m.loading[name]; call != nil {
+		call.cancelled = true
+	}
 	s := m.retireLocked(name)
 	m.mu.Unlock()
 	if s == nil {
