@@ -1,0 +1,13 @@
+/* Figures: centred, rounded, never wider than the text column. */
+.md-typeset figure img { border-radius: 6px; max-width: 100%; }
+.md-typeset figure figcaption { font-size: .75rem; opacity: .8; }
+/* A small "where in the code" box. */
+.md-typeset .admonition.code, .md-typeset details.code { border-color: #5c6bc0; }
+.md-typeset .code > .admonition-title, .md-typeset .code > summary { background-color: rgba(92,107,192,.1); }
+.md-typeset .code > .admonition-title::before, .md-typeset .code > summary::before {
+  background-color: #5c6bc0;
+  -webkit-mask-image: var(--md-admonition-icon--abstract);
+  mask-image: var(--md-admonition-icon--abstract);
+}
+/* Gallery grid */
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; }

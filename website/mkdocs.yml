@@ -1,0 +1,96 @@
+site_name: VisionServe
+site_description: One small Go binary that serves computer-vision models locally — detection, segmentation, open-vocabulary detection, depth and more — through ONNX Runtime.
+site_url: https://mtbui2010.github.io/vision_serve/
+repo_url: https://github.com/mtbui2010/vision_serve
+repo_name: mtbui2010/vision_serve
+edit_uri: edit/main/website/docs/
+copyright: VisionServe is Apache-2.0. Example photos are from COCO val2017 (CC BY 2.0, credited on each page).
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - content.code.copy
+    - content.code.annotate
+    - search.suggest
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - footnotes
+  - def_list
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+extra_css:
+  - assets/extra.css
+
+nav:
+  - Home: index.md
+  - Getting started: getting-started.md
+  - Concepts:
+      - concepts/index.md
+      - What the models do: concepts/tasks.md
+      - From pixels to tensors: concepts/preprocessing.md
+      - Model files and ONNX Runtime: concepts/onnx.md
+  - How it works:
+      - architecture/index.md
+      - HTTP server: architecture/server.md
+      - Lifecycle manager: architecture/lifecycle.md
+      - Engine (ONNX Runtime): architecture/engine.md
+      - Models and manifests: architecture/models.md
+      - Shared vision library: architecture/vision.md
+      - Pipelines: architecture/pipelines.md
+      - Catalog and installing models: architecture/catalog.md
+      - Clients and the converter: architecture/clients.md
+  - Model gallery: gallery.md
+  - Go for this project:
+      - go/index.md
+      - 1. Packages, modules, building: go/01-basics.md
+      - 2. Types, structs, methods: go/02-types.md
+      - 3. Interfaces: go/03-interfaces.md
+      - 4. Errors: go/04-errors.md
+      - 5. Concurrency: go/05-concurrency.md
+      - 6. Testing: go/06-testing.md
+      - 7. cgo and build tags: go/07-cgo.md
+      - 8. Walkthrough — add a model: go/08-add-a-model.md
+  - Reference:
+      - HTTP API: reference/api.md
+      - Configuration: reference/configuration.md
+      - Manifest format: reference/manifest.md
