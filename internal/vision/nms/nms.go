@@ -69,7 +69,11 @@ func Detections(dets []api.Detection, o Options) []api.Detection {
 	suppressed := make([]bool, len(order)) // indexed by position in score order
 	var keep []api.Detection
 	full := func() bool { return o.TopK > 0 && len(keep) >= o.TopK }
-	if len(boxes) < gridMin {
+	var g *grid
+	if len(boxes) >= gridMin {
+		g = newGrid(boxes) // nil when the boxes' extent is not finite
+	}
+	if g == nil {
 		for p := range boxes {
 			if suppressed[p] {
 				continue
@@ -87,7 +91,6 @@ func Detections(dets []api.Detection, o Options) []api.Detection {
 		return keep
 	}
 
-	g := newGrid(boxes)
 	for p := range boxes {
 		if suppressed[p] {
 			continue
@@ -165,6 +168,13 @@ func newGrid(boxes []box) *grid {
 		minX, minY = fmin(minX, b.x1), fmin(minY, b.y1)
 		maxX, maxY = fmax(maxX, b.x2), fmax(maxY, b.y2)
 		sumSide += math.Abs(b.x2-b.x1) + math.Abs(b.y2-b.y1)
+	}
+	// An infinite coordinate (a model emitting Inf) leaves no finite grid: int(+Inf) is
+	// undefined, and such a box would sit in one cell while overlapping boxes in others. The
+	// caller then uses the triangular scan, which handles any input.
+	if spanX, spanY := maxX-minX, maxY-minY; math.IsInf(spanX, 0) || math.IsInf(spanY, 0) ||
+		math.IsNaN(spanX) || math.IsNaN(spanY) {
+		return nil
 	}
 	cell := sumSide / float64(2*len(boxes))
 	extent := fmax(maxX-minX, maxY-minY)

@@ -184,3 +184,34 @@ func TestMatchesNaiveBench(t *testing.T) {
 		}
 	}
 }
+
+// An infinite coordinate among >= gridMin boxes (a model emitting Inf) used to build a grid with
+// zero cells and panic with "index out of range [-1]"; it now takes the triangular scan, which
+// keeps what the all-pairs version keeps.
+func TestNonFiniteBoxesOnTheGridPath(t *testing.T) {
+	r := rand.New(rand.NewSource(7))
+	base := make([]api.Detection, 600)
+	for i := range base {
+		base[i] = api.Detection{BBox: [4]float64{r.Float64() * 400, r.Float64() * 300, 10 + r.Float64()*40, 10 + r.Float64()*40},
+			Class: "a", Conf: float64(r.Intn(1000)) / 1000}
+	}
+	for name, bad := range map[string][4]float64{
+		"+Inf width": {10, 10, math.Inf(1), 20},
+		"-Inf x":     {math.Inf(-1), 10, 20, 20},
+		"+Inf y":     {10, math.Inf(1), 20, 20},
+	} {
+		dets := append([]api.Detection(nil), base...)
+		dets[5].BBox = bad
+		for _, o := range []Options{{IoU: 0.5}, {IoU: 0.5, Containment: true}} {
+			got, want := Detections(dets, o), naive(dets, o)
+			if len(got) != len(want) {
+				t.Fatalf("%s %+v: kept %d, naive kept %d", name, o, len(got), len(want))
+			}
+			for i := range got {
+				if got[i] != want[i] {
+					t.Fatalf("%s %+v: box %d differs: %+v vs %+v", name, o, i, got[i], want[i])
+				}
+			}
+		}
+	}
+}
