@@ -22,19 +22,19 @@ func TestGraspParamsOverride(t *testing.T) {
 	def := graspcore.DefaultParams()
 
 	// No manifest, no request → core defaults.
-	g0 := &graspModel{}
-	if p := g0.graspParams(models.Prompt{}); p.Dmin != def.Dmin || p.Dmax != def.Dmax {
+	g0 := plannerFor(models.Config{})
+	if p := g0.Params(models.Prompt{}); p.Dmin != def.Dmin || p.Dmax != def.Dmax {
 		t.Fatalf("defaults: got Dmin=%v Dmax=%v want %v/%v", p.Dmin, p.Dmax, def.Dmin, def.Dmax)
 	}
 
 	// Manifest defaults applied.
-	gm := &graspModel{gripMin: 20, gripMax: 80}
-	if p := gm.graspParams(models.Prompt{}); p.Dmin != 20 || p.Dmax != 80 {
+	gm := plannerFor(models.Config{GripperMin: 20, GripperMax: 80})
+	if p := gm.Params(models.Prompt{}); p.Dmin != 20 || p.Dmax != 80 {
 		t.Fatalf("manifest: got Dmin=%v Dmax=%v want 20/80", p.Dmin, p.Dmax)
 	}
 
 	// Request overrides manifest.
-	if p := gm.graspParams(models.Prompt{GripperMin: 33, GripperMax: 99}); p.Dmin != 33 || p.Dmax != 99 {
+	if p := gm.Params(models.Prompt{GripperMin: 33, GripperMax: 99}); p.Dmin != 33 || p.Dmax != 99 {
 		t.Fatalf("request: got Dmin=%v Dmax=%v want 33/99", p.Dmin, p.Dmax)
 	}
 
@@ -42,9 +42,7 @@ func TestGraspParamsOverride(t *testing.T) {
 	// grasp-rfdetr ships max_detections: 300 for RF-DETR; reusing it let one star-shaped mask
 	// return thousands of grasps (multi-MB responses).
 	for _, maxDet := range []int{0, 7, 300} {
-		gc := &graspModel{}
-		gc.cfg.MaxDet = maxDet
-		if p := gc.graspParams(models.Prompt{}); p.MaxGrasps != defaultMaxGraspsPerMask {
+		if p := plannerFor(models.Config{MaxDet: maxDet}).Params(models.Prompt{}); p.MaxGrasps != defaultMaxGraspsPerMask {
 			t.Fatalf("max_detections=%d: MaxGrasps = %v, want the per-mask default %d",
 				maxDet, p.MaxGrasps, defaultMaxGraspsPerMask)
 		}

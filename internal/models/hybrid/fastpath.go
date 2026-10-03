@@ -8,6 +8,7 @@ import (
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/models/textalign"
+	"visionserve/internal/pipeline"
 )
 
 // headFile is an OPTIONAL distilled score head, next to the manifest. Declaring it replaces the
@@ -69,6 +70,11 @@ type fastPath struct {
 	proj   *textalign.Projection // Go fallback (head.bin); nil when onnx is set
 	onnx   bool                  // the head runs as the roleHead session through the Runner
 	budget int
+
+	// Set when the router is wired: the manifest (its RF-DETR decode for the head's logits) and
+	// the rescorer's text embedder, whose cached SigLIP rows the head scores against.
+	cfg  models.Config
+	text *pipeline.TextEmbedder
 }
 
 // defaultBudget is the knee of §11's curve: 22 boxes reach 99.8 % of what 44 reach, for 57 % of
@@ -100,35 +106,46 @@ func newFastPath(cfg models.Config) (*fastPath, error) {
 	return &fastPath{proj: proj, budget: budget}, nil
 }
 
+// DetectQueries implements pipeline.QueryHead: the unknown words answered from the router's
+// RF-DETR pass — its boxes and query features — with no second detector and no second image pass.
+// The router rescores the result.
+func (fp *fastPath) DetectQueries(c pipeline.Call, pass *pipeline.ClosedPass, words []string) ([]models.Detection, error) {
+	if pass.Feats.Data == nil {
+		return nil, fmt.Errorf("hybrid: the detector export emitted no query "+
+			"features, so the distilled head has no input — %s needs the -qf export", headFile)
+	}
+	return fp.detect(pass.Boxes, pass.Feats, words, pass.Meta, c.Runner)
+}
+
 // detect scores every query against `words` and returns the top-`budget` detections per image.
 //
 // `boxes` and `feats` are the detector's own outputs, so no second image pass happens. The score
 // is sigmoid(a·cos(P f, ψ(w)) + b) — the head's own calibration, NOT the detector's objectness,
 // which FINDINGS §4 measures as actively misleading on unseen words (median 0.033 against 0.891
 // on trained ones).
-func (m *hybrid) fastDetect(boxes, feats engine.Tensor, words []string,
+func (fp *fastPath) detect(boxes, feats engine.Tensor, words []string,
 	meta models.PreprocessMeta, r models.Runner) ([]models.Detection, error) {
 	q := int(boxes.Dim(1))
-	if !m.fp.onnx {
+	if !fp.onnx {
 		// Checked before the text tower runs: the Go head knows its width from head.bin. The ONNX
 		// head's width is in its graph, and ORT's own shape error is wrapped with the same advice.
-		if dFeat := int(feats.Dim(-1)); dFeat != m.fp.proj.DFeat {
+		if dFeat := int(feats.Dim(-1)); dFeat != fp.proj.DFeat {
 			return nil, fmt.Errorf("hybrid: head expects %d-wide query features, detector emits %d — "+
-				"the head was trained against a different detector export", m.fp.proj.DFeat, dFeat)
+				"the head was trained against a different detector export", fp.proj.DFeat, dFeat)
 		}
 	}
 
-	text, err := m.rs.Text.Embed(words, r) // the same cached SigLIP text embeddings the rescorer uses
+	text, err := fp.text.Embed(words, r) // the same cached SigLIP text embeddings the rescorer uses
 	if err != nil {
 		return nil, fmt.Errorf("hybrid: %w", err)
 	}
-	logits, err := m.fp.score(feats, text, q, r)
+	logits, err := fp.score(feats, text, q, r)
 	if err != nil {
 		return nil, err
 	}
 
 	n := len(words)
-	rf, err := newRFDETRWithLabels(m.cfg, words)
+	rf, err := newRFDETRWithLabels(fp.cfg, words)
 	if err != nil {
 		return nil, err
 	}
@@ -136,8 +153,8 @@ func (m *hybrid) fastDetect(boxes, feats engine.Tensor, words []string,
 	if err != nil {
 		return nil, err
 	}
-	if len(res.Detections) > m.fp.budget {
-		res.Detections = res.Detections[:m.fp.budget]
+	if len(res.Detections) > fp.budget {
+		res.Detections = res.Detections[:fp.budget]
 	}
 	return res.Detections, nil
 }

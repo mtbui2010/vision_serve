@@ -162,7 +162,8 @@ func TestEmbedKeyIncludesTemplates(t *testing.T) {
 	if a.Key("cup") == b.Key("cup") || a.Key("cup") == a.Key("hat") {
 		t.Error("keys must differ by word and by template set")
 	}
-	if a.Key("cup") != a.Key("cup") || !strings.HasSuffix(a.Key("cup"), "\x00cup") {
+	if a2 := NewTextEmbedder("text", nil, []string{"a photo of a {}."}, 0); a.Key("cup") != a2.Key("cup") ||
+		!strings.HasSuffix(a.Key("cup"), "\x00cup") {
 		t.Errorf("key %q is not <template hash>\\x00<word>", a.Key("cup"))
 	}
 }

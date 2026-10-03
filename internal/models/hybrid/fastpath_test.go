@@ -125,10 +125,9 @@ func TestFastDetectRejectsWrongFeatureWidth(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := &hybrid{fp: fp, rs: &pipeline.CropNamer{}}
 	boxes := engine.F32(make([]float32, 4), 1, 1, 4)
 	feats := engine.F32(make([]float32, 5), 1, 1, 5) // detector emits 5-wide
-	_, err = m.fastDetect(boxes, feats, []string{"hat"}, models.PreprocessMeta{}, nil)
+	_, err = fp.detect(boxes, feats, []string{"hat"}, models.PreprocessMeta{}, nil)
 	if err == nil {
 		t.Fatal("a 5-wide feature against an 8-wide head was accepted; want an error")
 	}

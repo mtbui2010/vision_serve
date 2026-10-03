@@ -2,7 +2,6 @@ package hybrid
 
 import (
 	"fmt"
-	"image"
 	"path/filepath"
 	"strings"
 
@@ -99,17 +98,10 @@ func newRescorer(cfg models.Config) (*pipeline.CropNamer, error) {
 }
 
 // newNamer is the router's configuration of the shared crop namer: its own temperature and floor.
-func newNamer(tok pipeline.TextTokenizer, tmpl []string) *pipeline.CropNamer {
-	return &pipeline.CropNamer{
-		CropRole: roleCrop,
-		Text:     pipeline.NewTextEmbedder(roleText, tok, tmpl, 0),
-		Temp:     cropTemp,
-		Floor:    cropNameFloor,
-	}
-}
-
-// rescore renames and re-weights GroundingDINO's detections with SigLIP-crop, and is the whole
-// of the +12.6 mAP this file exists for.
+//
+// The router's rescorer (pipeline.CropRescorer over this namer) renames and re-weights
+// GroundingDINO's detections with SigLIP-crop, and is the whole of the +12.6 mAP this file exists
+// for.
 //
 // The decomposition matters, because it is not what a namer is normally added for. On the
 // held-out-names protocol (ovd-edge/docs/FINDINGS.md §1–§2), GroundingDINO already covers 90.2 %
@@ -119,7 +111,7 @@ func newNamer(tok pipeline.TextTokenizer, tmpl []string) *pipeline.CropNamer {
 //
 //	renaming only                       49.54 -> 50.93   (+1.4)
 //	GroundingDINO's name, conf x P      49.54 -> 58.32   (+8.8)
-//	both (this function)                49.54 -> 62.16   (+12.6)
+//	both (the rescorer)                 49.54 -> 62.16   (+12.6)
 //
 // So SigLIP earns its place as a RESCORER. The mechanism is its uncertainty, not its knowledge:
 // on a background crop it is confident about no word, the softmax flattens, and the detection
@@ -137,15 +129,11 @@ func newNamer(tok pipeline.TextTokenizer, tmpl []string) *pipeline.CropNamer {
 // (pipeline.CropNamer, textalign's crop head is the same code) filters them before the crop
 // tower, so a request whose only detection is such a sliver comes back empty instead of failing,
 // and keeps the crop rows and the detection list from drifting apart.
-func (m *hybrid) rescore(img image.Image, dets []models.Detection, words []string,
-	temp float64, r models.Runner) ([]models.Detection, error) {
-	if m.rs == nil || len(dets) == 0 || len(words) == 0 {
-		return dets, nil
+func newNamer(tok pipeline.TextTokenizer, tmpl []string) *pipeline.CropNamer {
+	return &pipeline.CropNamer{
+		CropRole: roleCrop,
+		Text:     pipeline.NewTextEmbedder(roleText, tok, tmpl, 0),
+		Temp:     cropTemp,
+		Floor:    cropNameFloor,
 	}
-	out, err := pipeline.CropRescorer{Namer: m.rs}.Rescore(
-		pipeline.Call{Img: img, Prompt: models.Prompt{CropTemp: temp}, Runner: r}, dets, words)
-	if err != nil {
-		return nil, fmt.Errorf("hybrid: %w", err)
-	}
-	return out, nil
 }

@@ -81,6 +81,17 @@ func (s *stubTowers) InputNames(role string) []string {
 }
 func (s *stubTowers) OutputNames(role string) []string { return []string{"embeds"} }
 
+// rescore runs the router's rescoring stage on one detection list, as Infer does for the open
+// branch (the request's crop_temp is temp).
+func (m *hybrid) rescore(img image.Image, dets []models.Detection, words []string,
+	temp float64, r models.Runner) ([]models.Detection, error) {
+	if m.rs == nil {
+		return dets, nil
+	}
+	return pipeline.CropRescorer{Namer: m.rs, Prefix: "hybrid"}.Rescore(
+		pipeline.Call{Img: img, Prompt: models.Prompt{CropTemp: temp}, Runner: r}, dets, words)
+}
+
 // newTestHybrid builds a router carrying only the rescorer — the detectors are never called,
 // since rescore() operates on detections that already exist.
 func newTestHybrid(t *testing.T) *hybrid {
@@ -314,11 +325,11 @@ func TestNewRescorerOptIn(t *testing.T) {
 // Roles drives what lifecycle loads. Declaring the towers must claim their sessions; not
 // declaring them must not.
 func TestRolesIncludeTowersOnlyWhenPresent(t *testing.T) {
-	plain := (&hybrid{}).Roles()
+	plain := (&hybrid{rf: fakeRF{}}).Roles()
 	if len(plain) != 2 {
 		t.Errorf("plain router roles = %v, want just the two detectors", plain)
 	}
-	with := (&hybrid{rs: &pipeline.CropNamer{}}).Roles()
+	with := (&hybrid{rf: fakeRF{}, rs: &pipeline.CropNamer{}}).Roles()
 	if !contains(with, roleCrop) || !contains(with, roleText) {
 		t.Errorf("router with a rescorer has roles %v, want %q and %q", with, roleCrop, roleText)
 	}

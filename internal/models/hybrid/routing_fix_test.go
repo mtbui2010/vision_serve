@@ -3,7 +3,6 @@ package hybrid
 import (
 	"fmt"
 	"image"
-	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -11,26 +10,8 @@ import (
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/models/groundingdino"
+	"visionserve/internal/pipeline"
 )
-
-// B2: a word repeated in the prompt ("zebra. Zebra.") must reach the rescorer ONCE. Twice, the
-// softmax runs over two identical rows and every rescored confidence is divided by the repeat
-// count; it also costs a duplicate GroundingDINO phrase.
-func TestParseClassesDedupesCaseInsensitively(t *testing.T) {
-	cases := []struct {
-		in   string
-		want []string
-	}{
-		{"zebra. zebra.", []string{"zebra"}},
-		{"Zebra. cup. ZEBRA. cup.", []string{"zebra", "cup"}},
-		{"cup. zebra. cup.", []string{"cup", "zebra"}}, // first-seen order
-	}
-	for _, c := range cases {
-		if got := parseClasses(c.in); !reflect.DeepEqual(got, c.want) {
-			t.Errorf("parseClasses(%q) = %v, want %v", c.in, got, c.want)
-		}
-	}
-}
 
 // wordTowers is stubTowers with a text tower that, like the real one, embeds identical text
 // identically: every distinct input_ids row gets its own basis vector, in first-seen order.
@@ -82,24 +63,12 @@ func TestRescoreConfidenceNotDividedByDuplicateWords(t *testing.T) {
 	if len(dup) != 1 || dup[0].Conf > 0.41 {
 		t.Fatalf("setup: duplicated words gave %+v, want the halved 0.4 this test guards against", dup)
 	}
-	got, err := m.rescore(canvas(), dets, parseClasses("zebra. Zebra."), cropTemp, st)
+	got, err := m.rescore(canvas(), dets, pipeline.ParseClasses("zebra. Zebra."), cropTemp, st)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(got) != 1 || got[0].Conf < 0.8-1e-6 {
 		t.Fatalf("rescored %+v, want one detection keeping conf 0.8 (a single word is certain)", got)
-	}
-}
-
-// B7: internal whitespace must not decide the route — "dining  table" is RF-DETR's
-// "dining table".
-func TestParseClassesCollapsesInternalWhitespace(t *testing.T) {
-	if got, want := parseClasses("dining  table.\tteddy \t bear."), []string{"dining table", "teddy bear"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("parseClasses = %q, want %q", got, want)
-	}
-	m := &hybrid{vocab: map[string]bool{"dining table": true}}
-	if known, unknown := m.partition(parseClasses("dining  table.")); len(known) != 1 || len(unknown) != 0 {
-		t.Fatalf("partition = %v / %v, want dining table routed to RF-DETR", known, unknown)
 	}
 }
 
@@ -156,8 +125,9 @@ func (r *lockProbeRunner) OutputNames(role string) []string {
 func newLockTestHybrid(t *testing.T) *hybrid {
 	t.Helper()
 	tok := gdinoTokenizer(t)
-	return &hybrid{cfg: models.Config{Name: "rfdetr-gdino"}, rf: fakeRF{}, tok: tok,
-		vocab: map[string]bool{"cup": true}}
+	m := &hybrid{cfg: models.Config{Name: "rfdetr-gdino", Labels: []string{"cup"}}, rf: fakeRF{}}
+	m.wire(&pipeline.GDINO{Role: roleGDINO, Tok: tok})
+	return m
 }
 
 func gdinoTokenizer(t *testing.T) *groundingdino.Tokenizer {

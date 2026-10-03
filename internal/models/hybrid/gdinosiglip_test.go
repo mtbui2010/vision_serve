@@ -42,7 +42,7 @@ func TestGDINOSigLIPRolesAndRouting(t *testing.T) {
 	if got := strings.Join(m.Roles(), ","); got != "gdino,crop,text" {
 		t.Fatalf("Roles() = %s, want gdino,crop,text (no rfdetr session may be requested)", got)
 	}
-	known, unknown := m.partition([]string{"cup", "towel", "zebra"})
+	known, unknown := m.rt.Partition([]string{"cup", "towel", "zebra"})
 	if len(known) != 0 || len(unknown) != 3 {
 		t.Fatalf("partition = %v / %v, want every word routed to GroundingDINO", known, unknown)
 	}

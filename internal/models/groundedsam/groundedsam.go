@@ -2,10 +2,10 @@
 // text-prompted detection) followed by MobileSAM (box-prompted segmentation). It is a
 // fully free community pipeline — no AGPL, no Python at runtime (see CLAUDE.md).
 //
-// It composes the two existing models without duplicating their logic: it calls
-// groundingdino.Detect for boxes/labels, then mobilesam.Segment for one mask per box. The
-// heavy ONNX sessions (gdino, encoder, decoder) are owned by lifecycle.Manager; this model
-// only orchestrates them via the Runner.
+// It is a configuration of two pipeline stages — pipeline.GDINO for boxes/labels, pipeline.SAM
+// for one mask per box — composed by pipeline.Grounded; it duplicates neither model's logic. The
+// heavy ONNX sessions (gdino, encoder, decoder) are owned by lifecycle.Manager; this model only
+// orchestrates them via the Runner.
 package groundedsam
 
 import (
@@ -13,11 +13,9 @@ import (
 	"image"
 	"strings"
 
-	"visionserve/internal/engine"
 	"visionserve/internal/models"
 	"visionserve/internal/models/groundingdino"
-	"visionserve/internal/models/mobilesam"
-	"visionserve/internal/vision/util"
+	"visionserve/internal/pipeline"
 )
 
 func init() {
@@ -31,28 +29,27 @@ const (
 )
 
 type groundedSAM struct {
-	cfg   models.Config
-	tok   *groundingdino.Tokenizer
-	joint bool // gdino weights rebuild the text mask for any phrase count -> score in one pass
+	cfg models.Config
+	gs  pipeline.Grounded
 }
 
-// New loads the GroundingDINO tokenizer once. The vocab lives next to the GroundingDINO
-// weights; the manifest references those via a relative path (files.gdino), so we resolve
-// vocab.txt from that file's directory and fall back to <cfg.Dir>/vocab.txt.
+// New loads the GroundingDINO tokenizer once. The vocab lives next to the GroundingDINO weights;
+// the manifest references those via a relative path (files.gdino), so vocab.txt is resolved from
+// that file's directory (groundingdino.VocabPath). The manifest's conf_threshold/text_threshold
+// are GroundingDINO's box/text thresholds.
 func New(cfg models.Config) (models.Base, error) {
 	for _, role := range []string{roleGDINO, roleEncoder, roleDecoder} {
 		if cfg.Files[role] == "" {
 			return nil, fmt.Errorf("grounded-sam: manifest must declare files.%s", role)
 		}
 	}
-	tok, err := groundingdino.LoadTokenizer(groundingdino.VocabPath(cfg.Files[roleGDINO], cfg.Dir))
+	det, err := pipeline.NewGDINO(roleGDINO, cfg.Files[roleGDINO], cfg.Dir, cfg.ConfThresh, cfg.TextThresh)
 	if err != nil {
 		return nil, err
 	}
 	return &groundedSAM{
-		cfg:   cfg,
-		tok:   tok,
-		joint: groundingdino.JointTextPassOrSafe(cfg.Files[roleGDINO]),
+		cfg: cfg,
+		gs:  pipeline.Grounded{Detector: det, Segmenter: pipeline.SAM{Encoder: roleEncoder, Decoder: roleDecoder}},
 	}, nil
 }
 
@@ -74,46 +71,9 @@ func (m *groundedSAM) Infer(img image.Image, prompt models.Prompt, r models.Runn
 	if strings.TrimSpace(prompt.Text) == "" {
 		return models.Result{}, fmt.Errorf("grounded-sam requires a text prompt, e.g. --prompt \"cat. remote.\"")
 	}
-	boxThresh, textThresh := groundingdino.Thresholds(m.cfg.ConfThresh, m.cfg.TextThresh, prompt)
-
-	// 1) Open-vocab detection (GroundingDINO).
-	gdinoRun := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
-		return r.Run(roleGDINO, inputs)
-	}
-	dets, err := groundingdino.Detect(img, prompt.Text, m.tok, gdinoRun, r.OutputNames(roleGDINO), boxThresh, textThresh,
-		groundingdino.WithJointTextPass(m.joint))
+	words, err := pipeline.TextPhrases(prompt.Text)
 	if err != nil {
 		return models.Result{}, err
 	}
-	if len(dets) == 0 {
-		return models.Result{Detections: dets}, nil // nothing to segment
-	}
-
-	// 2) Segment one mask per detected box (MobileSAM).
-	boxes := make([][4]float64, len(dets))
-	for i, d := range dets {
-		boxes[i] = d.BBox
-	}
-	encRun := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
-		return r.Run(roleEncoder, inputs)
-	}
-	decRun := func(inputs map[string]engine.Tensor) ([]engine.Tensor, error) {
-		return r.Run(roleDecoder, inputs)
-	}
-	encInName := util.FirstName(r.InputNames(roleEncoder), "input_image")
-	masks, err := mobilesam.Segment(img, boxes, encRun, decRun, encInName, r.OutputNames(roleDecoder))
-	if err != nil {
-		return models.Result{}, err
-	}
-
-	// Keep masks index-aligned with detections; surface the detection box + score on each
-	// mask so a consumer can pair them even without the detections slice.
-	for i := range masks {
-		if i < len(dets) {
-			masks[i].BBox = dets[i].BBox
-			masks[i].Conf = dets[i].Conf
-		}
-	}
-
-	return models.Result{Detections: dets, Masks: masks}, nil
+	return m.gs.Infer(pipeline.Call{Img: img, Prompt: prompt, Runner: r}, words)
 }

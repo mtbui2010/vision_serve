@@ -123,7 +123,10 @@ func SoftmaxAt(row []float32, k int, temp float64) float32 {
 // Measured on the held-out-names protocol (ovd-edge/docs/FINDINGS.md §1–§2): renaming alone is
 // worth +1.4 mAP, conf × P alone +8.8, both +12.6 — SigLIP earns its place as a REJECTOR, its
 // softmax flattening on background crops.
-type CropRescorer struct{ Namer *CropNamer }
+type CropRescorer struct {
+	Namer  *CropNamer
+	Prefix string // starts error messages ("hybrid"); empty for none
+}
 
 // Rescore implements Rescorer. `words` must be exactly the words the detections were asked
 // about: scoring against a wider list is a different, worse condition (59.96 against 62.16).
@@ -137,6 +140,9 @@ func (cr CropRescorer) Rescore(c Call, dets []models.Detection, words []string) 
 	}
 	names, err := cr.Namer.Name(c, boxes, words, c.Prompt.CropTemp)
 	if err != nil {
+		if cr.Prefix != "" {
+			err = fmt.Errorf("%s: %w", cr.Prefix, err)
+		}
 		return nil, err
 	}
 	var out []models.Detection

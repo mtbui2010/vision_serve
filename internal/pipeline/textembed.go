@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
@@ -188,14 +187,4 @@ func pickInput(names []string, want string) string {
 		}
 	}
 	return util.FirstName(names, want)
-}
-
-// joinPhrases rebuilds a GroundingDINO-style prompt from words ([cat, remote] -> "cat. remote.").
-func joinPhrases(words []string) string {
-	var b strings.Builder
-	for _, w := range words {
-		b.WriteString(w)
-		b.WriteString(". ")
-	}
-	return strings.TrimSpace(b.String())
 }
