@@ -1,0 +1,73 @@
+# deploy/Dockerfile.convert — the VisionServe CHECKPOINT CONVERTER image.
+#
+# Separate from the server image on purpose: exporting needs Python + PyTorch + TensorFlow (GBs),
+# and the server must stay a lean, Python-free Go binary (CLAUDE.md rule 3). This image runs once
+# per conversion and exits; it writes the converted model straight into the registry volume the
+# server already watches.
+#
+#   make docker-convert                      # -> visionserve-convert:<version>
+#   visionserve convert rfdetr ./ckpt.pth --name my-det      # host wrapper (mounts + runs this)
+#
+#   # or without the host binary:
+#   docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp \
+#     -v ~/.visionserve_models:/root/.models -v $PWD:/in:ro \
+#     mtbui2010/visionserve-convert rfdetr /in/ckpt.pth --name my-det
+#
+# Two venvs, because TensorFlow/tf2onnx and PyTorch cannot share one (tf2onnx pins protobuf ~=3.20
+# and numpy<2; torch/transformers need numpy 2): /opt/torchenv (rfdetr, hf, torchscript, pytorch)
+# and /opt/tfenv (tensorflow, keras, tflite). vsconvert-entrypoint.sh routes by format.
+
+############################
+# Stage 1 — the Go binary. The converter installs through `visionserve pull <folder>`, so the
+# registry's own validation (license allowlist, architecture, files) is the last word.
+############################
+FROM golang:1.22-bookworm AS build
+WORKDIR /src
+COPY go.mod go.sum* ./
+RUN go mod download
+COPY . .
+ARG VERSION=docker
+RUN CGO_ENABLED=1 go build -ldflags "-s -w -X visionserve/internal/cli.Version=${VERSION}" \
+        -o /out/visionserve ./cmd/visionserve
+
+############################
+# Stage 2 — converter runtime
+############################
+FROM python:3.11-slim-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# The converter IS the Python SDK's `convert` extra (clients/python/visionserve/convert): one source
+# for `pip install visionserve[convert]` and this image. requirements*.txt pin the verified versions.
+COPY convert/requirements.txt convert/requirements-tf.txt /tmp/
+RUN python -m venv /opt/torchenv \
+ && /opt/torchenv/bin/pip install --no-cache-dir --upgrade pip \
+ && /opt/torchenv/bin/pip install --no-cache-dir \
+        --extra-index-url https://download.pytorch.org/whl/cpu -r /tmp/requirements.txt
+RUN python -m venv /opt/tfenv \
+ && /opt/tfenv/bin/pip install --no-cache-dir --upgrade pip \
+ && /opt/tfenv/bin/pip install --no-cache-dir -r /tmp/requirements-tf.txt
+
+COPY --from=build /out/visionserve /usr/local/bin/visionserve
+COPY clients/python /opt/vsconvert-src
+RUN /opt/torchenv/bin/pip install --no-cache-dir --no-deps /opt/vsconvert-src \
+ && /opt/tfenv/bin/pip install --no-cache-dir --no-deps /opt/vsconvert-src
+COPY convert/vsconvert-entrypoint.sh /usr/local/bin/vsconvert
+# The verification tiers (end-to-end parity, mAP, speed) start a temporary `visionserve serve`
+# when no server is reachable. The Go binary needs a libonnxruntime.so for that; the CPU one
+# shipped inside the onnxruntime wheel is enough for verification.
+RUN ln -s "$(ls /opt/torchenv/lib/python3.11/site-packages/onnxruntime/capi/libonnxruntime.so.* | head -1)" \
+        /usr/local/lib/libonnxruntime.so
+ENV ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
+
+# `--user <host uid>` has no /etc/passwd entry here; getpass.getuser() (torch, tf) reads these
+# first instead of failing with "getpwuid(): uid not found".
+ENV USER=visionserve LOGNAME=visionserve
+ENV VISIONSERVE_MODELS=/root/.models \
+    VISIONSERVE_BIN=/usr/local/bin/visionserve \
+    HF_HOME=/cache/hf \
+    PYTHONUNBUFFERED=1
+# Writable by the --user the host wrapper runs as.
+RUN mkdir -p /root/.models /cache && chmod 0777 /root /root/.models /cache
+ENTRYPOINT ["vsconvert"]
+CMD ["--help"]

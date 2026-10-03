@@ -34,6 +34,10 @@ func New(reg *registry.Registry, mgr *lifecycle.Manager, tmpl *templates.Store, 
 		Addr:              addr,
 		Handler:           s.routes(),
 		ReadHeaderTimeout: 10 * time.Second,
+		// Bound slow uploads and idle keep-alives. No WriteTimeout: a first request may wait
+		// minutes for a model to load (TensorRT engine build), and that is not a client fault.
+		ReadTimeout: 2 * time.Minute,
+		IdleTimeout: 2 * time.Minute,
 	}
 	return s
 }
@@ -44,10 +48,14 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /api/models", s.handleModels)
 	mux.HandleFunc("POST /api/load", s.handleLoad)
 	mux.HandleFunc("POST /api/unload", s.handleUnload)
-	mux.HandleFunc("POST /api/predict", s.handlePredict)
-	mux.HandleFunc("POST /api/infer_tensor", s.handleInferTensor)
-	mux.HandleFunc("POST /api/explain", s.handleExplain)
-	mux.HandleFunc("POST /api/templates", s.handleTemplateRegister)
+	// Whole-body caps (see limitBody): an image + a depth map + form fields for the multipart
+	// routes, a raw tensor for infer_tensor, several template images for templates.
+	const formBody = maxImageBytes + maxTensorBytes + 1<<20
+	mux.HandleFunc("POST /api/predict", limitBody(formBody, s.handlePredict))
+	mux.HandleFunc("POST /api/infer_tensor", limitBody(maxTensorBytes+1<<20, s.handleInferTensor))
+	mux.HandleFunc("POST /api/preprocess", limitBody(maxImageBytes+1<<20, s.handlePreprocess))
+	mux.HandleFunc("POST /api/explain", limitBody(maxImageBytes+1<<20, s.handleExplain))
+	mux.HandleFunc("POST /api/templates", limitBody(8*maxImageBytes, s.handleTemplateRegister))
 	mux.HandleFunc("GET /api/templates", s.handleTemplateList)
 	mux.HandleFunc("DELETE /api/templates/{name}", s.handleTemplateDelete)
 	return logRequests(mux)
@@ -59,10 +67,13 @@ func (s *Server) ListenAndServe() error {
 	return s.http.ListenAndServe()
 }
 
-// Shutdown gracefully stops the server + releases models.
+// Shutdown gracefully stops the server, THEN releases the models: in-flight requests are drained
+// first (http.Server.Shutdown waits for them), so no request ever runs on a released session and
+// no new request can load a model after the manager has stopped.
 func (s *Server) Shutdown(ctx context.Context) error {
+	err := s.http.Shutdown(ctx)
 	s.mgr.Close()
-	return s.http.Shutdown(ctx)
+	return err
 }
 
 // logRequests is middleware that logs each request (method, path, duration).

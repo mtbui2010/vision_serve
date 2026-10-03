@@ -157,6 +157,32 @@ detections, not bit-identical coordinates.
 Both weight files keep the same 5 input names and 2 output names, so
 `internal/models/groundingdino` binds them identically.
 
+### Why the input is squashed to 800×800, not aspect-kept
+
+`GroundingDinoImageProcessor` keeps the aspect ratio: shortest edge 800, longest ≤ 1333, so a
+848×480 photo is fed at 1333×755. VisionServe squashes to 800×800 instead. Matching the processor
+was tried on 2026-10-03 and dropped, for two reasons:
+
+1. **The legacy tracer cannot export it correctly** (`torch.onnx.export(dynamo=False)`,
+   torch 2.10, transformers 5.9).
+   - **Dynamic H/W:** with dynamic height/width axes, the Swin backbone's odd-size padding `if`
+     is frozen at the trace size. Any other size then fails in ORT (`Concat ... 83 vs 84`).
+     Even at multiples of 32, and even at the trace size itself, the graph disagreed with
+     PyTorch (max |Δlogit| 1.0–4.0).
+   - **Padded mask:** the static graph also mishandles a `pixel_mask` with zeros (|Δlogit|
+     0.5–1.4 vs PyTorch). Its mask-dependent code was specialised to the all-ones trace mask.
+     Serving is unaffected, because it always sends an all-ones mask. But "pad an
+     aspect-kept image into a fixed canvas" is not an option with this graph either.
+   - **Padding itself is fine** in PyTorch: padded vs unpadded detections IoU ≥ 0.995.
+2. **No accuracy evidence that it would help here.** On the held-out-names protocol,
+   transformers GroundingDINO (processor, aspect-kept) scored 49.06 held-out mAP. The served
+   ONNX graph (800×800 squash) scored 49.54 (ovd-edge FINDINGS §16; the two also differ in
+   runtime). Meanwhile 1333×755 is ~1.6× the pixels.
+
+If this is revisited, try the dynamo exporter (`torch.export` with symbolic H/W). Every exported
+size must be checked against PyTorch, the trace size included; the static graph passing at
+800×800 says nothing about other sizes.
+
 ## Usage
 
 GroundingDINO requires a text prompt. Queries are lowercased and dot-separated:

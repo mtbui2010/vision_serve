@@ -99,11 +99,15 @@ visionserve run sam2 image.jpg --box 10,10,100,100 --box 200,200,50,50
 
 ## Preprocessing
 
-The Go implementation:
-1. Resizes the image so its long side equals 1024 (aspect-ratio preserved).
-2. Zero-pads to exactly 1024×1024 (bottom/right padding).
-3. Normalizes per-channel with ImageNet mean/std (unlike MobileSAM which bakes
+The Go implementation follows upstream `SAM2Transforms`:
+1. Squashes the image to exactly 1024×1024 (no aspect preservation, no padding); box/point
+   prompts are scaled per axis (x·1024/W, y·1024/H).
+2. Normalizes per-channel with ImageNet mean/std (unlike MobileSAM which bakes
    normalization into the graph and expects raw 0-255 input).
+3. The decoder's 256×256 mask logits are bilinearly upsampled to the ORIGINAL image size
+   (PyTorch `align_corners=False` semantics) and thresholded at 0, so masks and boxes are in
+   original-image coordinates. Before 2026-10 the Go side letterboxed and returned 256×256
+   masks; verified against a Python reference since (mask IoU 0.985–0.998).
 
 > If your ONNX export bakes normalization into the graph, edit the `sam2Mean`/`sam2Std`
 > comment in `internal/models/sam2/preprocess.go` and pass raw 0..255 values instead.

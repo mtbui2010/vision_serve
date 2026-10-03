@@ -3,6 +3,7 @@ package background
 import (
 	"image"
 
+	"visionserve/internal/engine"
 	"visionserve/internal/models"
 )
 
@@ -48,19 +49,22 @@ func clampF(v, lo, hi float64) float64 {
 // MobileSAM at a GRID of lower-frame seed points — each seed in its OWN prompt so a seed on
 // bare surface produces a clean surface mask even on a cluttered tabletop — then keeping the
 // LARGEST mask that qualifies as a support surface (large by area, AND border-touching).
-// One encoder pass per seed (~tens of ms each). Returns a row-major []bool (len W*H) at
-// original resolution, or (nil, nil) when no seed yields a qualifying surface.
+// The encoder runs ONCE for all seeds (see encoderOnce) and each seed costs one decoder call.
+// Returns a row-major []bool (len W*H) at original resolution, or (nil, nil) when no seed
+// yields a qualifying surface.
 func (m *backgroundModel) backgroundSAM(img image.Image, prompt models.Prompt, r models.Runner) ([]bool, error) {
 	w, h := img.Bounds().Dx(), img.Bounds().Dy()
 	if w <= 0 || h <= 0 {
 		return nil, nil
 	}
 	imgArea := float64(w * h)
+	bgMaxPct, minPct := m.bgThresholds(prompt)
 
 	var best []bool
 	var bestArea float64
+	enc := &encoderOnce{Runner: r}
 	for _, seed := range samSeedPoints(w, h) {
-		_, bitmaps, err := m.seg.InferMasks(img, models.Prompt{Points: []models.Point{seed}}, r)
+		_, bitmaps, err := m.seg.InferMasks(img, models.Prompt{Points: []models.Point{seed}}, enc)
 		if err != nil {
 			return nil, err
 		}
@@ -75,7 +79,7 @@ func (m *backgroundModel) backgroundSAM(img image.Image, prompt models.Prompt, r
 			}
 			// Require a support surface that touches the border (a table/floor does), and
 			// keep the LARGEST such mask across all seeds.
-			if !touchesBorder(bm.Data, w, h) || !isBackgroundMask(areaPx, imgArea, true) {
+			if !touchesBorder(bm.Data, w, h) || !isBackgroundMask(areaPx, imgArea, true, bgMaxPct, minPct) {
 				continue
 			}
 			if areaPx > bestArea {
@@ -88,4 +92,29 @@ func (m *backgroundModel) backgroundSAM(img image.Image, prompt models.Prompt, r
 		return nil, nil
 	}
 	return best, nil
+}
+
+// encoderOnce wraps the request's Runner so the MobileSAM ENCODER runs once per backgroundSAM
+// call. Every seed is a separate InferMasks call (one point prompt each, see samSeedGrid), and
+// InferMasks re-encodes the image every time: 6 seeds were 6 identical encoder passes on the same
+// image. The embedding depends only on the image, so the first pass's output is replayed for the
+// rest; decoder calls pass straight through. It lives for one call on one goroutine, so it needs
+// no lock, and Runner outputs are Go-owned copies, so replaying them is safe.
+type encoderOnce struct {
+	models.Runner
+	enc []engine.Tensor
+}
+
+func (e *encoderOnce) Run(role string, in map[string]engine.Tensor) ([]engine.Tensor, error) {
+	if role != roleEncoder {
+		return e.Runner.Run(role, in)
+	}
+	if e.enc != nil {
+		return e.enc, nil
+	}
+	out, err := e.Runner.Run(role, in)
+	if err == nil {
+		e.enc = out
+	}
+	return out, err
 }

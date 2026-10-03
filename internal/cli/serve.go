@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -89,8 +91,11 @@ func runServe(args []string) error {
 
 	srv := server.New(reg, mgr, tmpl, *addr)
 
-	// graceful shutdown on SIGINT/SIGTERM
+	// graceful shutdown on SIGINT/SIGTERM. ListenAndServe returns as soon as Shutdown STARTS, so
+	// wait for it to finish draining requests and releasing models before returning (main exits).
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		sig := make(chan os.Signal, 1)
 		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 		<-sig
@@ -100,8 +105,9 @@ func runServe(args []string) error {
 		_ = srv.Shutdown(ctx)
 	}()
 
-	if err := srv.ListenAndServe(); err != nil && err.Error() != "http: Server closed" {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	<-stopped
 	return nil
 }

@@ -6,9 +6,7 @@ task: segmentation
 license: Apache-2.0
 architecture: efficient-sam
 
-# Two ONNX sessions (roles): encoder → decoder.
-# TODO: verify the actual file names on onnx-community/EfficientSAM (HuggingFace).
-# The names below follow the standard HF Optimum export convention; adjust if different.
+# Two ONNX sessions (roles): encoder → decoder (I/O verified on these files).
 source_url: https://huggingface.co/yunyangx/EfficientSAM/
 sha256:
   encoder: 84ed466ffcc5c1f8d08409bc34a23bb364ab2c15e402cb12d4335a42be0e0951
@@ -19,15 +17,16 @@ files:
   decoder: efficient_sam_decoder.onnx
 
 input:
-  # The encoder resizes the long side to 1024 in Go (preprocess.go).
-  # Layout is NCHW (unlike MobileSAM which uses HWC/NHWC).
+  # Go feeds the ORIGINAL-size image as NCHW pixel/255; the encoder GRAPH resizes to
+  # 1024x1024 and ImageNet-normalizes itself (verified by graph inspection), so no
+  # normalize block here. width/height are informational only.
   width: 1024
   height: 1024
   layout: NCHW
   letterbox: false
 
 postprocess:
-  type: sam        # mask threshold = logit > 0; mask encoded as column-major RLE
+  type: sam        # output_masks already at original res; threshold logit >= 0; column-major RLE
 
 runtime:
   prefer: [cuda, cpu]

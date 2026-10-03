@@ -100,11 +100,16 @@ func TestGraspParamsOverride(t *testing.T) {
 		t.Fatalf("request: got Dmin=%v Dmax=%v want 33/99", p.Dmin, p.Dmax)
 	}
 
-	// MaxDet → MaxGrasps cap.
-	gc := &graspModel{}
-	gc.cfg.MaxDet = 7
-	if p := gc.graspParams(models.Prompt{}); p.MaxGrasps != 7 {
-		t.Fatalf("MaxGrasps: got %v want 7", p.MaxGrasps)
+	// B11: the per-mask grasp cap is its own default, NOT the detector's max_detections.
+	// grasp-rfdetr ships max_detections: 300 for RF-DETR; reusing it let one star-shaped mask
+	// return thousands of grasps (multi-MB responses).
+	for _, maxDet := range []int{0, 7, 300} {
+		gc := &graspModel{}
+		gc.cfg.MaxDet = maxDet
+		if p := gc.graspParams(models.Prompt{}); p.MaxGrasps != defaultMaxGraspsPerMask {
+			t.Fatalf("max_detections=%d: MaxGrasps = %v, want the per-mask default %d",
+				maxDet, p.MaxGrasps, defaultMaxGraspsPerMask)
+		}
 	}
 }
 

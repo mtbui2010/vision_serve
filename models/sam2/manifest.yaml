@@ -19,12 +19,18 @@ files:
   decoder: sam2_tiny_decoder.onnx
 
 input:
+  # Informational: internal/models/sam2 builds the encoder input itself, mirroring upstream
+  # SAM2Transforms — image SQUASHED to 1024x1024 (no letterbox), /255, ImageNet mean/std,
+  # NCHW [1,3,1024,1024]. Prompts are scaled per axis (x*1024/W, y*1024/H).
   width: 1024
   height: 1024
-  layout: NHWC
+  layout: NCHW
 
 postprocess:
-  type: sam     # mask threshold = logit > 0; mask encoded as column-major RLE
+  # decoder emits 3 low-res [256x256] logit candidates; the best (by iou_predictions) is
+  # bilinearly upsampled to the ORIGINAL image size, thresholded at 0, encoded as
+  # column-major RLE.
+  type: sam
 
 runtime:
   prefer: [cuda, cpu]

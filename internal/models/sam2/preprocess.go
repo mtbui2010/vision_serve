@@ -1,95 +1,59 @@
 package sam2
 
 import (
+	"fmt"
 	"image"
-	"math"
 
 	"github.com/disintegration/imaging"
 
 	"visionserve/internal/engine"
 )
 
-// SAM2 pixel normalization constants (ImageNet mean/std used by SAM2).
-// These are applied in Go because the SAM2 ONNX encoder expects a pre-normalized
-// NCHW tensor (unlike MobileSAM which bakes normalization into the graph and
-// takes raw 0..255 HWC input).
-//
-// TODO: verify these constants match your ONNX export. Some community exports bake
-// normalization into the graph (like MobileSAM) and expect raw 0..255 input instead.
-// If you see wildly wrong masks, try commenting out normalization and passing 0..255.
+// SAM2 pixel normalization constants (ImageNet mean/std, upstream SAM2Transforms).
+// The SharpAI/sam2-hiera-tiny-onnx encoder does NOT bake normalization into the graph
+// (verified: feeding the upstream-normalized tensor reproduces the upstream masks), so
+// Go applies it before ORT.
 var (
 	sam2Mean = [3]float32{0.485, 0.456, 0.406} // R, G, B
 	sam2Std  = [3]float32{0.229, 0.224, 0.225}
 )
 
-// encoderInput builds the SAM2 encoder input tensor and returns coordinate metadata.
+// encoderInput builds the SAM2 encoder input tensor, mirroring upstream
+// sam2/utils/transforms.py SAM2Transforms exactly:
 //
-// SAM2 encoder expects NCHW float32 [1, 3, 1024, 1024] with SAM2 normalization
-// (ImageNet mean/std applied, values in roughly [-2.1..2.6] range).
+//	ToTensor (/255) → Resize((1024, 1024)) → Normalize(ImageNet mean/std)
 //
-// The image is resized so the long side equals 1024 (aspect ratio preserved),
-// then zero-padded to exactly 1024×1024 (bottom/right padding only).
+// i.e. the image is SQUASHED to 1024×1024 (aspect ratio NOT preserved, no padding).
+// Prompt coordinates must therefore be scaled PER AXIS (x·1024/W, y·1024/H — upstream
+// transform_coords with normalize_coords=True), and the 256×256 low-res mask covers the
+// whole image, so it is upsampled straight to (H, W) (upstream postprocess_masks).
 //
-// Returns:
-//   - tensor: [1, 3, 1024, 1024] float32 NCHW
-//   - scale:  factor to map original coords → 1024-space (same on both axes since
-//     aspect ratio is preserved; padding is at the edges)
-//   - padX, padY: right/bottom padding in pixels (for coordinate mapping if needed)
-//   - err: non-nil on failure
-func encoderInput(img image.Image) (tensor engine.Tensor, scale float32, padX, padY int, err error) {
+// Returns the NCHW [1,3,1024,1024] float32 tensor and the per-axis scale factors that
+// map ORIGINAL pixel coords into the 1024-space.
+func encoderInput(img image.Image) (tensor engine.Tensor, scaleX, scaleY float32, err error) {
 	b := img.Bounds()
 	origW, origH := b.Dx(), b.Dy()
-
-	sc := float64(encoderSize) / float64(maxInt(origW, origH))
-	newW := int(math.Round(float64(origW) * sc))
-	newH := int(math.Round(float64(origH) * sc))
-	if newW < 1 {
-		newW = 1
-	}
-	if newH < 1 {
-		newH = 1
+	if origW <= 0 || origH <= 0 {
+		return engine.Tensor{}, 0, 0, fmt.Errorf("sam2: empty image %dx%d", origW, origH)
 	}
 
-	resized := imaging.Resize(img, newW, newH, imaging.Linear) // *image.NRGBA
+	// Bilinear (imaging.Linear widens its support when downscaling, i.e. antialiased —
+	// the same as torchvision Resize's default antialias=True).
+	resized := imaging.Resize(img, encoderSize, encoderSize, imaging.Linear) // *image.NRGBA
 
-	padX = encoderSize - newW
-	padY = encoderSize - newH
-
-	// NCHW layout: [1, 3, 1024, 1024] — channels first, padded canvas.
-	// Pixel values: normalize per channel with ImageNet mean/std.
-	// Padded region stays at 0.0 (zero-mean after normalization would be ≈-mean/std,
-	// but we leave it at 0 — padding is masked by the aspect-ratio scale anyway).
-	data := make([]float32, 3*encoderSize*encoderSize)
-	minX := resized.Bounds().Min.X
-	minY := resized.Bounds().Min.Y
-	for c := 0; c < 3; c++ {
-		chOff := c * encoderSize * encoderSize
-		for y := 0; y < newH; y++ {
-			for x := 0; x < newW; x++ {
-				px := resized.NRGBAAt(minX+x, minY+y)
-				var raw float32
-				switch c {
-				case 0:
-					raw = float32(px.R) / 255.0
-				case 1:
-					raw = float32(px.G) / 255.0
-				case 2:
-					raw = float32(px.B) / 255.0
-				}
-				data[chOff+y*encoderSize+x] = (raw - sam2Mean[c]) / sam2Std[c]
-			}
+	const plane = encoderSize * encoderSize
+	data := make([]float32, 3*plane)
+	for y := 0; y < encoderSize; y++ {
+		row := resized.Pix[y*resized.Stride : y*resized.Stride+encoderSize*4]
+		for x := 0; x < encoderSize; x++ {
+			p := row[x*4 : x*4+3]
+			i := y*encoderSize + x
+			data[i] = (float32(p[0])/255.0 - sam2Mean[0]) / sam2Std[0]
+			data[plane+i] = (float32(p[1])/255.0 - sam2Mean[1]) / sam2Std[1]
+			data[2*plane+i] = (float32(p[2])/255.0 - sam2Mean[2]) / sam2Std[2]
 		}
-		// Padded rows/cols remain 0.0 (already zero-initialised).
 	}
 
 	tensor = engine.F32(data, 1, 3, int64(encoderSize), int64(encoderSize))
-	scale = float32(sc)
-	return tensor, scale, padX, padY, nil
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
+	return tensor, float32(encoderSize) / float32(origW), float32(encoderSize) / float32(origH), nil
 }

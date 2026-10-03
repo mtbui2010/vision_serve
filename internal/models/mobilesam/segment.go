@@ -42,7 +42,6 @@ func Segment(
 	embedding := encOuts[0]
 
 	// 2) Decoder per box → mask.
-	zeros := make([]float32, 256*256)
 	masks := make([]api.Mask, 0, len(boxes))
 	for _, b := range boxes {
 		ps := pointSet{
@@ -54,7 +53,7 @@ func Segment(
 			"image_embeddings": embedding,
 			"point_coords":     engine.F32(coords, 1, int64(ps.n()), 2),
 			"point_labels":     engine.F32(ps.labels, 1, int64(ps.n())),
-			"mask_input":       engine.F32(zeros, 1, 1, 256, 256),
+			"mask_input":       zeroMaskTensor(),
 			"has_mask_input":   engine.F32([]float32{0}, 1),
 			"orig_im_size":     engine.F32([]float32{float32(origH), float32(origW)}, 2),
 		}

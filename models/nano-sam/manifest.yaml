@@ -15,7 +15,9 @@ license: MIT
 # The decoder is the standard SAM decoder (same tensor names as MobileSAM decoder):
 #   inputs: image_embeddings, point_coords, point_labels, mask_input,
 #           has_mask_input, orig_im_size
-#   outputs: masks [1,M,H,W], iou_predictions [1,M]
+#   outputs: low_res_masks [1,M,256,256], iou_predictions [1,M]
+#   (low-res logits are upscaled to the ORIGINAL image size per upstream
+#    nanosam/utils/predictor.py upscale_mask before thresholding)
 # TODO: verify tensor names against real ONNX files before production use.
 files:
   encoder: nanosam_encoder.onnx
@@ -27,7 +29,7 @@ input:
   layout: NCHW
 
 postprocess:
-  type: sam        # mask threshold = logit > 0; mask encoded as column-major RLE
+  type: sam        # upscale to original size, threshold logit > 0, column-major RLE
 
 runtime:
   prefer: [cuda, cpu]

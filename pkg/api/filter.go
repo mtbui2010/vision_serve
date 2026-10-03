@@ -27,8 +27,7 @@ func filterDetections(dets []Detection, minSize, maxSize float64) []Detection {
 	if len(dets) == 0 {
 		return dets
 	}
-	out := dets[:0:0] // empty slice, same backing array avoided — allocate fresh
-	out = make([]Detection, 0, len(dets))
+	out := make([]Detection, 0, len(dets)) // fresh slice: never alias the caller's backing array
 	for _, d := range dets {
 		area := d.BBox[2] * d.BBox[3]
 		if minSize > 0 && area < minSize {

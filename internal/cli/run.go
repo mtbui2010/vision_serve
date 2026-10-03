@@ -179,7 +179,8 @@ func loadImage(path string) (image.Image, error) {
 		return nil, fmt.Errorf("failed to open image %s: %w", path, err)
 	}
 	defer f.Close()
-	img, _, err := image.Decode(f)
+	// Same EXIF handling as the server (server/limits.go decodeImage), so `run` and the API agree.
+	img, err := imaging.Decode(f, imaging.AutoOrientation(true))
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode image %s: %w", path, err)
 	}

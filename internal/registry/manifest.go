@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"visionserve/internal/engine"
@@ -11,6 +12,9 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// validModelName is the allowed shape of a model name (it is also a directory name).
+var validModelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 // licenseAllowlist — ONLY permissive licenses are accepted (CLAUDE.md principle #1).
 // AGPL is strictly rejected (YOLO/Ultralytics, FastSAM, YOLO-World).
@@ -66,13 +70,13 @@ type InstanceConfig struct {
 // ExplainConfig khai báo khả năng heatmap visualization của model.
 // Khi không có block này, model không support /api/explain.
 type ExplainConfig struct {
-	Type          string            `yaml:"type"`           // "attention" | "score_cam"
-	Role          string            `yaml:"role"`           // PipelineModel only: which role's ONNX has the explain outputs (e.g. "rfdetr")
-	Outputs       map[string]string `yaml:"outputs"`        // role → ONNX output node name
-	                                                        // attention: {"attention": "cross_attn_weights"}
-	                                                        // score_cam: {"features": "backbone_features"}
-	SpatialStride int               `yaml:"spatial_stride"` // backbone downsample factor (default 32 if 0)
-	TopChannels   int               `yaml:"top_channels"`   // Score-CAM: max channels per request (default 64 if 0)
+	Type    string            `yaml:"type"`    // "attention" | "score_cam"
+	Role    string            `yaml:"role"`    // PipelineModel only: which role's ONNX has the explain outputs (e.g. "rfdetr")
+	Outputs map[string]string `yaml:"outputs"` // role → ONNX output node name
+	// attention: {"attention": "cross_attn_weights"}
+	// score_cam: {"features": "backbone_features"}
+	SpatialStride int `yaml:"spatial_stride"` // backbone downsample factor (default 32 if 0)
+	TopChannels   int `yaml:"top_channels"`   // Score-CAM: max channels per request (default 64 if 0)
 }
 
 // ExplainOutputNames trả về set các output node names dành riêng cho explain.
@@ -124,6 +128,20 @@ type Manifest struct {
 	// SHA-256 does not match are refused at load time. See VerifyWeights + docs/manifest-spec.md.
 	SHA256 SHA256Field `yaml:"sha256"`
 
+	// SHA256Files (OPTIONAL): content pins for files the model reads that are NOT the ONNX
+	// sessions named by model_file / files: — ONNX external weight data (model.onnx.data, where a
+	// >2 GB graph keeps its tensors), tokenizer / vocab files, a labels file. Keys are paths
+	// relative to the model directory, values hex SHA-256 digests:
+	//
+	//	sha256_files:
+	//	  model.onnx.data: "4fba…"
+	//	  tokenizer.json: "c6e4…"
+	//
+	// A separate field rather than more keys under sha256:, because sha256: is a scalar for a
+	// single-file model and its map keys are ROLES; mixing file paths in would make both shapes
+	// ambiguous. Verified like sha256 at load time (see VerifyWeights); absent = no change.
+	SHA256Files map[string]string `yaml:"sha256_files"`
+
 	// SourceURL (OPTIONAL): the audited upstream the weights were obtained from
 	// (e.g. the official RF-DETR/MobileSAM/GroundingDINO repo). Recorded for
 	// provenance and optionally checked against a curated allowlist (see
@@ -135,7 +153,18 @@ type Manifest struct {
 		Height    int    `yaml:"height"`
 		Layout    string `yaml:"layout"`
 		Letterbox bool   `yaml:"letterbox"`
-		Normalize struct {
+		// Crop: "" (none) | "center" — resize the SHORT side to the target (bicubic) and cut the
+		// centre, as CLIP-style processors do. Only for models that map no boxes (embeddings,
+		// classification): the cut-away margins have no coordinates to map back to.
+		Crop string `yaml:"crop"`
+		// KeepAspect: resize WITHOUT distortion, the way the model's reference processor does,
+		// instead of squashing to width×height (the graph must accept dynamic H/W). The exact rule
+		// is the architecture's own — depth-anything-v2: DPT's "scale as little as possible" to
+		// width×height, each side rounded to MultipleOf. (GroundingDINO keeps squashing to 800x800:
+		// see models/grounding-dino/README.md, "Why the input is squashed".)
+		KeepAspect bool `yaml:"keep_aspect"`
+		MultipleOf int  `yaml:"multiple_of"`
+		Normalize  struct {
 			Mean []float32 `yaml:"mean"`
 			Std  []float32 `yaml:"std"`
 		} `yaml:"normalize"`
@@ -203,6 +232,12 @@ func (m *Manifest) validate() error {
 	if strings.TrimSpace(m.Name) == "" {
 		return fmt.Errorf("missing 'name' field")
 	}
+	// The name becomes a directory under the registry (pull <folder>, the converter), so it must
+	// be one plain path segment: "../x" or "/abs" used to install outside the registry. The same
+	// pattern is enforced by the Python converter (visionserve/convert/common.validate_name).
+	if !validModelName.MatchString(m.Name) || len(m.Name) > 128 {
+		return fmt.Errorf("name %q is invalid: use letters, digits, '.', '_' or '-', starting with a letter or digit (max 128)", m.Name)
+	}
 	// License: required + must be in the permissive allowlist (case-insensitive match,
 	// stored back in canonical SPDX form so later == comparisons see one spelling).
 	canonLicense, ok := canonicalLicense(m.License)
@@ -216,12 +251,35 @@ func (m *Manifest) validate() error {
 	if m.ModelFile == "" && len(m.Files) == 0 {
 		return fmt.Errorf("missing 'model_file' (or a 'files' map for multi-session models)")
 	}
+	for rel, digest := range m.SHA256Files {
+		clean := filepath.Clean(rel)
+		if rel == "" || filepath.IsAbs(rel) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("sha256_files: %q must be a relative path inside the model directory", rel)
+		}
+		if m.SHA256Files[rel] = normalizeDigest(digest); m.SHA256Files[rel] == "" {
+			return fmt.Errorf("sha256_files: %q has an empty digest", rel)
+		}
+	}
 	// NOTE: the EXISTENCE of the ONNX file is NOT checked here. validate() only checks
 	// STRUCTURAL validity (license/task/dims/EP) so a model can still be LISTED even
 	// without downloaded weights (like Ollama: see the model before you pull). Weights are
 	// checked at Load time via WeightsExist() — see lifecycle.
 	if m.Input.Width <= 0 || m.Input.Height <= 0 {
 		return fmt.Errorf("input.width/height must be > 0")
+	}
+	switch m.Input.Crop {
+	case "", "center":
+	default:
+		return fmt.Errorf("input.crop %q is invalid (\"center\" or omitted)", m.Input.Crop)
+	}
+	if m.Input.KeepAspect && (m.Input.Letterbox || m.Input.Crop != "") {
+		return fmt.Errorf("input.keep_aspect excludes input.letterbox and input.crop")
+	}
+	if m.Input.MultipleOf < 0 {
+		return fmt.Errorf("input.multiple_of must be >= 0")
+	}
+	if m.Input.Crop != "" && m.Input.Letterbox {
+		return fmt.Errorf("input.crop and input.letterbox are mutually exclusive (crop cuts the image, letterbox pads it)")
 	}
 	if layout := strings.ToUpper(m.Input.Layout); layout != "NCHW" && layout != "NHWC" && layout != "" {
 		return fmt.Errorf("input.layout %q is invalid (NCHW/NHWC)", m.Input.Layout)

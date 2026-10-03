@@ -41,6 +41,10 @@ func runPs(args []string) error {
 		return fmt.Errorf("could not connect to server (did you run `visionserve serve`?): %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode >= 300 { // an error body is {"error": ...}, not a model list
+		out, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("ps failed: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(out)))
+	}
 	var infos []api.ModelInfo
 	if err := json.NewDecoder(resp.Body).Decode(&infos); err != nil {
 		return err
@@ -74,6 +78,9 @@ func runRm(args []string) error {
 	defer resp.Body.Close()
 	out, _ := io.ReadAll(resp.Body)
 	fmt.Println(string(out))
+	if resp.StatusCode >= 300 { // the server's JSON error is printed above; the exit code must say so too
+		return fmt.Errorf("unload %s failed: HTTP %d", rest[0], resp.StatusCode)
+	}
 	return nil
 }
 

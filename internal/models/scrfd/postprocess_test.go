@@ -8,187 +8,226 @@ import (
 	"visionserve/internal/models"
 )
 
-// TestDist2BBox verifies the core anchor-center + distance-to-bbox decoding formula.
-// We construct a synthetic score+bbox tensor for stride 8 with a single high-confidence
-// proposal at grid position (row=1, col=2, anchor=0) and assert the decoded BBox
-// (in letterboxed 640-space, before original-coord remapping) is correct.
-//
-// Anchor center: cx = (2+0.5)*8 = 20, cy = (1+0.5)*8 = 12
-// Distances: l=1, t=2, r=3, b=4  (in stride units)
-// Expected:
-//
-//	x1 = 20 - 1*8 = 12
-//	y1 = 12 - 2*8 = -4  → clamped to 0 (since inputH=640 and inputW=640; y1<0 so y1=0)
-//	x2 = 20 + 3*8 = 44
-//	y2 = 12 + 4*8 = 44
-//	w  = 44 - 12 = 32
-//	h  = 44 - 0  = 44
-func TestDist2BBox_StrideDecoding(t *testing.T) {
-	const (
-		inputW = 640
-		inputH = 640
-		stride = 8
-		n      = 12800 // 80*80*2
-	)
-
-	// All scores at -100 (sigmoid ≈ 0) except one.
-	scoreData := make([]float32, n)
-	for i := range scoreData {
-		scoreData[i] = -100 // near-zero probability
+// realOutputs builds the 9 det_10g.onnx outputs with their REAL shapes for a WxH input:
+// 2-D [N,1] scores (already sigmoided), [N,4] boxes, [N,10] kps, in the graph's output
+// order (scores, boxes, kps). Verified with onnxruntime: at 640x640 the outputs are
+// [12800,1] [3200,1] [800,1] [12800,4] [3200,4] [800,4] [12800,10] [3200,10] [800,10].
+func realOutputs(w, h int) (outs []engine.Tensor, scores, boxes [3][]float32) {
+	for i, s := range []int{8, 16, 32} {
+		n := (h / s) * (w / s) * 2
+		scores[i] = make([]float32, n)
+		boxes[i] = make([]float32, n*4)
 	}
+	for i := 0; i < 3; i++ {
+		outs = append(outs, engine.F32(scores[i], int64(len(scores[i])), 1))
+	}
+	for i := 0; i < 3; i++ {
+		outs = append(outs, engine.F32(boxes[i], int64(len(scores[i])), 4))
+	}
+	for i := 0; i < 3; i++ {
+		n := len(scores[i])
+		outs = append(outs, engine.F32(make([]float32, n*10), int64(n), 10))
+	}
+	return outs, scores, boxes
+}
 
+// TestDist2BBox_StrideDecoding verifies the anchor-centre + distance-to-bbox formula on
+// the REAL 2-D [N,C] tensor shapes. InsightFace anchor centres are (col*stride,
+// row*stride) — the cell's top-left corner, no +0.5.
+//
+// stride 8, row=1, col=2, anchor=0 → k = 1*(80*2) + 2*2 + 0 = 164; cx=16, cy=8.
+// l=1,t=2,r=3,b=4 → x1=8, y1=-8, x2=40, y2=40 → [8,-8,32,48] (no clamping in input space).
+func TestDist2BBox_StrideDecoding(t *testing.T) {
+	const n = 12800 // 80*80*2
+	scoreData := make([]float32, n)
 	bboxData := make([]float32, n*4)
-
-	// row=1, col=2, anchor=0 → gridW=80, numAnchors=2
-	// k = row*(gridW*numAnchors) + col*numAnchors + anchor
-	//   = 1*(80*2) + 2*2 + 0 = 160 + 4 = 164
 	const targetK = 164
-	scoreData[targetK] = 10.0 // sigmoid(10) ≈ 0.9999, well above 0.5 threshold
+	scoreData[targetK] = 0.9 // a probability: the graph already applied Sigmoid
+	copy(bboxData[targetK*4:], []float32{1, 2, 3, 4})
 
-	// distances: l=1, t=2, r=3, b=4
-	bboxData[targetK*4+0] = 1.0 // l
-	bboxData[targetK*4+1] = 2.0 // t
-	bboxData[targetK*4+2] = 3.0 // r
-	bboxData[targetK*4+3] = 4.0 // b
+	scoreT := engine.F32(scoreData, n, 1)
+	bboxT := engine.F32(bboxData, n, 4)
+	sd := scrfdStride{stride: 8, numAnchors: 2, numProposals: n}
 
-	scoreT := engine.F32(scoreData, 1, int64(n), 1)
-	bboxT := engine.F32(bboxData, 1, int64(n), 4)
-
-	sd := scrfdStride{stride: stride, numAnchors: 2, numProposals: n}
-
-	dets, err := decodeStride(&scoreT, &bboxT, sd, inputW, inputH, 0.5)
+	dets, err := decodeStride(&scoreT, &bboxT, sd, 640, 640, 0.5)
 	if err != nil {
 		t.Fatalf("decodeStride error: %v", err)
 	}
 	if len(dets) != 1 {
 		t.Fatalf("expected 1 detection, got %d", len(dets))
 	}
-
-	// cx = (2 + 0.5) * 8 = 20
-	// cy = (1 + 0.5) * 8 = 12
-	// x1 = 20 - 1*8 = 12,  y1 = 12 - 2*8 = -4 → clamped → 0
-	// x2 = 20 + 3*8 = 44,  y2 = 12 + 4*8 = 44
-	// w = 44-12 = 32,  h = 44-0 = 44
-	want := [4]float64{12, 0, 32, 44}
-	got := dets[0].BBox
-	const eps = 1e-4
+	want := [4]float64{8, -8, 32, 48}
 	for i := 0; i < 4; i++ {
-		if math.Abs(got[i]-want[i]) > eps {
-			t.Errorf("BBox[%d]: want %v, got %v", i, want[i], got[i])
+		if math.Abs(dets[0].BBox[i]-want[i]) > 1e-4 {
+			t.Errorf("BBox[%d]: want %v, got %v", i, want[i], dets[0].BBox[i])
 		}
 	}
 	if dets[0].Class != "face" {
 		t.Errorf("Class: want \"face\", got %q", dets[0].Class)
 	}
-	if dets[0].Conf < 0.99 {
-		t.Errorf("Conf: expected ~1.0, got %v", dets[0].Conf)
+	// The score must be passed through unchanged (no second sigmoid: sigmoid(0.9)=0.71).
+	if math.Abs(dets[0].Conf-0.9) > 1e-6 {
+		t.Errorf("Conf: want 0.9 (score used as-is), got %v", dets[0].Conf)
 	}
 }
 
-// TestDist2BBox_NoClamp checks that a box entirely within bounds is decoded without clamping.
+// TestDecodeStride_NoDoubleSigmoid: a probability just below the threshold must be
+// rejected. With the old double sigmoid every score >= 0 became >= 0.5 and passed.
+func TestDecodeStride_NoDoubleSigmoid(t *testing.T) {
+	const n = 800 // stride 32 at 640x640
+	scoreData := make([]float32, n)
+	bboxData := make([]float32, n*4)
+	scoreData[0] = 0.3
+	copy(bboxData[0:], []float32{1, 1, 1, 1})
+	scoreT := engine.F32(scoreData, n, 1)
+	bboxT := engine.F32(bboxData, n, 4)
+	sd := scrfdStride{stride: 32, numAnchors: 2, numProposals: n}
+	dets, err := decodeStride(&scoreT, &bboxT, sd, 640, 640, 0.5)
+	if err != nil {
+		t.Fatalf("decodeStride error: %v", err)
+	}
+	if len(dets) != 0 {
+		t.Fatalf("score 0.3 < 0.5 must be dropped, got %+v", dets)
+	}
+}
+
+// TestDecodeStride_RejectsLogits: a raw-logit export (score outside [0,1]) is reported
+// as an error rather than silently mis-thresholded.
+func TestDecodeStride_RejectsLogits(t *testing.T) {
+	const n = 800
+	scoreData := make([]float32, n)
+	scoreData[5] = 4.2
+	scoreT := engine.F32(scoreData, n, 1)
+	bboxT := engine.F32(make([]float32, n*4), n, 4)
+	sd := scrfdStride{stride: 32, numAnchors: 2, numProposals: n}
+	if _, err := decodeStride(&scoreT, &bboxT, sd, 640, 640, 0.5); err == nil {
+		t.Fatal("expected an error for a non-probability score")
+	}
+}
+
+// TestDist2BBox_NoClamp checks a box well inside the input (stride 16, anchor 1).
 func TestDist2BBox_NoClamp(t *testing.T) {
-	const (
-		inputW = 640
-		inputH = 640
-		stride = 16
-		n      = 3200
-	)
+	const n = 3200
 	scoreData := make([]float32, n)
 	bboxData := make([]float32, n*4)
 
-	// row=5, col=10, anchor=1 → gridW=40, numAnchors=2
-	// k = 5*(40*2) + 10*2 + 1 = 400 + 20 + 1 = 421
+	// row=5, col=10, anchor=1 → gridW=40 → k = 5*(40*2) + 10*2 + 1 = 421
 	const targetK = 421
-	scoreData[targetK] = 8.0
+	scoreData[targetK] = 0.95
+	copy(bboxData[targetK*4:], []float32{2, 2, 2, 2})
 
-	// cx = (10+0.5)*16 = 168, cy = (5+0.5)*16 = 88
-	// l=2, t=2, r=2, b=2 → x1=136, y1=56, x2=200, y2=120
-	bboxData[targetK*4+0] = 2.0
-	bboxData[targetK*4+1] = 2.0
-	bboxData[targetK*4+2] = 2.0
-	bboxData[targetK*4+3] = 2.0
-
-	scoreT := engine.F32(scoreData, 1, int64(n), 1)
-	bboxT := engine.F32(bboxData, 1, int64(n), 4)
-
-	sd := scrfdStride{stride: stride, numAnchors: 2, numProposals: n}
-	dets, err := decodeStride(&scoreT, &bboxT, sd, inputW, inputH, 0.5)
+	scoreT := engine.F32(scoreData, n, 1)
+	bboxT := engine.F32(bboxData, n, 4)
+	sd := scrfdStride{stride: 16, numAnchors: 2, numProposals: n}
+	dets, err := decodeStride(&scoreT, &bboxT, sd, 640, 640, 0.5)
 	if err != nil {
 		t.Fatalf("decodeStride error: %v", err)
 	}
 	if len(dets) != 1 {
 		t.Fatalf("expected 1 detection, got %d", len(dets))
 	}
-
-	// x1=168-2*16=136, y1=88-2*16=56, x2=168+2*16=200, y2=88+2*16=120
-	// w=64, h=64
-	want := [4]float64{136, 56, 64, 64}
-	got := dets[0].BBox
-	const eps = 1e-4
+	// cx = 10*16 = 160, cy = 5*16 = 80 → x1=128, y1=48, x2=192, y2=112
+	want := [4]float64{128, 48, 64, 64}
 	for i := 0; i < 4; i++ {
-		if math.Abs(got[i]-want[i]) > eps {
-			t.Errorf("BBox[%d]: want %v, got %v", i, want[i], got[i])
+		if math.Abs(dets[0].BBox[i]-want[i]) > 1e-4 {
+			t.Errorf("BBox[%d]: want %v, got %v", i, want[i], dets[0].BBox[i])
 		}
 	}
 }
 
-// TestPostprocess_TensorIdentification verifies that postprocess correctly routes
-// tensors to the right stride buckets by shape, and that NMS + original-coord
-// remapping don't crash on a minimal synthetic input.
-func TestPostprocess_TensorIdentification(t *testing.T) {
-	cfg := models.Config{
-		Width:      640,
-		Height:     640,
-		ConfThresh: 0.5,
-		MaxDet:     100,
+// TestPostprocess_RealShapes runs the full postprocess on the REAL 2-D output layout
+// (the old decoder read Dim(1) as N, saw C, and returned 0 faces for every image).
+// One face at stride 8, row 10, col 20 (k = 10*160 + 20*2 = 1640): cx=160, cy=80,
+// l=t=r=b=2 → input box [144,64,32,32]. Letterbox meta scale 0.5, no pad (1280x1280
+// image) → original = [288,128,64,64].
+func TestPostprocess_RealShapes(t *testing.T) {
+	cfg := models.Config{Width: 640, Height: 640, ConfThresh: 0.5, MaxDet: 100}
+	meta := models.PreprocessMeta{OrigWidth: 1280, OrigHeight: 1280, ScaleX: 0.5, ScaleY: 0.5}
+	outs, scores, boxes := realOutputs(640, 640)
+	if outs[0].Shape[0] != 12800 || outs[3].Shape[1] != 4 || len(outs) != 9 {
+		t.Fatalf("test fixture does not match det_10g.onnx shapes: %v", outs[0].Shape)
 	}
-	meta := models.PreprocessMeta{
-		OrigWidth: 1280, OrigHeight: 720,
-		ScaleX: 0.5, ScaleY: 0.5,
-		PadX: 0, PadY: 0,
-	}
+	const k = 1640
+	scores[0][k] = 0.88
+	copy(boxes[0][k*4:], []float32{2, 2, 2, 2})
+	// A weaker duplicate on the other anchor of the same cell must be removed by NMS.
+	scores[0][k+1] = 0.70
+	copy(boxes[0][(k+1)*4:], []float32{2, 2, 2.1, 2})
 
-	// Build minimal tensors: one proposal visible at stride-8, rest below threshold.
-	const n8, n16, n32 = 12800, 3200, 800
-	s8 := make([]float32, n8)
-	b8 := make([]float32, n8*4)
-	s16 := make([]float32, n16)
-	b16 := make([]float32, n16*4)
-	s32 := make([]float32, n32)
-	b32 := make([]float32, n32*4)
-
-	// Place one face at stride-8, k=0 (row=0, col=0)
-	// cx=4, cy=4; l=0.5, t=0.5, r=0.5, b=0.5 → in 640-space: x1=0, y1=0, x2=8, y2=8
-	s8[0] = 8.0
-	b8[0] = 0.5
-	b8[1] = 0.5
-	b8[2] = 0.5
-	b8[3] = 0.5
-
-	outs := []engine.Tensor{
-		engine.F32(s8, 1, n8, 1),
-		engine.F32(b8, 1, n8, 4),
-		engine.F32(s16, 1, n16, 1),
-		engine.F32(b16, 1, n16, 4),
-		engine.F32(s32, 1, n32, 1),
-		engine.F32(b32, 1, n32, 4),
-	}
-
-	result, err := postprocess(outs, meta, cfg)
+	res, err := postprocess(outs, meta, cfg)
 	if err != nil {
 		t.Fatalf("postprocess error: %v", err)
 	}
-	if len(result.Detections) == 0 {
-		t.Fatal("expected at least 1 detection")
+	if len(res.Detections) != 1 {
+		t.Fatalf("want 1 face after NMS, got %d: %+v", len(res.Detections), res.Detections)
 	}
-	d := result.Detections[0]
-	if d.Class != "face" {
-		t.Errorf("class: want face, got %q", d.Class)
+	want := [4]float64{288, 128, 64, 64}
+	for i := 0; i < 4; i++ {
+		if math.Abs(res.Detections[0].BBox[i]-want[i]) > 1e-4 {
+			t.Errorf("BBox[%d]: want %v, got %v", i, want[i], res.Detections[0].BBox[i])
+		}
 	}
-	// In original coords: x1=0*..., remapped from letterboxed.
-	// Just check the struct is valid (non-negative w/h).
-	if d.BBox[2] <= 0 || d.BBox[3] <= 0 {
-		t.Errorf("invalid BBox: %v", d.BBox)
+	if math.Abs(res.Detections[0].Conf-0.88) > 1e-6 {
+		t.Errorf("Conf: want 0.88, got %v", res.Detections[0].Conf)
+	}
+}
+
+// TestPostprocess_NonSquareInput: proposal counts must be derived from the configured
+// input size, not hard-coded for 640x640. At 320x256: stride 8 → 32*40*2 = 2560,
+// stride 16 → 16*20*2 = 640, stride 32 → 8*10*2 = 160.
+func TestPostprocess_NonSquareInput(t *testing.T) {
+	cfg := models.Config{Width: 320, Height: 256, ConfThresh: 0.5}
+	meta := models.PreprocessMeta{OrigWidth: 320, OrigHeight: 256, ScaleX: 1, ScaleY: 1}
+	outs, scores, boxes := realOutputs(320, 256)
+	if len(scores[0]) != 2560 || len(scores[1]) != 640 || len(scores[2]) != 160 {
+		t.Fatalf("unexpected proposal counts %d %d %d", len(scores[0]), len(scores[1]), len(scores[2]))
+	}
+	// stride 32, row 3, col 7, anchor 0 → k = 3*(10*2) + 7*2 = 74; cx=224, cy=96.
+	const k = 74
+	scores[2][k] = 0.9
+	copy(boxes[2][k*4:], []float32{1, 1, 1, 1})
+	res, err := postprocess(outs, meta, cfg)
+	if err != nil {
+		t.Fatalf("postprocess error: %v", err)
+	}
+	if len(res.Detections) != 1 {
+		t.Fatalf("want 1 face, got %d", len(res.Detections))
+	}
+	want := [4]float64{192, 64, 64, 64}
+	for i := 0; i < 4; i++ {
+		if math.Abs(res.Detections[0].BBox[i]-want[i]) > 1e-4 {
+			t.Errorf("BBox[%d]: want %v, got %v", i, want[i], res.Detections[0].BBox[i])
+		}
+	}
+}
+
+// TestPostprocess_BatchedShapesAccepted: an export that keeps the batch dim ([1,N,C])
+// decodes the same as the 2-D layout.
+func TestPostprocess_BatchedShapesAccepted(t *testing.T) {
+	cfg := models.Config{Width: 640, Height: 640, ConfThresh: 0.5}
+	meta := models.PreprocessMeta{OrigWidth: 640, OrigHeight: 640, ScaleX: 1, ScaleY: 1}
+	outs, scores, boxes := realOutputs(640, 640)
+	scores[1][421] = 0.95
+	copy(boxes[1][421*4:], []float32{2, 2, 2, 2})
+	for i := range outs {
+		outs[i].Shape = append([]int64{1}, outs[i].Shape...)
+	}
+	res, err := postprocess(outs, meta, cfg)
+	if err != nil {
+		t.Fatalf("postprocess error: %v", err)
+	}
+	if len(res.Detections) != 1 || math.Abs(res.Detections[0].BBox[0]-128) > 1e-4 {
+		t.Fatalf("want 1 face at x=128, got %+v", res.Detections)
+	}
+}
+
+// TestPostprocess_NoMatchingOutputs: outputs that match no stride level are an error,
+// not a silent "0 faces".
+func TestPostprocess_NoMatchingOutputs(t *testing.T) {
+	cfg := models.Config{Width: 640, Height: 640}
+	outs := []engine.Tensor{engine.F32(make([]float32, 7), 7, 1)}
+	if _, err := postprocess(outs, models.PreprocessMeta{OrigWidth: 1, OrigHeight: 1, ScaleX: 1, ScaleY: 1}, cfg); err == nil {
+		t.Fatal("expected an error when no output matches a stride level")
 	}
 }
 

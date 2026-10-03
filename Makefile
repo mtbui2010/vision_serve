@@ -40,10 +40,10 @@ TEXENV ?= texpdf
 
 # The runtime needs libonnxruntime.so. If the user has not exported ORT_DYLIB_PATH, auto-detect:
 # skip node_modules (avoids other-arch builds), prefer a full ORT build (onnxruntime/capi).
-ORT_DYLIB_PATH ?= $(shell find $(HOME) /usr/local/lib /usr/lib -name 'libonnxruntime.so*' 2>/dev/null | grep -v node_modules | grep -E 'onnxruntime/capi.*\.so\.[0-9]' | head -1)
+ORT_DYLIB_PATH ?= $(shell find $(HOME) /usr/local/lib /usr/lib -xdev -name 'libonnxruntime.so*' 2>/dev/null | grep -v node_modules | grep -E 'onnxruntime/capi.*\.so\.[0-9]' | head -1)
 
 .PHONY: all build install run serve list ps rm pull demo terminate test fmt vet tidy lint clean \
-        build-linux-arm64 docker docker-edge pypi pypi-next-version help pdf paper-clean clear-image \
+        build-linux-arm64 docker docker-convert push-docker-convert docker-edge pypi pypi-next-version help pdf paper-clean clear-image \
         push-docker push-docker-arm push-docker-next-version push-docker-readme
 
 all: build ## Default target: build
@@ -149,6 +149,19 @@ docker: ## Build the server image (CPU; add ORT_VARIANT=gpu for a GPU image)
 			-t visionserve:$(PUSH_VERSION) \
 			-t visionserve:latest) .
 
+docker-convert: ## Build the checkpoint-converter image (Python + PyTorch + TensorFlow; separate from the server)
+	cp deploy/.dockerignore .dockerignore
+	docker build -f deploy/Dockerfile.convert \
+		--build-arg VERSION=$(PUSH_VERSION) \
+		-t visionserve-convert:$(PUSH_VERSION) \
+		-t visionserve-convert:latest .
+
+push-docker-convert: ## Tag and push the converter image to Docker Hub
+	docker tag visionserve-convert:$(PUSH_VERSION) $(DOCKER_HUB_USER)/visionserve-convert:$(PUSH_VERSION)
+	docker tag visionserve-convert:$(PUSH_VERSION) $(DOCKER_HUB_USER)/visionserve-convert:latest
+	docker push $(DOCKER_HUB_USER)/visionserve-convert:$(PUSH_VERSION)
+	docker push $(DOCKER_HUB_USER)/visionserve-convert:latest
+
 docker-arm: ## Build the Jetson/arm64 image (ORT_SOURCE=jetson for CUDA+TRT EP)
 	cp deploy/.dockerignore .dockerignore
 	docker buildx build --platform linux/arm64 -f deploy/Dockerfile.edge \
@@ -174,7 +187,7 @@ clear-image: ## Remove ALL local visionserve docker images (local + Docker Hub t
 DOCKER_HUB_USER ?= mtbui2010
 # PUSH_VERSION is the tag of the already-built local image (e.g. v0.1.2).
 # Override at the command line if needed: make push-docker PUSH_VERSION=v0.2.0
-PUSH_VERSION    ?= v0.1.17
+PUSH_VERSION    ?= v0.1.18
 
 push-docker: ## Tag and push CPU + GPU images to Docker Hub (DOCKER_HUB_USER=mtbui2010)
 	@echo "=== Tagging images for Docker Hub ($(DOCKER_HUB_USER)) ==="

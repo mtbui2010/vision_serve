@@ -88,7 +88,9 @@ func init() {
 // "non-Go code set up signal handler without SA_ONSTACK" from the ORT/CUDA native layer.
 // These pipelines are heavy and low-QPS, so we trade cross-request concurrency for correctness
 // by running one whole pipeline at a time. Pipelines that do NOT use GroundingDINO
-// (e.g. grasp-rfdetr) are unaffected and stay fully concurrent.
+// (e.g. grasp-rfdetr) are unaffected and stay fully concurrent — and so are the requests of a
+// mixed pipeline that never reach GroundingDINO: the rfdetr-gdino router takes the lock just
+// before its GroundingDINO pass and holds it to the end, so closed-set requests stay concurrent.
 var PipelineMu sync.Mutex
 
 const roleModel = "model"
@@ -194,6 +196,10 @@ func WithJointTextPass(joint bool) Option {
 // WithJointTextPass(true) — gated on SupportsJointTextPass — to score the whole prompt in one
 // pass on a correctly re-exported graph. The DEFAULT IS THE SAFE ONE: a caller that knows
 // nothing gets correct, order-stable results, just slower.
+//
+// Either way no pass exceeds MaxTextLen text ids: the joint regime packs phrases greedily into
+// as many passes as needed, and a single phrase too long to fit on its own is an error.
+// Detection labels are the caller's phrase text (one per ","-separated piece).
 func Detect(
 	img image.Image,
 	text string,
@@ -218,19 +224,43 @@ func Detect(
 		opt(&o)
 	}
 
+	// Size every phrase BEFORE any pass runs: a phrase that cannot fit even alone is the
+	// caller's error and must not surface as an ONNX Runtime shape error halfway through.
+	pp := make([]promptPhrase, len(phrases))
+	for i, p := range phrases {
+		n := len(tok.tokenize(p))
+		if n+3 > MaxTextLen { // [CLS] phrase . [SEP]
+			return nil, fmt.Errorf("grounding-dino: class phrase %q is %d tokens; the model reads at most %d "+
+				"text tokens per pass, so one phrase may hold at most %d — shorten it",
+				truncateForError(p), n, MaxTextLen, MaxTextLen-3)
+		}
+		pp[i] = promptPhrase{text: p, ntok: n, labels: phraseLabels(p, tok)}
+	}
+
 	origW := img.Bounds().Dx()
 	origH := img.Bounds().Dy()
 	pixelValues, pixelMask := preprocessImage(img)
 
-	// One pass for the whole prompt: phraseSpans still splits the logits per class, so the
-	// labels stay one-class-per-detection.
+	// Joint regime: as few passes as the text limit allows. phraseSpans still splits the
+	// logits per class, so the labels stay one-class-per-detection. A prompt that fits is ONE
+	// pass with exactly the ids it always had; a longer one is packed greedily into passes of
+	// at most MaxTextLen ids, each reusing the same pixel tensors, and the detections are
+	// concatenated — the same merge the per-phrase regime has always done.
 	if o.joint {
-		return detectPass(pixelValues, pixelMask, strings.Join(phrases, ". "), tok, run, outNames, origW, origH, boxThresh, textThresh)
+		var dets []api.Detection
+		for _, chunk := range packPhrases(pp) {
+			got, err := detectPass(pixelValues, pixelMask, chunk, tok, run, outNames, origW, origH, boxThresh, textThresh)
+			if err != nil {
+				return nil, err
+			}
+			dets = append(dets, got...)
+		}
+		return dets, nil
 	}
 
 	var dets []api.Detection
-	for _, phrase := range phrases {
-		got, err := detectPass(pixelValues, pixelMask, phrase, tok, run, outNames, origW, origH, boxThresh, textThresh)
+	for i := range pp {
+		got, err := detectPass(pixelValues, pixelMask, pp[i:i+1], tok, run, outNames, origW, origH, boxThresh, textThresh)
 		if err != nil {
 			return nil, err
 		}
@@ -239,19 +269,80 @@ func Detect(
 	return dets, nil
 }
 
-// detectPass runs ONE session pass for the given prompt text (a single class phrase on the
-// defective export, the whole prompt on a fixed one) and postprocesses it.
+// MaxTextLen is the number of text positions the exported graph accepts, [CLS] and [SEP]
+// included: HF's max_text_len (config.json) and the width of the logits' last axis. Verified on
+// the shipped export: L=256 runs, L=257 fails inside ONNX Runtime with "invalid expand shape".
+const MaxTextLen = 256
+
+// promptPhrase is one "."-separated class phrase as the caller wrote it.
+type promptPhrase struct {
+	text   string   // trimmed phrase, exactly as it goes into the pass text
+	labels []string // the caller's label text for each ","-separated piece that has tokens
+	ntok   int      // WordPiece tokens, no specials
+}
+
+// packPhrases groups phrases, in order, into passes whose encoding — [CLS] p1 . p2 . … [SEP]
+// — stays within MaxTextLen ids. Every phrase is assumed to fit on its own (Detect checks).
+func packPhrases(pp []promptPhrase) [][]promptPhrase {
+	var chunks [][]promptPhrase
+	start, used := 0, 2 // [CLS] + [SEP]
+	for i, p := range pp {
+		cost := p.ntok + 1 // the phrase and its "."
+		if i > start && used+cost > MaxTextLen {
+			chunks = append(chunks, pp[start:i])
+			start, used = i, 2
+		}
+		used += cost
+	}
+	return append(chunks, pp[start:])
+}
+
+// phraseLabels returns the label for each ","-separated piece of a phrase, in order, keeping
+// only pieces that produce at least one token — exactly the pieces phraseSpans turns into
+// spans, since "," is the only character that encodes to idComma. Internal whitespace is
+// collapsed; case and punctuation are the caller's.
+func phraseLabels(phrase string, tok *Tokenizer) []string {
+	var out []string
+	for _, piece := range strings.Split(phrase, ",") {
+		if len(tok.tokenize(piece)) == 0 {
+			continue
+		}
+		out = append(out, strings.Join(strings.Fields(piece), " "))
+	}
+	return out
+}
+
+func truncateForError(s string) string {
+	const max = 60
+	if r := []rune(s); len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return s
+}
+
+// detectPass runs ONE session pass over the given phrases (a single phrase on the defective
+// export, as many as fit on a fixed one) and postprocesses it.
 func detectPass(
 	pixelValues, pixelMask engine.Tensor,
-	text string,
+	phrases []promptPhrase,
 	tok *Tokenizer,
 	run func(map[string]engine.Tensor) ([]engine.Tensor, error),
 	outNames []string,
 	origW, origH int,
 	boxThresh, textThresh float64,
 ) ([]api.Detection, error) {
+	texts := make([]string, len(phrases))
+	var labels []string
+	for i, p := range phrases {
+		texts[i] = p.text
+		labels = append(labels, p.labels...)
+	}
+	text := strings.Join(texts, ". ")
 	enc := tok.Encode(text + ".")
 	L := int64(len(enc.InputIDs))
+	if L > MaxTextLen {
+		return nil, fmt.Errorf("grounding-dino: internal error: pass for %q is %d ids, limit %d", truncateForError(text), L, MaxTextLen)
+	}
 
 	inputs := map[string]engine.Tensor{
 		"pixel_values":   pixelValues,
@@ -271,7 +362,7 @@ func detectPass(
 		return nil, fmt.Errorf("grounding-dino: could not identify logits/pred_boxes among outputs (shapes %v)", shapesOf(outs))
 	}
 
-	return postprocess(logits, boxes, enc.InputIDs, tok, origW, origH, boxThresh, textThresh)
+	return postprocess(logits, boxes, enc.InputIDs, tok, labels, origW, origH, boxThresh, textThresh)
 }
 
 // SplitPhrases splits a GroundingDINO prompt into its "."-separated class phrases, trimmed
@@ -320,11 +411,14 @@ func pickLogitsAndBoxes(names []string, outs []engine.Tensor) (logits, boxes *en
 	return logits, boxes
 }
 
-// postprocess turns logits/pred_boxes into detections (original-image xywh).
+// postprocess turns logits/pred_boxes into detections (original-image xywh, clamped to the
+// image). labels, when it holds one entry per phrase span, names the spans with the caller's
+// own text; otherwise the spans are named by decoding their tokens.
 func postprocess(
 	logits, boxes *engine.Tensor,
 	inputIDs []int64,
 	tok *Tokenizer,
+	labels []string,
 	origW, origH int,
 	boxThresh, textThresh float64,
 ) ([]api.Detection, error) {
@@ -335,7 +429,13 @@ func postprocess(
 		return nil, fmt.Errorf("grounding-dino: unexpected output shapes logits=%v boxes=%v", logits.Shape, boxes.Shape)
 	}
 
-	spans := phraseSpans(inputIDs, tok, dim)
+	if len(inputIDs) > dim {
+		// Positions past the logits' width have no score at all; dropping their phrases would
+		// silently answer a different question. Detect packs passes to MaxTextLen, so this only
+		// fires for an export whose text width is not the one the package was verified on.
+		return nil, fmt.Errorf("grounding-dino: prompt pass has %d text tokens but the model scores %d positions", len(inputIDs), dim)
+	}
+	spans := phraseSpans(inputIDs, tok, labels)
 	if len(spans) == 0 {
 		return nil, nil // prompt held no real tokens
 	}
@@ -365,13 +465,14 @@ func postprocess(
 		}
 		phrase := spans[best].text
 
-		// cxcywh normalized → xywh in ORIGINAL pixels (plain squash, so multiply by W/H).
+		// cxcywh normalized → xywh in ORIGINAL pixels (plain squash, so multiply by W/H),
+		// clamped to the image like RF-DETR's boxes. A box already inside is bit-identical.
 		bb := boxes.Data[q*4 : q*4+4]
 		cx, cy, w, h := float64(bb[0]), float64(bb[1]), float64(bb[2]), float64(bb[3])
-		x := (cx - w/2) * float64(origW)
-		y := (cy - h/2) * float64(origH)
+		x, bw := clampSpan((cx-w/2)*float64(origW), w*float64(origW), float64(origW))
+		y, bh := clampSpan((cy-h/2)*float64(origH), h*float64(origH), float64(origH))
 		dets = append(dets, api.Detection{
-			BBox:  [4]float64{x, y, w * float64(origW), h * float64(origH)},
+			BBox:  [4]float64{x, y, bw, bh},
 			Class: phrase,
 			Conf:  score,
 		})
@@ -379,8 +480,26 @@ func postprocess(
 	return dets, nil
 }
 
+// clampSpan clamps the 1-D interval [x, x+w] to [0, max] and returns its new start and length.
+func clampSpan(x, w, max float64) (float64, float64) {
+	if x < 0 {
+		w += x
+		x = 0
+	}
+	if x > max {
+		x = max
+	}
+	if x+w > max {
+		w = max - x
+	}
+	if w < 0 {
+		w = 0
+	}
+	return x, w
+}
+
 // phraseSpan is the half-open token-index range [start,end) of one prompt phrase, with
-// the phrase text decoded once up front (the label a query assigned to it receives).
+// the label a query assigned to it receives.
 type phraseSpan struct {
 	start, end int
 	text       string
@@ -392,20 +511,21 @@ type phraseSpan struct {
 //	                      ->  {1,2,"cup"}, {3,5,"water bottle"}
 //
 // [CLS], [SEP] and the separators themselves are excluded, as are empty spans (".."),
-// so a query can never be labelled with punctuation. Positions >= maxDim are dropped:
-// GroundingDINO emits a fixed 256 text dims, so a longer prompt has no logits past that.
-func phraseSpans(inputIDs []int64, tok *Tokenizer, maxDim int) []phraseSpan {
+// so a query can never be labelled with punctuation.
+//
+// Span i is labelled labels[i] — the caller's own text, so "t-shirt" stays "t-shirt" rather
+// than the WordPiece round trip "t - shirt", and "café" is not "cafe" — when labels has one
+// entry per span. Otherwise (no labels supplied) each span is named by decoding its tokens.
+// The caller (postprocess) guarantees every id has a logit column, so nothing is truncated.
+func phraseSpans(inputIDs []int64, tok *Tokenizer, labels []string) []phraseSpan {
 	var spans []phraseSpan
 	start := 1 // skip [CLS]
 	flush := func(end int) {
 		if end > start {
-			spans = append(spans, phraseSpan{start, end, tok.Decode(inputIDs[start:end])})
+			spans = append(spans, phraseSpan{start: start, end: end})
 		}
 	}
 	limit := len(inputIDs) - 1 // skip [SEP]
-	if limit > maxDim {
-		limit = maxDim
-	}
 	for i := start; i < limit; i++ {
 		if inputIDs[i] == idPeriod || inputIDs[i] == idComma {
 			flush(i)
@@ -413,6 +533,14 @@ func phraseSpans(inputIDs []int64, tok *Tokenizer, maxDim int) []phraseSpan {
 		}
 	}
 	flush(limit) // trailing phrase when the prompt has no final "."
+	useLabels := len(labels) == len(spans)
+	for i := range spans {
+		if useLabels {
+			spans[i].text = labels[i]
+		} else {
+			spans[i].text = tok.Decode(inputIDs[spans[i].start:spans[i].end])
+		}
+	}
 	return spans
 }
 

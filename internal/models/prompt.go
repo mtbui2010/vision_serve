@@ -2,6 +2,7 @@ package models
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 )
@@ -13,20 +14,31 @@ import (
 //   - pointStr: SAM point prompt(s) "x,y[,label]" (label 1=fg 0=bg), separated by ';'
 //
 // All inputs are optional; an empty result is valid for models that need no prompt.
+// Every number must be finite (NaN/±Inf are rejected — they would otherwise reach the
+// ONNX decoders and the mask/bbox arithmetic), and box width/height must be >= 0.
 func ParsePrompt(text, boxStr, pointStr string) (Prompt, error) {
 	p := Prompt{Text: strings.TrimSpace(text)}
 
 	for _, part := range splitList(boxStr) {
 		nums, err := parseFloats(part)
-		if err != nil || len(nums) != 4 {
+		if err != nil {
+			return p, fmt.Errorf("invalid box %q: %v", part, err)
+		}
+		if len(nums) != 4 {
 			return p, fmt.Errorf("invalid box %q (want \"x,y,w,h\")", part)
+		}
+		if nums[2] < 0 || nums[3] < 0 {
+			return p, fmt.Errorf("invalid box %q: width and height must be >= 0 (got w=%v h=%v)", part, nums[2], nums[3])
 		}
 		p.Boxes = append(p.Boxes, [4]float64{nums[0], nums[1], nums[2], nums[3]})
 	}
 
 	for _, part := range splitList(pointStr) {
 		nums, err := parseFloats(part)
-		if err != nil || (len(nums) != 2 && len(nums) != 3) {
+		if err != nil {
+			return p, fmt.Errorf("invalid point %q: %v", part, err)
+		}
+		if len(nums) != 2 && len(nums) != 3 {
 			return p, fmt.Errorf("invalid point %q (want \"x,y[,label]\")", part)
 		}
 		label := 1 // default foreground
@@ -59,6 +71,9 @@ func parseFloats(s string) ([]float64, error) {
 		v, err := strconv.ParseFloat(strings.TrimSpace(f), 64)
 		if err != nil {
 			return nil, err
+		}
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return nil, fmt.Errorf("non-finite number %q", strings.TrimSpace(f))
 		}
 		nums = append(nums, v)
 	}

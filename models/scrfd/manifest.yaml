@@ -10,6 +10,8 @@ input:
   width: 640
   height: 640
   layout: NCHW
+  # Aspect-preserving resize, pasted TOP-LEFT on a black 640x640 canvas exactly like
+  # InsightFace scrfd.py (internal/models/scrfd/preprocess.go) — not a centred letterbox.
   letterbox: true
   normalize:
     mean: [127.5, 127.5, 127.5]

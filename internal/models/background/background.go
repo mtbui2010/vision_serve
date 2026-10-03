@@ -4,15 +4,15 @@
 // the `method` field:
 //
 //   - "depth"    (default): MiDaS depth → fit the dominant plane (affine disparity) →
-//                the near-plane region IS the support surface. Fastest (~tens of ms)
-//                and the most accurate for tabletop scenes (objects rise above the plane).
+//     the near-plane region IS the support surface. Fastest (~tens of ms)
+//     and the most accurate for tabletop scenes (objects rise above the plane).
 //   - "sam":     MobileSAM prompted at a few likely-background seed points (image
-//                bottom + corners), validated by area + border touch. ~tens of ms.
+//     bottom + corners), validated by area + border touch. ~tens of ms.
 //   - "cv":      classical CV (no inference) — the large, low-texture region grown
-//                from the image border/bottom. Fastest; least robust.
+//     from the image border/bottom. Fastest; least robust.
 //   - "automask": MobileSAM Automatic Mask Generator, then KEEP the large / border-
-//                touching masks (the support surfaces) and union them. Slow (N² decoder
-//                calls) but method-of-record / fallback.
+//     touching masks (the support surfaces) and union them. Slow (N² decoder
+//     calls) but method-of-record / fallback.
 //
 // Foreground (objects) is just the complement of the returned background mask; callers
 // invert if they need it.
@@ -44,7 +44,7 @@ const (
 
 // Method names (prompt.Method). Empty => defaultMethod.
 const (
-	methodAuto     = "auto" // depth → cv fallback (robust default: depth's accuracy when a
+	methodAuto = "auto" // depth → cv fallback (robust default: depth's accuracy when a
 	//                         clear plane exists, cv's reliability on monocular scenes)
 	methodDepth    = "depth"
 	methodSAM      = "sam"
@@ -75,10 +75,10 @@ type maskSegmenter interface {
 }
 
 type backgroundModel struct {
-	cfg     models.Config
-	sam     models.PipelineModel // MobileSAM (sam / automask methods)
-	seg     maskSegmenter
-	hasSAM  bool
+	cfg      models.Config
+	sam      models.PipelineModel // MobileSAM (sam / automask methods)
+	seg      maskSegmenter
+	hasSAM   bool
 	hasDepth bool
 }
 
@@ -220,13 +220,21 @@ func (m *backgroundModel) backgroundAuto(img image.Image, prompt models.Prompt, 
 	return m.backgroundCV(img, prompt, r)
 }
 
-// runDepth returns a depth/disparity map (256×256 working resolution) for the plane fit.
+// runDepth returns a depth/disparity map for the plane fit, with its width and height.
 // When the request supplies an EXTERNAL depth map (RGB-D sensor, prompt.Depth), it is used
-// directly (resized to the working resolution, NaN-invalid preserved). Otherwise it runs the
-// MiDaS session (role depth) on the image with MiDaS's own preprocessing. Used by method=depth.
+// directly (resized to the 256×256 working resolution, NaN-invalid preserved); a depth map whose
+// data does not match its declared dims is an ERROR, not a reason to run MiDaS instead — the
+// caller asked for its own geometry, and backgroundDepth treats any prompt.Depth as real RGB-D
+// (it skips the monocular guard), so a silent MiDaS fallback also lost that guard. Otherwise it
+// runs the MiDaS session (role depth) on the image with MiDaS's own preprocessing and returns the
+// map at the session's OWN output resolution, read from the output shape. Used by method=depth.
 func (m *backgroundModel) runDepth(img image.Image, prompt models.Prompt, r models.Runner) (depth []float32, dw, dh int, err error) {
 	const sz = 256
-	if prompt.Depth != nil && prompt.DepthW > 0 && prompt.DepthH > 0 && len(prompt.Depth) == prompt.DepthW*prompt.DepthH {
+	if prompt.Depth != nil {
+		if prompt.DepthW <= 0 || prompt.DepthH <= 0 || len(prompt.Depth) != prompt.DepthW*prompt.DepthH {
+			return nil, 0, 0, fmt.Errorf("background: external depth map has %d values but declares %dx%d",
+				len(prompt.Depth), prompt.DepthW, prompt.DepthH)
+		}
 		return resizeDepthNearest(prompt.Depth, prompt.DepthW, prompt.DepthH, sz, sz), sz, sz, nil
 	}
 	resized := imageproc.Resize(img, sz, sz)
@@ -236,12 +244,33 @@ func (m *backgroundModel) runDepth(img image.Image, prompt models.Prompt, r mode
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("background: depth inference: %w", err)
 	}
-	if len(outs) == 0 || len(outs[0].Data) < sz*sz {
-		return nil, 0, 0, fmt.Errorf("background: depth returned no/short output")
+	if len(outs) == 0 {
+		return nil, 0, 0, fmt.Errorf("background: depth returned no output")
 	}
-	// MiDaS small output is [1,256,256] (or [1,1,256,256]); take the last sz*sz values.
-	d := outs[0].Data
-	return d[len(d)-sz*sz:], sz, sz, nil
+	dw, dh, err = depthMapDims(outs[0])
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	return outs[0].Data[:dw*dh], dw, dh, nil
+}
+
+// depthMapDims accepts exactly ONE depth map — [H,W], [1,H,W] or [1,1,H,W] (MiDaS small emits
+// [1,256,256]) — and returns its width and height. Anything else (a batch, several channels, a
+// flat vector) is an error rather than a guess about which values form the map.
+func depthMapDims(t engine.Tensor) (w, h int, err error) {
+	if len(t.Shape) < 2 {
+		return 0, 0, fmt.Errorf("background: depth output shape %v is not a [.., H, W] map", t.Shape)
+	}
+	for _, d := range t.Shape[:len(t.Shape)-2] {
+		if d != 1 {
+			return 0, 0, fmt.Errorf("background: depth output shape %v holds more than one map", t.Shape)
+		}
+	}
+	h, w = int(t.Shape[len(t.Shape)-2]), int(t.Shape[len(t.Shape)-1])
+	if w <= 0 || h <= 0 || len(t.Data) < w*h {
+		return 0, 0, fmt.Errorf("background: depth output shape %v with %d values", t.Shape, len(t.Data))
+	}
+	return w, h, nil
 }
 
 // resizeDepthNearest nearest-neighbor resizes a float depth map sw×sh → dw×dh (row-major).
@@ -265,7 +294,9 @@ func resizeDepthNearest(src []float32, sw, sh, dw, dh int) []float32 {
 }
 
 // bgThresholds resolves the area thresholds (percent of image) for the mask-classifying
-// methods, honoring per-request bg_max_area / fg_min_area.
+// methods (sam and automask), honoring per-request bg_max_area / fg_min_area. Both methods
+// classify through isBackgroundMask, so the two knobs mean the same thing on either. The depth
+// and cv methods do not classify masks and ignore them.
 func (m *backgroundModel) bgThresholds(prompt models.Prompt) (bgMaxPct, minPct float64) {
 	bgMaxPct = defaultBgMaxAreaPct
 	if prompt.BgMaxArea > 0 {
@@ -278,10 +309,15 @@ func (m *backgroundModel) bgThresholds(prompt models.Prompt) (bgMaxPct, minPct f
 }
 
 // isBackgroundMask reports whether a mask (area in pixels, plus border touch) qualifies as
-// a support surface under the area/border heuristics. imgArea is W*H.
-func isBackgroundMask(areaPx, imgArea float64, border bool) bool {
+// a support surface under the area/border heuristics. imgArea is W*H. A mask below minPct
+// (fg_min_area) is noise whatever else holds; one at or above bgMaxPct (bg_max_area) is a
+// surface; otherwise it must touch the border and cover borderMinAreaPct.
+func isBackgroundMask(areaPx, imgArea float64, border bool, bgMaxPct, minPct float64) bool {
 	areaPct := areaPx / imgArea * 100.0
-	if areaPct >= defaultBgMaxAreaPct {
+	if areaPct < minPct {
+		return false
+	}
+	if areaPct >= bgMaxPct {
 		return true
 	}
 	return border && areaPct >= borderMinAreaPct

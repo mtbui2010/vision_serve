@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"image"
-	"io"
 	"math"
 	"net/http"
 	"strconv"
@@ -54,9 +52,9 @@ func (s *Server) handleExplain(w http.ResponseWriter, r *http.Request) {
 	}
 	defer f.Close()
 
-	img, _, err := image.Decode(io.LimitReader(f, maxImageBytes))
+	img, err := decodeImage(f)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Errorf("failed to decode image: %w", err))
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 

@@ -4,29 +4,26 @@
 // Source: https://github.com/facebookresearch/segment-anything-2
 //
 // SAM2 is a prompted, two-session model (a PipelineModel, not a plain Model).
-// It requires a PROMPT (a box or a point). Two ONNX graphs declared in the manifest:
+// It requires a PROMPT (a box or a point). Two ONNX graphs declared in the manifest.
+// Verified I/O (SharpAI/sam2-hiera-tiny-onnx, inspected with onnxruntime):
 //
-//	encoder: input  "image" [1,3,1024,1024] float32, NCHW, SAM2-normalized.
-//	         outputs "image_embed" [1,256,64,64], "high_res_feats_0" [1,32,256,256],
-//	                 "high_res_feats_1" [1,64,128,128]  — multi-scale features.
+//	encoder: input  "image" [1,3,1024,1024] float32, NCHW, ImageNet-normalized; the image
+//	         is SQUASHED to 1024×1024 (upstream SAM2Transforms, no letterbox).
+//	         outputs "high_res_feats_0" [1,32,256,256], "high_res_feats_1" [1,64,128,128],
+//	                 "image_embed" [1,256,64,64]  — multi-scale features.
 //	decoder: image_embed, high_res_feats_0, high_res_feats_1,
-//	         point_coords [1,N,2] float32 (1024-space),
-//	         point_labels [1,N] int64 (1=fg, 0=bg, 2=tl-box, 3=br-box)
-//	         outputs: masks [1,1,H,W] float32 logits, iou_predictions [1,1] float32.
+//	         point_coords [1,N,2] float32 (1024-space, per-axis scaled),
+//	         point_labels [1,N] float32 (1=fg, 0=bg, 2=tl-box, 3=br-box),
+//	         mask_input [1,1,256,256] float32, has_mask_input [1] float32.
+//	         outputs: masks [1,3,256,256] float32 LOW-RES logits (clamped to ±32),
+//	                  iou_predictions [1,3] float32.
+//
+// The best of the 3 candidates (by iou_predictions) is bilinearly upsampled to the
+// ORIGINAL image size (upstream postprocess_masks) before thresholding at 0, so the RLE
+// and BBox are in original-image coordinates.
 //
 // Unlike MobileSAM the encoder outputs THREE tensors (multi-scale); all three must be
-// forwarded to the decoder.  Point labels use int64, not float32.
-//
-// TODO: verify tensor names against your SAM2 ONNX export.
-// Known working names for SAM2-tiny from jf-11/sam2-image-onnx:
-//
-//	encoder input:   "image"            [1,3,1024,1024] float32
-//	encoder outputs: "image_embed"      [1,256,64,64]
-//	                 "high_res_feats_0" [1,32,256,256]
-//	                 "high_res_feats_1" [1,64,128,128]
-//	decoder inputs:  "image_embed", "high_res_feats_0", "high_res_feats_1",
-//	                 "point_coords", "point_labels"
-//	decoder outputs: "masks", "iou_predictions"
+// forwarded to the decoder.
 package sam2
 
 import (
@@ -75,8 +72,8 @@ func (m *sam2Model) Infer(img image.Image, prompt models.Prompt, r models.Runner
 		return models.Result{}, err
 	}
 
-	// 1) Build encoder input: NCHW float32 [1,3,1024,1024], SAM2-normalized.
-	encTensor, scale, _, _, err := encoderInput(img)
+	// 1) Build encoder input: NCHW float32 [1,3,1024,1024], squashed + SAM2-normalized.
+	encTensor, scaleX, scaleY, err := encoderInput(img)
 	if err != nil {
 		return models.Result{}, fmt.Errorf("sam2: encoder preprocess failed: %w", err)
 	}
@@ -98,12 +95,12 @@ func (m *sam2Model) Infer(img image.Image, prompt models.Prompt, r models.Runner
 	// 2) Decoder per prompt set → one mask each.
 	masks := make([]models.Mask, 0, len(sets))
 	for _, ps := range sets {
-		coords, labels := ps.scaledPrompt(scale)
+		coords, labels := ps.scaledPrompt(scaleX, scaleY)
 		maskTensor, iouTensor, err := runDecoder(r, imageEmbed, highResFeats0, highResFeats1, coords, labels)
 		if err != nil {
 			return models.Result{}, fmt.Errorf("sam2: decoder failed: %w", err)
 		}
-		mk, err := pickBestMask(maskTensor, iouTensor)
+		mk, err := pickBestMask(maskTensor, iouTensor, img.Bounds().Dx(), img.Bounds().Dy())
 		if err != nil {
 			return models.Result{}, fmt.Errorf("sam2: postprocess failed: %w", err)
 		}

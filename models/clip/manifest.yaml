@@ -11,6 +11,10 @@ input:
   height: 224
   layout: NCHW
   letterbox: false
+  # Resize the short side to 224 (bicubic) and keep the centre, as CLIP was trained and as the
+  # reference CLIPImageProcessor feeds it. Squashing the whole frame instead measured embedding
+  # cosine 0.86-0.89 against the reference on non-square photos.
+  crop: center
   normalize:
     mean: [0.48145466, 0.4578275, 0.40821073]
     std:  [0.26862954, 0.26130258, 0.27577711]

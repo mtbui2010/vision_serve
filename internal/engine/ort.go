@@ -10,6 +10,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,6 +47,10 @@ func ensureORT() error {
 	})
 	return initErr
 }
+
+// ErrClosed is returned by a session (or pool) used after Close — e.g. a request that raced an
+// unload. Callers report it as an ordinary error; it must never be a panic or a hang.
+var ErrClosed = errors.New("engine: session is closed")
 
 // IOInfo describes the name + shape of an I/O tensor of the model (probed from the ONNX file).
 type IOInfo struct {
@@ -91,7 +96,13 @@ type Session struct {
 	outputNames []string
 	activeEP    Provider // EP that was actually loaded (first one whose libs were available)
 
-	jobs      chan func() // work funnelled onto the dedicated OS thread; closed by Close
+	jobs chan func() // work funnelled onto the dedicated OS thread; closed by Close
+	// jobsMu guards sending on jobs against Close closing it: submit holds the read lock while
+	// it hands work over, Close takes the write lock to mark the session closed. A call that
+	// arrives after Close gets ErrClosed instead of a "send on closed channel" panic, which in
+	// a goroutine the model spawned itself (MobileSAM automask) used to crash the process.
+	jobsMu    sync.RWMutex
+	closed    bool
 	closeOnce sync.Once
 	closeErr  chan error // worker sends the Destroy() result here after jobs drains
 }
@@ -189,8 +200,18 @@ func createSession(modelPath string, inputNames, outputNames []string, providers
 			return nil, activeEP, fmt.Errorf("engine: failed to create SessionOptions: %w", err)
 		}
 		var s *ort.DynamicAdvancedSession
+		// An EP this ORT build does not ship (CUDA on the CPU-only wheel or the CPU Docker image)
+		// fails HERE, at append time. The session would still be created — on CPU — so this EP
+		// must be skipped, not merely ignored: ignoring it is how a CPU run reported "gpu:0".
+		if err := applyProvider(opts, ep, modelPath); err != nil {
+			opts.Destroy()
+			if Trace {
+				fmt.Fprintf(os.Stderr, "engine: [trace] EP %s unavailable in this ONNX Runtime build (%v) — skipping\n",
+					providerNames([]Provider{ep}), err)
+			}
+			continue
+		}
 		captured, runErr := captureStderr(func() error {
-			applyProvider(opts, ep, modelPath)
 			var e error
 			s, e = ort.NewDynamicAdvancedSession(modelPath, inputNames, outputNames, opts)
 			return e
@@ -282,33 +303,40 @@ func availableProviders(providers []Provider) []Provider {
 // applyProvider appends exactly ONE execution provider to opts. CPU needs no append
 // (ORT's built-in default); callers attempt providers one at a time so a per-graph EP
 // failure can fall back to the next candidate (see NewSession).
-func applyProvider(opts *ort.SessionOptions, p Provider, modelPath string) {
+//
+// It returns the error when the EP cannot be appended — typically because this ORT build does
+// not include it. The caller MUST then skip the EP: a session created from these options runs
+// on CPU, and recording the requested EP as active would report a GPU that is not in use.
+func applyProvider(opts *ort.SessionOptions, p Provider, modelPath string) error {
 	switch p {
 	case ProviderTensorRT:
-		if trt, err := ort.NewTensorRTProviderOptions(); err == nil {
-			// Persist compiled engines; without this every load re-compiles (minutes). See TRTOptions.
-			if trtOpts := TRTOptions(modelPath); len(trtOpts) > 0 {
-				if err := trt.Update(trtOpts); err != nil && Trace {
-					fmt.Fprintf(os.Stderr, "engine: [trace] TensorRT options rejected (%v) — continuing without engine cache\n", err)
-				}
+		trt, err := ort.NewTensorRTProviderOptions()
+		if err != nil {
+			return err
+		}
+		defer trt.Destroy()
+		// Persist compiled engines; without this every load re-compiles (minutes). See TRTOptions.
+		if trtOpts := TRTOptions(modelPath); len(trtOpts) > 0 {
+			if err := trt.Update(trtOpts); err != nil && Trace {
+				fmt.Fprintf(os.Stderr, "engine: [trace] TensorRT options rejected (%v) — continuing without engine cache\n", err)
 			}
-			_ = opts.AppendExecutionProviderTensorRT(trt)
-			trt.Destroy()
 		}
+		return opts.AppendExecutionProviderTensorRT(trt)
 	case ProviderCUDA:
-		if cuda, err := ort.NewCUDAProviderOptions(); err == nil {
-			_ = opts.AppendExecutionProviderCUDA(cuda)
-			cuda.Destroy()
+		cuda, err := ort.NewCUDAProviderOptions()
+		if err != nil {
+			return err
 		}
+		defer cuda.Destroy()
+		return opts.AppendExecutionProviderCUDA(cuda)
 	case ProviderCoreML:
-		_ = opts.AppendExecutionProviderCoreML(0)
+		return opts.AppendExecutionProviderCoreML(0)
 	case ProviderDirectML:
-		_ = opts.AppendExecutionProviderDirectML(0)
+		return opts.AppendExecutionProviderDirectML(0)
 	case ProviderOpenVINO:
-		_ = opts.AppendExecutionProviderOpenVINO(map[string]string{})
-	case ProviderCPU:
-		// ORT built-in; nothing to append.
+		return opts.AppendExecutionProviderOpenVINO(map[string]string{})
 	}
+	return nil // ProviderCPU: ORT built-in, nothing to append
 }
 
 // Run runs inference: takes input tensors (in the model's input order) and returns the
@@ -347,10 +375,17 @@ func (s *Session) submit(work func() ([]Tensor, error)) ([]Tensor, error) {
 		err  error
 	}
 	ch := make(chan result, 1)
+	s.jobsMu.RLock()
+	if s.closed {
+		s.jobsMu.RUnlock()
+		return nil, ErrClosed
+	}
 	s.jobs <- func() {
 		outs, err := work()
 		ch <- result{outs, err}
 	}
+	s.jobsMu.RUnlock()
+	// Work accepted before Close still runs: the worker drains jobs before destroying the session.
 	r := <-ch
 	return r.outs, r.err
 }
@@ -411,7 +446,10 @@ func (s *Session) OutputNames() []string { return s.outputNames }
 func (s *Session) Close() error {
 	var err error
 	s.closeOnce.Do(func() {
+		s.jobsMu.Lock()
+		s.closed = true
 		close(s.jobs)
+		s.jobsMu.Unlock()
 		err = <-s.closeErr
 	})
 	return err

@@ -1,6 +1,8 @@
 package catalog
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -81,4 +83,45 @@ func longestLedgerMatch(src string) *registry.LedgerEntry {
 		}
 	}
 	return best
+}
+
+// Review #8: every file the catalog pins must also be pinned by the manifest `pull` writes —
+// including files with no ManifestRole (ONNX external data, tokenizer, labels), which used to be
+// verified at download time and then never again. Parsed through the registry, the same path the
+// loader takes, so the rendered YAML shape is checked too.
+func TestRenderedManifestPinsEveryPinnedFile(t *testing.T) {
+	for _, e := range builtin {
+		if len(e.VirtualFiles) > 0 {
+			continue // composed: the pins live in the dependencies
+		}
+		var pinned []File
+		for _, f := range e.Files {
+			if f.SHA256 != "" {
+				pinned = append(pinned, f)
+			}
+		}
+		if len(pinned) == 0 {
+			continue
+		}
+		t.Run(e.Name, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "manifest.yaml")
+			if err := os.WriteFile(p, []byte(e.RenderManifest()), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			m, err := registry.LoadManifest(p)
+			if err != nil {
+				t.Fatalf("rendered manifest does not parse: %v", err)
+			}
+			have := map[string]bool{}
+			for _, d := range m.PinnedDigests() {
+				have[strings.ToLower(d)] = true
+			}
+			for _, f := range pinned {
+				if !have[strings.ToLower(f.SHA256)] {
+					t.Errorf("%s is pinned in the catalog but not in the generated manifest — the loader never re-checks it",
+						f.LocalFilename)
+				}
+			}
+		})
+	}
 }

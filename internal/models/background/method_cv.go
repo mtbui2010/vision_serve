@@ -13,12 +13,12 @@ import (
 // smooth (low-gradient), uniform region whose color matches a seed sampled from the bottom-
 // center strip and which touches the image border. Strategy:
 //
-//   1. Downscale to ~256px long side for speed; work there, upsample the result back.
-//   2. Seed color = robust (median) RGB of the bottom-center strip (the most likely surface).
-//   3. surface-like = color within an adaptive threshold (derived from seed-region spread) of
-//      the seed color, AND in a low-gradient (smooth, untextured) area (Sobel magnitude).
-//   4. Connected components (4-connectivity); keep large border-touching component(s).
-//   5. Validate with isBackgroundMask (area + border touch); else return nil.
+//  1. Downscale to ~256px long side for speed; work there, upsample the result back.
+//  2. Seed color = robust (median) RGB of the bottom-center strip (the most likely surface).
+//  3. surface-like = color within an adaptive threshold (derived from seed-region spread) of
+//     the seed color, AND in a low-gradient (smooth, untextured) area (Sobel magnitude).
+//  4. Connected components (4-connectivity); keep large border-touching component(s).
+//  5. Validate with isBackgroundMask (area + border touch); else return nil.
 //
 // Returns a row-major []bool of length w*h at ORIGINAL resolution (true = support surface),
 // or (nil,nil) when no support surface is found. r is unused (no session).
@@ -103,7 +103,8 @@ func (m *backgroundModel) backgroundCV(img image.Image, prompt models.Prompt, r 
 
 	// 6. Validate (area + border) at the working resolution.
 	area := bitmapArea(mask)
-	if !isBackgroundMask(area, float64(w*h), touchesBorder(mask, w, h)) {
+	// cv takes no area knobs (bg_max_area / fg_min_area are sam / automask only): fixed defaults.
+	if !isBackgroundMask(area, float64(w*h), touchesBorder(mask, w, h), defaultBgMaxAreaPct, 0) {
 		return nil, nil
 	}
 

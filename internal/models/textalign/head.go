@@ -71,19 +71,20 @@ func (h *head) logits(p *Projection, feats []float32, q int, normalize bool) ([]
 
 // normalizeVocab lowercases/trims the requested phrases and drops empties and duplicates
 // (a duplicate class would produce two identical columns and duplicate detections).
+//
+// The phrase itself is lowercased, not only its dedup key: the head cache is keyed on the
+// lowercased vocabulary (promptens.Key), so keeping the caller's case let the first request's
+// spelling ("Cup") become the label every later "cup" request received. Both text towers
+// lowercase before tokenizing, so the embeddings are unchanged.
 func normalizeVocab(in []string) []string {
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))
 	for _, s := range in {
-		s = strings.TrimSpace(s)
-		if s == "" {
+		s = strings.ToLower(strings.TrimSpace(s))
+		if s == "" || seen[s] {
 			continue
 		}
-		key := strings.ToLower(s)
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
+		seen[s] = true
 		out = append(out, s)
 	}
 	return out

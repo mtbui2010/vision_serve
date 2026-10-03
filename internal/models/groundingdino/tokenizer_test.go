@@ -1,6 +1,8 @@
 package groundingdino
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -57,6 +59,38 @@ func TestEncodeLowercases(t *testing.T) {
 	b := tok.Encode("cat. remote.")
 	if !reflect.DeepEqual(a.InputIDs, b.InputIDs) {
 		t.Fatalf("uppercase ids %v != lowercase ids %v", a.InputIDs, b.InputIDs)
+	}
+}
+
+// TestEncodeMatchesHFReference holds Encode to the reference tokenizer GroundingDINO's HF
+// processor uses (AutoTokenizer "IDEA-Research/grounding-dino-tiny", a BertTokenizerFast with
+// do_lower_case=True: clean_text -> CJK spacing -> NFD + drop Mn -> lowercase -> split on
+// whitespace/punctuation -> WordPiece with a 100-char word cap). testdata/hf_bert_uncased_ids.json
+// was produced by that tokenizer and agrees with tokenizers.Tokenizer.from_file on
+// models/grounding-dino/tokenizer.json for every row (transformers 5.9.0, tokenizers 0.22.2).
+//
+// Before the BasicTokenizer port, "café" encoded as [UNK], CJK runs as one [UNK] word, and
+// zero-width / control characters split words that BERT joins.
+func TestEncodeMatchesHFReference(t *testing.T) {
+	tok := loadTok(t)
+	raw, err := os.ReadFile(filepath.Join("testdata", "hf_bert_uncased_ids.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rows []struct {
+		Text string  `json:"text"`
+		IDs  []int64 `json:"ids"`
+	}
+	if err := json.Unmarshal(raw, &rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) < 30 {
+		t.Fatalf("reference table has %d rows, want the full table", len(rows))
+	}
+	for _, r := range rows {
+		if got := tok.Encode(r.Text).InputIDs; !reflect.DeepEqual(got, r.IDs) {
+			t.Errorf("Encode(%q) = %v, want %v", r.Text, got, r.IDs)
+		}
 	}
 }
 

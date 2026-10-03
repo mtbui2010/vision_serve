@@ -8,6 +8,13 @@
 #     docker build -f deploy/Dockerfile -t visionserve .
 #
 # (BuildKit also auto-detects `deploy/Dockerfile.dockerignore` if you name it that way.)
+#
+# Patterns are matched from the CONTEXT ROOT: `*.onnx` only matches a file AT the root. Anything
+# that can sit in a sub-directory (weights under models/<name>/, sample images) must be written
+# `**/<pattern>`, or it is sent as build context (models/ alone holds several GB of weights).
+#
+# What the builds need: the Go sources (cmd/, internal/, pkg/, go.mod, go.sum) for every image;
+# clients/python and convert/ for Dockerfile.convert. Nothing else.
 
 # VCS / CI
 .git
@@ -18,18 +25,42 @@
 bin/
 visionserve
 
-# Model weights & exported artifacts (mounted at runtime via the /models volume)
-*.onnx
-*.onnx.data
-*.data
-*.pt
-*.pth
-*.engine
-*.trt
+# Model registry: weights + manifests are pulled at runtime into the /root/.models volume,
+# never baked into an image.
+models/
+
+# Model weights, checkpoints & exported artifacts, wherever they live
+**/*.onnx
+**/*.onnx.data
+**/*.data
+**/*.pt
+**/*.pth
+**/*.ckpt
+**/*.safetensors
+**/*.engine
+**/*.trt
+**/*.tflite
+**/*.h5
+**/*.keras
+
+# Images, media & documents (sample/test data, slides, figures)
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.webp
+**/*.gif
+**/*.mp4
+**/*.pdf
+**/*.pptx
 
 # Demo / sample / client material not needed by the server build
 demo/
-clients/
+# clients/python IS needed: it holds the converter package (Dockerfile.convert).
+clients/js/
+clients/python/dist/
+clients/python/examples/
+clients/python/*.egg-info/
+clients/python/tests/
 scripts/
 docs/
 paper/
@@ -37,17 +68,19 @@ results/
 blog/
 benchmarks/
 eval/
-*.png
-*.jpg
-*.jpeg
+test/
 
-# Local tooling / editor noise
+# Local tooling / editor / language-runtime noise
 .claude
-.DS_Store
-*.swp
-*.test
-*.out
-coverage.*
+**/.DS_Store
+**/*.swp
+**/*.test
+**/*.out
+**/coverage.*
+**/node_modules/
+**/__pycache__/
+**/.pytest_cache/
+**/.venv/
 
 # Jetson ORT drop-in is only consumed by Dockerfile.edge (kept out of CPU/x64 builds)
 # Comment the next line out if you build the Jetson variant from this context.

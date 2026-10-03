@@ -12,6 +12,7 @@
 //	         query_image_features [N, 3, H, W]  float32  — N template images (same norm)
 //	outputs: logits               [N, P, 1]     float32  — similarity per template per patch
 //	         pred_boxes           [1, P, 4]     float32  — [cx, cy, w, h] normalized [0,1]
+//	                                                     relative to the PADDED square input
 //
 // where P = (H/patch_size)^2.  For owlv2-base-patch16 at 960×960: P=3600.
 //
@@ -22,9 +23,8 @@ import (
 	"fmt"
 	"image"
 	"math"
+	"sort"
 	"strings"
-
-	"github.com/disintegration/imaging"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
@@ -172,9 +172,14 @@ func (m *owlVIT) Infer(img image.Image, prompt models.Prompt, r models.Runner) (
 	return m.postprocess(patchScores, boxesData, numPatches, meta)
 }
 
-// preprocessImage resizes img to cfg.Width×cfg.Height (plain squash, no letterbox),
-// normalizes with CLIP mean/std, and returns an NCHW float32 tensor [1, 3, H, W].
-// The returned PreprocessMeta carries the mapping back to original image coordinates.
+// preprocessImage reproduces HF Owlv2ImageProcessor: rescale to [0,1], pad to a square
+// (bottom/right, black) WITHOUT changing the aspect ratio, anti-aliased bilinear resize to
+// cfg.Width×cfg.Width, CLIP-normalize → NCHW float32 [1, 3, H, W] (see padResizeOWLv2).
+//
+// OWLv2 pred_boxes are normalized to the PADDED square, so the returned meta carries the
+// single scale input/S (S = max(origW, origH)) on both axes and no offset (pad is on the
+// bottom/right): orig = norm * S. Squashing to 960×960 instead (the previous behaviour)
+// distorts the aspect ratio the model was trained on.
 func (m *owlVIT) preprocessImage(img image.Image) (engine.Tensor, models.PreprocessMeta, error) {
 	W, H := m.cfg.Width, m.cfg.Height
 	if W <= 0 || H <= 0 {
@@ -182,30 +187,34 @@ func (m *owlVIT) preprocessImage(img image.Image) (engine.Tensor, models.Preproc
 			"owlvit: manifest input.width/height must be > 0 (got %d×%d)", W, H,
 		)
 	}
+	if W != H {
+		return engine.Tensor{}, models.PreprocessMeta{}, fmt.Errorf(
+			"owlvit: input must be square (OWLv2 pads to a square), got %d×%d", W, H,
+		)
+	}
 
 	origBounds := img.Bounds()
 	origW := origBounds.Dx()
 	origH := origBounds.Dy()
+	if origW <= 0 || origH <= 0 {
+		return engine.Tensor{}, models.PreprocessMeta{}, fmt.Errorf("owlvit: empty image %d×%d", origW, origH)
+	}
 
-	resized := imaging.Resize(img, W, H, imaging.Linear)
-
+	data, side := padResizeOWLv2(img, W)
 	plane := W * H
-	data := make([]float32, 3*plane)
-	for y := 0; y < H; y++ {
-		for x := 0; x < W; x++ {
-			c := resized.NRGBAAt(resized.Bounds().Min.X+x, resized.Bounds().Min.Y+y)
-			idx := y*W + x
-			data[idx] = (float32(c.R)/255.0 - m.mean[0]) / m.std[0]
-			data[plane+idx] = (float32(c.G)/255.0 - m.mean[1]) / m.std[1]
-			data[2*plane+idx] = (float32(c.B)/255.0 - m.mean[2]) / m.std[2]
+	for c := 0; c < 3; c++ {
+		ch := data[c*plane : (c+1)*plane]
+		for i, v := range ch {
+			ch[i] = (v - m.mean[c]) / m.std[c]
 		}
 	}
 
+	s := float64(W) / float64(side)
 	meta := models.PreprocessMeta{
 		OrigWidth:  origW,
 		OrigHeight: origH,
-		ScaleX:     float64(W) / float64(origW),
-		ScaleY:     float64(H) / float64(origH),
+		ScaleX:     s,
+		ScaleY:     s,
 		PadX:       0,
 		PadY:       0,
 	}
@@ -226,43 +235,49 @@ func (m *owlVIT) postprocess(
 		maxDet = 100
 	}
 
+	if len(boxesData) < numPatches*4 || len(patchScores) < numPatches {
+		return models.Result{}, fmt.Errorf("owlvit: pred_boxes has %d values, scores %d, want %d patches",
+			len(boxesData), len(patchScores), numPatches)
+	}
+	if meta.ScaleX <= 0 {
+		return models.Result{}, fmt.Errorf("owlvit: invalid preprocess scale %v", meta.ScaleX)
+	}
+
 	origW := float64(meta.OrigWidth)
 	origH := float64(meta.OrigHeight)
+	// Boxes are normalized to the padded square of side S = input/scale = max(origW, origH).
+	side := float64(m.cfg.Width) / meta.ScaleX
 
-	// Collect ALL patches above threshold, then sort by confidence and take top maxDet.
-	type candidate struct {
-		score float64
-		patch int
-	}
-	var cands []candidate
+	// Collect ALL patches above threshold (boxes mapped to original pixels and clamped to the
+	// image), sort by confidence, NMS, THEN cut to maxDet. Cutting before NMS (the previous
+	// order) spent the maxDet budget on near-duplicates of the strongest instance and
+	// dropped the other instances.
+	dets := make([]api.Detection, 0, 64)
 	for p := 0; p < numPatches; p++ {
-		if patchScores[p] > m.simThreshold {
-			cands = append(cands, candidate{patchScores[p], p})
+		if !(patchScores[p] > m.simThreshold) {
+			continue
 		}
-	}
-	// Sort descending by score.
-	for i := 0; i < len(cands)-1; i++ {
-		for j := i + 1; j < len(cands); j++ {
-			if cands[j].score > cands[i].score {
-				cands[i], cands[j] = cands[j], cands[i]
-			}
-		}
-	}
-	if len(cands) > maxDet {
-		cands = cands[:maxDet]
-	}
-
-	dets := make([]api.Detection, 0, len(cands))
-	for _, c := range cands {
-		bb := boxesData[c.patch*4 : c.patch*4+4]
+		bb := boxesData[p*4 : p*4+4]
 		cx, cy, bw, bh := float64(bb[0]), float64(bb[1]), float64(bb[2]), float64(bb[3])
+		x1 := math.Max(0, (cx-bw/2)*side)
+		y1 := math.Max(0, (cy-bh/2)*side)
+		x2 := math.Min(origW, (cx+bw/2)*side)
+		y2 := math.Min(origH, (cy+bh/2)*side)
+		if !(x2 > x1 && y2 > y1) { // also rejects NaN
+			continue
+		}
 		dets = append(dets, api.Detection{
-			BBox:  [4]float64{(cx - bw/2) * origW, (cy - bh/2) * origH, bw * origW, bh * origH},
+			BBox:  [4]float64{x1, y1, x2 - x1, y2 - y1},
 			Class: "object",
-			Conf:  c.score,
+			Conf:  patchScores[p],
 		})
 	}
-	return models.Result{Detections: nmsDetections(dets, 0.5)}, nil
+	sort.SliceStable(dets, func(i, j int) bool { return dets[i].Conf > dets[j].Conf })
+	dets = nmsDetections(dets, 0.5)
+	if len(dets) > maxDet {
+		dets = dets[:maxDet]
+	}
+	return models.Result{Detections: dets}, nil
 }
 
 // pickLogitsAndBoxes maps outputs to logits ([.,.,N]) and pred_boxes ([.,.,4]) by name
@@ -296,7 +311,6 @@ func pickLogitsAndBoxes(names []string, outs []engine.Tensor) (logits, boxes *en
 	}
 	return logits, boxes
 }
-
 
 // nmsDetections applies greedy NMS on boxes sorted by confidence (desc).
 // Uses max(IoU, containment) as the suppression score so that a large background

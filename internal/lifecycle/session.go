@@ -37,6 +37,12 @@ type Session struct {
 
 	mu       sync.Mutex
 	lastUsed time.Time
+
+	// refs counts requests currently using this session and retired marks it removed from the
+	// Manager's live map; both are guarded by Manager.mu (see Manager.acquire / retireLocked).
+	// A retired session is closed by whoever drops the last reference — never under a request.
+	refs    int
+	retired bool
 }
 
 func newSimpleSession(name string, task api.Task, m models.Model, eng engine.Runnable, idle time.Duration, now time.Time) *Session {
@@ -190,10 +196,23 @@ func (s *Session) idleFor(now time.Time) time.Duration {
 }
 
 // ExplainEngine returns the lazily-created explain session (nil if not yet loaded).
-func (s *Session) ExplainEngine() engine.Runnable { return s.explainEngine }
+func (s *Session) ExplainEngine() engine.Runnable {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.explainEngine
+}
 
-// SetExplainEngine stores the explain session under the caller's lock.
-func (s *Session) SetExplainEngine(r engine.Runnable) { s.explainEngine = r }
+// SetExplainEngine stores the explain session if none is set yet and reports whether it did;
+// the loser of a concurrent lazy-init closes its own copy.
+func (s *Session) SetExplainEngine(r engine.Runnable) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.explainEngine != nil {
+		return false
+	}
+	s.explainEngine = r
+	return true
+}
 
 // close releases the ONNX session(s) (avoid VRAM leaks).
 func (s *Session) close() error {
@@ -203,8 +222,8 @@ func (s *Session) close() error {
 			firstErr = err
 		}
 	}
-	if s.explainEngine != nil {
-		if err := s.explainEngine.Close(); err != nil && firstErr == nil {
+	if ex := s.ExplainEngine(); ex != nil {
+		if err := ex.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

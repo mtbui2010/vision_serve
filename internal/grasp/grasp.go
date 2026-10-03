@@ -16,7 +16,7 @@ package grasp
 
 import (
 	"math"
-	"sort"
+	"slices"
 
 	"visionserve/pkg/api"
 )
@@ -26,16 +26,6 @@ import (
 type Bitmap struct {
 	W, H int
 	Data []bool
-}
-
-// at reports whether pixel (x,y) is set; out-of-bounds reads as false (the
-// convolution treats the border as background, matching cv2.filter2D's default
-// of an implicit zero/replicate boundary closely enough for boundary normals).
-func (b Bitmap) at(x, y int) bool {
-	if x < 0 || y < 0 || x >= b.W || y >= b.H {
-		return false
-	}
-	return b.Data[y*b.W+x]
 }
 
 // Params configures the analytic grasp search. Use DefaultParams for sane values.
@@ -280,7 +270,9 @@ func decimate(pts []boundaryPoint, degStep, stridePx int) []boundaryPoint {
 }
 
 // arctan2Py mirrors the Python torch_arctan2 lambda used by utils.sampling:
-//   arctan(y/(x+eps)) + (x<0)*pi*sign(y)
+//
+//	arctan(y/(x+eps)) + (x<0)*pi*sign(y)
+//
 // This differs from a standard atan2 only in its branch handling but reproduces
 // the exact binning the Python decimation uses.
 func arctan2Py(y, x float64) float64 {
@@ -349,50 +341,49 @@ func FromMask(mask Bitmap, p Params) []api.Grasp {
 
 	kf := math.Cos(math.Atan(p.FrictionCoef)) // friction-cone threshold
 
+	// Candidates are kept struct-of-arrays: the contact indices of candidate c live in
+	// cpts[c*nf : (c+1)*nf]. One flat slice instead of one small slice per candidate — a star
+	// mask yields thousands of candidates, and their allocations were a third of the search.
 	type cand struct {
-		pts     []int   // contact indices
 		minDist float64 // min pairwise finger distance
 		insAvg  float64 // mean force-closure inner product
 		dcenter float64 // |grasp center - object center|
 	}
+	nf := p.NFingers
 	var cands []cand
+	var cpts []int
 
 	// enumerate all nfingers-combinations of boundary points.
-	combinations(n, p.NFingers, func(idx []int) {
+	combinations(n, nf, func(idx []int) {
 		// grasp center = mean of contacts (Xmean).
 		var xmean vec2
 		for _, i := range idx {
 			xmean.X += pts[i].loc.X
 			xmean.Y += pts[i].loc.Y
 		}
-		xmean.X /= float64(p.NFingers)
-		xmean.Y /= float64(p.NFingers)
+		xmean.X /= float64(nf)
+		xmean.Y /= float64(nf)
 
 		// force directions: each finger toward the finger centroid.
 		// force-closure: F·n > kf for every contact (friction cone).
 		minD := math.Inf(1)
 		insSum := 0.0
-		ok := true
 		for _, i := range idx {
 			d := pts[i].loc.sub(xmean)
 			dn := d.norm()
 			if dn < 1e-12 {
-				ok = false
-				break
+				return
 			}
 			f := vec2{d.X / (dn + 1e-10), d.Y / (dn + 1e-10)}
 			ins := f.dot(pts[i].nrm)
 			if ins <= kf {
-				ok = false
-				break
+				return
 			}
 			insSum += ins
 		}
-		if !ok {
-			return
-		}
 
 		// pairwise finger distances (gripper widths); all must be in (dmin,dmax).
+		ok := true
 		for a := 0; a < len(idx); a++ {
 			for b := a + 1; b < len(idx); b++ {
 				dist := pts[idx[a]].loc.sub(pts[idx[b]].loc).norm()
@@ -409,11 +400,11 @@ func FromMask(mask Bitmap, p Params) []api.Grasp {
 		}
 
 		cands = append(cands, cand{
-			pts:     append([]int(nil), idx...),
 			minDist: minD,
-			insAvg:  insSum / float64(p.NFingers),
+			insAvg:  insSum / float64(nf),
 			dcenter: xmean.sub(center).norm(),
 		})
+		cpts = append(cpts, idx...)
 	})
 
 	if len(cands) == 0 {
@@ -445,8 +436,8 @@ func FromMask(mask Bitmap, p Params) []api.Grasp {
 	const contactScore = 1.0
 	const objScore = 1.0
 
-	out := make([]api.Grasp, 0, len(cands))
-	for _, c := range cands {
+	scores := make([]float64, len(cands))
+	for i, c := range cands {
 		dminN := c.minDist / (maxMinDist + eps)
 		dcenterN := c.dcenter / (maxDcenter + eps)
 		score := w[0]*c.insAvg +
@@ -459,35 +450,69 @@ func FromMask(mask Bitmap, p Params) []api.Grasp {
 		} else if score > 1 {
 			score = 1
 		}
+		scores[i] = score
+	}
 
+	// Order: quality descending, ties in enumeration order — exactly what a stable sort of all
+	// candidates gives. With a cap only the best MaxGrasps are selected (a bounded insertion,
+	// O(candidates·cap)) and only those are turned into grasps; the full sort and the full
+	// output slice were most of the remaining cost on large masks.
+	order := topK(scores, p.MaxGrasps)
+
+	out := make([]api.Grasp, 0, len(order))
+	for _, ci := range order {
 		// 2-finger grasp geometry: center = midpoint, theta = atan2 of finger
 		// vector (twopoints2theta first column), width = pixel distance.
-		p0 := pts[c.pts[0]].loc
-		p1 := pts[c.pts[1]].loc
+		p0 := pts[cpts[ci*nf]].loc
+		p1 := pts[cpts[ci*nf+1]].loc
 		v := p1.sub(p0)
-		theta := math.Atan2(v.Y, v.X)
-		width := v.norm()
-		cx := (p0.X + p1.X) / 2
-		cy := (p0.Y + p1.Y) / 2
-
 		out = append(out, api.Grasp{
-			X:       cx,
-			Y:       cy,
-			Theta:   theta,
-			Width:   width,
-			Quality: score,
+			X:       (p0.X + p1.X) / 2,
+			Y:       (p0.Y + p1.Y) / 2,
+			Theta:   math.Atan2(v.Y, v.X),
+			Width:   v.norm(),
+			Quality: scores[ci],
 		})
 	}
-
-	// sort by quality descending (stable for deterministic output).
-	sort.SliceStable(out, func(i, j int) bool {
-		return out[i].Quality > out[j].Quality
-	})
-
-	if p.MaxGrasps > 0 && len(out) > p.MaxGrasps {
-		out = out[:p.MaxGrasps]
-	}
 	return out
+}
+
+// topK returns candidate indices ordered by score descending, ties by index ascending — the
+// order sort.SliceStable on scores would produce — keeping only the first k (k <= 0 = all).
+func topK(scores []float64, k int) []int {
+	if k <= 0 || k >= len(scores) {
+		order := make([]int, len(scores))
+		for i := range order {
+			order[i] = i
+		}
+		slices.SortStableFunc(order, func(a, b int) int {
+			switch {
+			case scores[a] > scores[b]:
+				return -1
+			case scores[a] < scores[b]:
+				return 1
+			}
+			return 0
+		})
+		return order
+	}
+	best := make([]int, 0, k)
+	for i, s := range scores {
+		if len(best) == k && s <= scores[best[k-1]] {
+			continue // not strictly better than the current k-th: a later index loses the tie
+		}
+		// Insert after every kept entry scoring >= s (they have smaller indices, so they win ties).
+		pos := len(best)
+		for pos > 0 && scores[best[pos-1]] < s {
+			pos--
+		}
+		if len(best) < k {
+			best = append(best, 0)
+		}
+		copy(best[pos+1:], best[pos:len(best)-1])
+		best[pos] = i
+	}
+	return best
 }
 
 // combinations enumerates all k-combinations of [0,n) in lexicographic order,

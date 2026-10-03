@@ -92,6 +92,7 @@ runtime:
 | `model_file` | path to the .onnx — **optional when `files:` is present** |
 | `files` | **map role → .onnx path** for multi-session models (e.g. SAM `encoder`/`decoder`). All listed files must exist on disk for the model to be `available`/loadable |
 | `sha256` | **optional** — hex SHA-256 content pin. A scalar (single-file model) **or** a role→digest map (multi-file). When present, the weight bytes are hashed at load time and load is **refused on mismatch**. Absent ⇒ no hash check (backward compatible). Per-role pinning is optional: unpinned roles are skipped |
+| `sha256_files` | **optional** — `relative/path: digest` pins for files that are not ONNX sessions: external weight data (`model.onnx.data`), tokenizers (`tokenizer.json`, `vocab.txt`), labels. Checked at load like `sha256`. In verified mode an unpinned `<session>.data` next to a session file is refused, because that file holds most of the weights |
 | `source_url` | **optional** — the audited upstream the weights came from (provenance). Purely informational unless a deployer enables the verified-source allowlist (see threat model) |
 | `input.*` | width/height/layout/letterbox/normalize |
 | `postprocess.type` | decode hint (`detr`, `sam`, ...) |
@@ -115,6 +116,7 @@ runtime:
 | `input.layout` | NCHW / NHWC (or empty) |
 | `runtime.prefer` | each EP ∈ {tensorrt, cuda, coreml, directml, openvino, cpu} |
 | `sha256` | optional; if present, must be a hex string or a role→hex map. Mismatch is rejected at **load** time, not scan time (weights may not be downloaded yet) |
+| `sha256_files` | optional; paths must be relative and stay inside the model directory; digests are hex |
 | `source_url` | optional; if the verified-source allowlist is enabled, must start with an audited prefix |
 
 A manifest that is invalid in **structure** is **skipped** during scan (collected into a

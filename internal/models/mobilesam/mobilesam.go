@@ -142,7 +142,6 @@ func (m *mobileSAM) inferBitmaps(img image.Image, prompt models.Prompt, r models
 	}
 
 	// Prompted: one decoder run per prompt set.
-	zeros := make([]float32, 256*256)
 	bitmaps := make([]MaskBitmap, 0, len(sets))
 	for _, ps := range sets {
 		coords := ps.scaledCoords(scale)
@@ -150,7 +149,7 @@ func (m *mobileSAM) inferBitmaps(img image.Image, prompt models.Prompt, r models
 			"image_embeddings": embedding,
 			"point_coords":     engine.F32(coords, 1, int64(ps.n()), 2),
 			"point_labels":     engine.F32(ps.labels, 1, int64(ps.n())),
-			"mask_input":       engine.F32(zeros, 1, 1, 256, 256),
+			"mask_input":       zeroMaskTensor(),
 			"has_mask_input":   engine.F32([]float32{0}, 1),
 			"orig_im_size":     engine.F32([]float32{float32(origH), float32(origW)}, 2),
 		}

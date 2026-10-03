@@ -18,7 +18,7 @@
 
 # 1) Locate a CUDA-enabled ORT shared library.
 if [ -z "${VISIONSERVE_ORT_GPU:-}" ]; then
-  _cuda_so="$(find "$HOME" -name 'libonnxruntime_providers_cuda.so' 2>/dev/null | head -1)"
+  _cuda_so="$(find "$HOME" -xdev -name 'libonnxruntime_providers_cuda.so' 2>/dev/null | head -1)"
   if [ -n "$_cuda_so" ]; then
     VISIONSERVE_ORT_GPU="$(ls "$(dirname "$_cuda_so")"/libonnxruntime.so* 2>/dev/null | head -1)"
   fi

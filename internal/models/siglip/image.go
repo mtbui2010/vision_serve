@@ -118,6 +118,15 @@ func CropTensor(img image.Image, boxes [][4]float64) (engine.Tensor, []int, erro
 	return engine.F32(data, int64(len(kept)), 3, ImageSize, ImageSize), kept, nil
 }
 
+// UsableBox reports whether box ([x, y, w, h], original-image coordinates) keeps at least one
+// pixel after clamping to img — i.e. whether CropTensor would embed it rather than skip it.
+// Callers that may legitimately hold ONLY degenerate boxes (a single sub-pixel detection on the
+// frame edge) filter with it first, because CropTensor errors when nothing is usable.
+func UsableBox(img image.Image, b [4]float64) bool {
+	_, err := clampBox(b, img.Bounds())
+	return err == nil
+}
+
 // clampBox turns an [x,y,w,h] float box into an integer rectangle inside bounds.
 func clampBox(b [4]float64, bounds image.Rectangle) (image.Rectangle, error) {
 	x0 := bounds.Min.X + int(b[0]+0.5)

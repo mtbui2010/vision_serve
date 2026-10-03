@@ -31,6 +31,10 @@ type Manager struct {
 
 	mu   sync.Mutex
 	live map[string]*Session
+	// loading holds one channel per model currently being loaded; it is closed when that load
+	// finishes, successfully or not (see Load).
+	loading    map[string]chan struct{}
+	lastRescan time.Time // last on-demand registry rescan (see rescanAllowed)
 
 	// idleOverrideSec, when >= 0, overrides every model's manifest
 	// idle_unload_seconds at Load time (0 = never auto-unload). -1 keeps the
@@ -46,6 +50,7 @@ func NewManager(reg *registry.Registry) *Manager {
 	m := &Manager{
 		reg:             reg,
 		live:            map[string]*Session{},
+		loading:         map[string]chan struct{}{},
 		idleOverrideSec: -1, // -1 = use each manifest's idle_unload_seconds
 		stop:            make(chan struct{}),
 	}
@@ -71,73 +76,39 @@ func (m *Manager) SetIdleUnloadOverride(sec int) {
 // Load loads a model into memory (idempotent: returns immediately if already loaded).
 // This is where models.Model is built from the manifest and engine.Session is created.
 func (m *Manager) Load(name string) error {
-	m.mu.Lock()
-	if _, ok := m.live[name]; ok {
+	// One load per name at a time (singleflight). Two first requests used to both hash the
+	// weights and build every ONNX session — twice the VRAM at peak — and throw one copy away.
+	// Waiters re-check after the leader finishes; if it failed, the next one retries the load.
+	for {
+		m.mu.Lock()
+		if _, ok := m.live[name]; ok {
+			m.mu.Unlock()
+			return nil
+		}
+		wait, busy := m.loading[name]
+		if !busy {
+			done := make(chan struct{})
+			m.loading[name] = done
+			m.mu.Unlock()
+			err := m.load(name)
+			m.mu.Lock()
+			delete(m.loading, name)
+			close(done)
+			m.mu.Unlock()
+			return err
+		}
 		m.mu.Unlock()
-		return nil
+		<-wait
 	}
-	m.mu.Unlock()
+}
 
-	entry, ok := m.reg.Get(name)
-	if !ok {
-		// Model not in registry — it may have been pulled while the server was
-		// running. Re-scan once before giving up.
-		m.reg.Scan() //nolint:errcheck — scan errors are non-fatal (logged at startup)
-		entry, ok = m.reg.Get(name)
-	}
-	if !ok {
-		return fmt.Errorf("lifecycle: model %q not found in registry", name)
-	}
-	man := entry.Manifest
-
-	if !man.WeightsExist() {
-		return fmt.Errorf("lifecycle: no weights for %q at %s — download them per the README in the model directory", name, man.ModelFilePath())
-	}
-
-	// License-policy hardening: when the manifest pins a sha256 (and/or a verified
-	// source allowlist is configured), bind the declared license to the audited
-	// bytes/origin. A no-op for manifests that declare neither (backward compatible).
-	if err := man.VerifyWeights(); err != nil {
-		return fmt.Errorf("lifecycle: weight verification failed for %q: %w", name, err)
-	}
-
-	labels, err := man.LoadLabels()
+// load builds the model and its sessions; only Load (which guarantees one per name) calls it.
+func (m *Manager) load(name string) error {
+	base, man, err := m.buildModel(name)
 	if err != nil {
 		return err
 	}
 	providers, err := man.Providers()
-	if err != nil {
-		return err
-	}
-
-	cfg := models.Config{
-		Name:       man.Name,
-		Width:      man.Input.Width,
-		Height:     man.Input.Height,
-		Layout:     man.Input.Layout,
-		Mean:       man.Input.Normalize.Mean,
-		Std:        man.Input.Normalize.Std,
-		Letterbox:  man.Input.Letterbox,
-		PostType:   man.Postprocess.Type,
-		BoxFormat:  man.Postprocess.BoxFormat,
-		ConfThresh: man.Postprocess.ConfThreshold,
-		TextThresh: man.Postprocess.TextThreshold,
-		MaxDet:     man.Postprocess.MaxDetections,
-		Labels:     labels,
-		Dir:        man.Dir(),
-		Files:      man.FilesAbs(),
-		Detector:   man.Detector,
-		Segmenter:  man.Segmenter,
-		GripperMin: man.Grasp.GripperMin,
-		GripperMax: man.Grasp.GripperMax,
-	}
-	if man.Instance != nil {
-		cfg.InstanceSimThreshold = man.Instance.SimThreshold
-		cfg.InstanceMaxTemplates = man.Instance.MaxTemplates
-		cfg.InstancePatchSize = man.Instance.PatchSize
-	}
-
-	base, err := models.New(man.ArchOrName(), cfg)
 	if err != nil {
 		return err
 	}
@@ -160,9 +131,13 @@ func (m *Manager) Load(name string) error {
 			return fmt.Errorf("lifecycle: model %q is multi-session but its manifest has no 'files' map", name)
 		}
 		// Collect per-role pool sizes (default 1 = single session).
+		// Copied, never aliased: a model may return nil (hybrid without SAM) or its own map, and
+		// the override below writes into this one — a nil map write panicked the load.
 		poolSizes := map[string]int{}
 		if ps, ok := mdl.(models.PoolSizer); ok {
-			poolSizes = ps.PoolSizes()
+			for role, n := range ps.PoolSizes() {
+				poolSizes[role] = n
+			}
 		}
 		// VS_POOL_OVERRIDE forces every role's pool size (eval pool×concurrency sweep).
 		if ov := poolOverride(); ov > 0 {
@@ -272,18 +247,139 @@ func closeEngines(engines map[string]engine.Runnable) {
 	}
 }
 
+// buildModel resolves a registry entry, runs the load-time checks (weights present, verified
+// weights, labels, EP chain) and constructs the model object from its manifest. It creates NO
+// ONNX session: Load adds those, and Preprocess uses the bare object to show what the model
+// would be fed.
+func (m *Manager) buildModel(name string) (models.Base, *registry.Manifest, error) {
+	entry, ok := m.reg.Get(name)
+	if !ok && m.rescanAllowed() {
+		// Model not in registry — it may have been pulled while the server was running.
+		// Re-scan before giving up, at most once per second: every unknown name used to
+		// trigger a full scan (ReadDir + ~50 YAML parses), so a client spamming random
+		// names could burn CPU at will.
+		m.reg.Scan() //nolint:errcheck — scan errors are non-fatal (logged at startup)
+		entry, ok = m.reg.Get(name)
+	}
+	if !ok {
+		return nil, nil, fmt.Errorf("lifecycle: model %q not found in registry", name)
+	}
+	man := entry.Manifest
+
+	if !man.WeightsExist() {
+		return nil, nil, fmt.Errorf("lifecycle: no weights for %q at %s — download them per the README in the model directory", name, man.ModelFilePath())
+	}
+
+	// License-policy hardening: when the manifest pins a sha256 (and/or a verified
+	// source allowlist is configured), bind the declared license to the audited
+	// bytes/origin. A no-op for manifests that declare neither (backward compatible).
+	if err := man.VerifyWeights(); err != nil {
+		return nil, nil, fmt.Errorf("lifecycle: weight verification failed for %q: %w", name, err)
+	}
+
+	if err := checkKeepAspectGraph(man); err != nil {
+		return nil, nil, err
+	}
+
+	labels, err := man.LoadLabels()
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := man.Providers(); err != nil { // validate the EP chain at the same point Load always did
+		return nil, nil, err
+	}
+
+	cfg := models.Config{
+		Name:       man.Name,
+		Width:      man.Input.Width,
+		Height:     man.Input.Height,
+		Layout:     man.Input.Layout,
+		Mean:       man.Input.Normalize.Mean,
+		Std:        man.Input.Normalize.Std,
+		Letterbox:  man.Input.Letterbox,
+		Crop:       man.Input.Crop,
+		KeepAspect: man.Input.KeepAspect,
+		MultipleOf: man.Input.MultipleOf,
+		PostType:   man.Postprocess.Type,
+		BoxFormat:  man.Postprocess.BoxFormat,
+		ConfThresh: man.Postprocess.ConfThreshold,
+		TextThresh: man.Postprocess.TextThreshold,
+		MaxDet:     man.Postprocess.MaxDetections,
+		Labels:     labels,
+		Dir:        man.Dir(),
+		Files:      man.FilesAbs(),
+		Detector:   man.Detector,
+		Segmenter:  man.Segmenter,
+		GripperMin: man.Grasp.GripperMin,
+		GripperMax: man.Grasp.GripperMax,
+	}
+	if man.Instance != nil {
+		cfg.InstanceSimThreshold = man.Instance.SimThreshold
+		cfg.InstanceMaxTemplates = man.Instance.MaxTemplates
+		cfg.InstancePatchSize = man.Instance.PatchSize
+	}
+
+	base, err := models.New(man.ArchOrName(), cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	return base, man, nil
+}
+
 // Unload releases a model from memory. Not an error if the model is not loaded.
 func (m *Manager) Unload(name string) error {
 	m.mu.Lock()
-	s, ok := m.live[name]
-	if ok {
-		delete(m.live, name)
-	}
+	s := m.retireLocked(name)
 	m.mu.Unlock()
-	if !ok {
-		return nil
+	if s == nil {
+		return nil // not loaded, or still in use: the last request closes it
 	}
 	return s.close()
+}
+
+// acquire leases the live session for name: it cannot be closed (by Unload, the idle reaper or
+// Close) until the returned release runs. Without the lease a request could keep using a
+// session that was closed under it — a "send on closed channel" panic, or a hang on a pool.
+// It also marks the session used NOW, so a request arriving at the edge of the idle timeout is
+// not reaped mid-flight.
+func (m *Manager) acquire(name string) (*Session, func(), error) {
+	m.mu.Lock()
+	s := m.live[name]
+	if s == nil {
+		m.mu.Unlock()
+		return nil, nil, fmt.Errorf("lifecycle: model %q was just unloaded", name)
+	}
+	s.refs++
+	m.mu.Unlock()
+	s.touch(time.Now())
+	return s, func() { m.release(s) }, nil
+}
+
+func (m *Manager) release(s *Session) {
+	m.mu.Lock()
+	s.refs--
+	closeNow := s.retired && s.refs == 0
+	m.mu.Unlock()
+	if closeNow {
+		_ = s.close()
+	}
+}
+
+// retireLocked removes name from the live map (caller holds m.mu). It returns the session when
+// nobody is using it — the caller must then close it, OUTSIDE m.mu, since closing a GPU session
+// can take a while and m.mu gates every request. A session still in use is left to the last
+// release to close.
+func (m *Manager) retireLocked(name string) *Session {
+	s := m.live[name]
+	if s == nil {
+		return nil
+	}
+	delete(m.live, name)
+	s.retired = true
+	if s.refs > 0 {
+		return nil
+	}
+	return s
 }
 
 // Predict ensures the model is loaded then runs inference (no prompt). Back-compat
@@ -299,12 +395,11 @@ func (m *Manager) PredictPrompt(name string, img image.Image, prompt models.Prom
 	if err := m.Load(name); err != nil {
 		return api.Result{}, err
 	}
-	m.mu.Lock()
-	s := m.live[name]
-	m.mu.Unlock()
-	if s == nil {
-		return api.Result{}, fmt.Errorf("lifecycle: model %q was just unloaded", name)
+	s, release, err := m.acquire(name)
+	if err != nil {
+		return api.Result{}, err
 	}
+	defer release()
 	// Resolve template images for instance_detection models.
 	if prompt.TemplateName != "" && m.tmpl != nil {
 		imgs := m.tmpl.Get(prompt.TemplateName)
@@ -322,12 +417,11 @@ func (m *Manager) InferTensor(name string, in engine.Tensor) (api.Result, error)
 	if err := m.Load(name); err != nil {
 		return api.Result{}, err
 	}
-	m.mu.Lock()
-	s := m.live[name]
-	m.mu.Unlock()
-	if s == nil {
-		return api.Result{}, fmt.Errorf("lifecycle: model %q was just unloaded", name)
+	s, release, err := m.acquire(name)
+	if err != nil {
+		return api.Result{}, err
 	}
+	defer release()
 	return s.PredictTensor(in, time.Now())
 }
 
@@ -349,12 +443,11 @@ type ExplainResult struct {
 // loadExplainSession lazily creates the explain session (all outputs including explain tensors).
 // Thread-safe — multiple concurrent /api/explain calls race to create it; only one wins.
 func (m *Manager) loadExplainSession(name string) error {
-	m.mu.Lock()
-	s := m.live[name]
-	m.mu.Unlock()
-	if s == nil {
-		return fmt.Errorf("lifecycle: model %q not loaded", name)
+	s, release, err := m.acquire(name)
+	if err != nil {
+		return err
 	}
+	defer release()
 	if s.ExplainEngine() != nil {
 		return nil // already created
 	}
@@ -398,13 +491,8 @@ func (m *Manager) loadExplainSession(name string) error {
 		}
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	// Re-check under lock (another goroutine may have won the race).
-	if s2 := m.live[name]; s2 != nil && s2.ExplainEngine() == nil {
-		s2.SetExplainEngine(explainEng)
-	} else {
-		_ = explainEng.Close() // lost the race, discard
+	if !s.SetExplainEngine(explainEng) {
+		_ = explainEng.Close() // another request won the race, discard ours
 	}
 	return nil
 }
@@ -421,12 +509,11 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 		return ExplainResult{}, err
 	}
 
-	m.mu.Lock()
-	s := m.live[name]
-	m.mu.Unlock()
-	if s == nil {
-		return ExplainResult{}, fmt.Errorf("lifecycle: model %q was just unloaded", name)
+	s, release, err := m.acquire(name)
+	if err != nil {
+		return ExplainResult{}, err
 	}
+	defer release()
 
 	entry, ok := m.reg.Get(name)
 	if !ok {
@@ -467,17 +554,25 @@ func (m *Manager) Explain(name string, img image.Image, req ExplainRequest) (Exp
 		}
 		// Resolve class → detectionIdx (plain models only).
 		if req.Class != "" {
+			// A class that is not detected is an error, not "explain detection 0": that used to
+			// return a heatmap for some other object, labelled as the requested class.
 			detectOuts, derr := s.engine.Run([]engine.Tensor{inputTensor})
-			if derr == nil {
-				res, derr2 := mdl.Postprocess(detectOuts, meta)
-				if derr2 == nil {
-					for i, d := range res.Detections {
-						if d.Class == req.Class {
-							detectionIdx = i
-							break
-						}
-					}
+			if derr != nil {
+				return ExplainResult{}, fmt.Errorf("lifecycle: explain: detection pass failed: %w", derr)
+			}
+			res, derr := mdl.Postprocess(detectOuts, meta)
+			if derr != nil {
+				return ExplainResult{}, fmt.Errorf("lifecycle: explain: %w", derr)
+			}
+			found := false
+			for i, d := range res.Detections {
+				if d.Class == req.Class {
+					detectionIdx, found = i, true
+					break
 				}
+			}
+			if !found {
+				return ExplainResult{}, fmt.Errorf("lifecycle: explain: no %q detection in this image", req.Class)
 			}
 		}
 	}
@@ -588,10 +683,15 @@ func (m *Manager) IsLoaded(name string) bool {
 func (m *Manager) Close() {
 	m.once.Do(func() { close(m.stop) })
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for name, s := range m.live {
+	var idle []*Session
+	for name := range m.live {
+		if s := m.retireLocked(name); s != nil {
+			idle = append(idle, s)
+		}
+	}
+	m.mu.Unlock()
+	for _, s := range idle { // sessions still serving a request are closed by their last release
 		_ = s.close()
-		delete(m.live, name)
 	}
 }
 
@@ -605,20 +705,21 @@ func (m *Manager) reaper() {
 			return
 		case <-t.C:
 			now := time.Now()
-			var expired []string
+			var expired []*Session
 			m.mu.Lock()
 			for name, s := range m.live {
-				if s.idleTimeout > 0 && s.idleFor(now) > s.idleTimeout {
-					expired = append(expired, name)
-				}
-			}
-			for _, name := range expired {
-				if s := m.live[name]; s != nil {
-					_ = s.close()
-					delete(m.live, name)
+				// A session serving a request is never idle, however old its lastUsed.
+				if s.refs == 0 && s.idleTimeout > 0 && s.idleFor(now) > s.idleTimeout {
+					if r := m.retireLocked(name); r != nil {
+						expired = append(expired, r)
+					}
 				}
 			}
 			m.mu.Unlock()
+			// Closed outside m.mu: destroying a GPU session takes time and m.mu gates every request.
+			for _, s := range expired {
+				_ = s.close()
+			}
 		}
 	}
 }
@@ -644,4 +745,36 @@ func poolOverride() int {
 		return 0
 	}
 	return n
+}
+
+// checkKeepAspectGraph refuses input.keep_aspect on a graph whose spatial input size is fixed.
+// Keep-aspect feeds a different H×W for every image shape; a fixed graph would load fine and then
+// fail on the first non-square request with an ONNX Runtime shape error naming no manifest field.
+// An unreadable graph is not judged here: Load reports it on its own.
+func checkKeepAspectGraph(man *registry.Manifest) error {
+	if !man.Input.KeepAspect {
+		return nil
+	}
+	ins, _, err := engine.Inspect(man.ModelFilePath())
+	if err != nil || len(ins) == 0 {
+		return nil
+	}
+	if shp := ins[0].Shape; len(shp) == 4 && shp[2] > 0 && shp[3] > 0 {
+		return fmt.Errorf("lifecycle: %q declares input.keep_aspect, but %s has a fixed %dx%d input — "+
+			"keep_aspect needs an export with dynamic height/width (or remove keep_aspect to squash)",
+			man.Name, man.ModelFilePath(), shp[3], shp[2])
+	}
+	return nil
+}
+
+// rescanAllowed rate-limits on-demand registry rescans to one per second.
+func (m *Manager) rescanAllowed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	if now.Sub(m.lastRescan) < time.Second {
+		return false
+	}
+	m.lastRescan = now
+	return true
 }

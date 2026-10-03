@@ -5,13 +5,22 @@ task: detection
 license: Apache-2.0
 architecture: rf-detr
 source_url: https://huggingface.co/PierreMarieCurie/rf-detr-onnx/resolve/main/rf-detr-nano.onnx
+# sha256 = the LFS oid of rf-detr-nano.onnx on PierreMarieCurie/rf-detr-onnx (checked against
+# the HF tree API, 107 816 789 bytes) and of the local file below (input [1,3,384,384]).
 sha256: 3fcbba0f68bad4939fdf1c38f432783b95691e2869af3be369780aa5be67abb2
+# The local name is the catalog's LocalFilename for this entry (internal/catalog/catalog.go),
+# which `pull` writes: the bytes are the NANO export despite the "base" in the name (the real
+# base weights are models/rf-detr/rf-detr-base-real.onnx, sha b3321965…). Renaming it here
+# alone would break re-pulls; rename it in the catalog entry and here together.
 model_file: rf-detr-base.onnx
 
 input:
   width: 384
   height: 384
   layout: NCHW
+  # Intentionally left as letterbox: the squash fix (BUGS_TO_FIX.md #1) was measured for the
+  # 560/512 rfdetr-trained checkpoints only; this upstream nano export was never measured
+  # either way, so it is not flipped blind.
   letterbox: true
   normalize:
     mean: [0.485, 0.456, 0.406]

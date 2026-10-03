@@ -1,16 +1,16 @@
 // Package grasp implements the "grasp" architecture: a configurable planar
 // parallel-jaw grasp pipeline.
 //
-//	(optional detector) → segmenter (mask) → mask2grasp (analytic)
+//		(optional detector) → segmenter (mask) → mask2grasp (analytic)
 //
-//   - Segmenter (mandatory, default "mobile-sam") turns the image into object
-//     masks: box-prompted when a detector supplies boxes, or whole-image automask
-//     when there is no detector.
-//   - Detector (OPTIONAL) supplies boxes + class labels. Set it ("rf-detr",
-//     "grounding-dino", …) for CLASS-AWARE grasps; omit it for CLASS-AGNOSTIC
-//     grasps (automask over the whole image).
-//   - The final stage is the pure-Go analytic mask2grasp search (internal/grasp);
-//     it adds no ONNX session and no weights.
+//	  - Segmenter (mandatory, default "mobile-sam") turns the image into object
+//	    masks: box-prompted when a detector supplies boxes, or whole-image automask
+//	    when there is no detector.
+//	  - Detector (OPTIONAL) supplies boxes + class labels. Set it ("rf-detr",
+//	    "grounding-dino", …) for CLASS-AWARE grasps; omit it for CLASS-AGNOSTIC
+//	    grasps (automask over the whole image).
+//	  - The final stage is the pure-Go analytic mask2grasp search (internal/grasp);
+//	    it adds no ONNX session and no weights.
 //
 // Like Grounded-SAM, this model only ORCHESTRATES sessions owned by
 // lifecycle.Manager (VRAM-safe): the detector session under role "det" and the
@@ -49,6 +49,13 @@ const (
 	defaultBoxThresh  = 0.3
 	defaultTextThresh = 0.25
 )
+
+// defaultMaxGraspsPerMask caps the grasps returned for EACH mask (the best-quality ones). It is
+// deliberately separate from the manifest's max_detections, which is the DETECTOR's cap (300 on
+// grasp-rfdetr, read by RF-DETR's own postprocess): reused as the grasp cap it let one
+// star-shaped mask return thousands of grasps and the response grow to megabytes. A grasp
+// consumer executes the best few; the Python client's own post-filter keeps 3 per object.
+const defaultMaxGraspsPerMask = 20
 
 // detector abstracts the optional box stage so the plain-Model detectors (rf-detr,
 // rt-detr) and the text-prompted GroundingDINO can share one seam. Both drive a
@@ -284,8 +291,8 @@ func (g *graspModel) segment(img image.Image, prompt models.Prompt, r models.Run
 }
 
 // graspParams resolves the gripper opening bounds: core defaults, overridden by
-// the manifest, overridden again by the request (Prompt). MaxGrasps comes from the
-// manifest's max_detections, if any.
+// the manifest, overridden again by the request (Prompt). MaxGrasps is the per-mask
+// default (defaultMaxGraspsPerMask), independent of the detector's max_detections.
 func (g *graspModel) graspParams(prompt models.Prompt) graspcore.Params {
 	p := graspcore.DefaultParams()
 	if g.gripMin > 0 {
@@ -300,9 +307,7 @@ func (g *graspModel) graspParams(prompt models.Prompt) graspcore.Params {
 	if prompt.GripperMax > 0 {
 		p.Dmax = prompt.GripperMax
 	}
-	if g.cfg.MaxDet > 0 {
-		p.MaxGrasps = g.cfg.MaxDet
-	}
+	p.MaxGrasps = defaultMaxGraspsPerMask
 	return p
 }
 

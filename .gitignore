@@ -4,6 +4,8 @@
 
 # ONNX weights — NOT committed (large). Download per each model directory's README.
 *.onnx
+# ...except tiny test fixtures (a few KB), which tests need on a clean clone.
+!**/testdata/*.onnx
 # ONNX external-data sidecars. torch's exporter externalises the weights of a large model, so
 # model.onnx is ~100 KB of graph and model.onnx.data is the other 370-440 MB. Without this line
 # `*.onnx` catches only the small half and a plain `git add -A` stages the weights.

@@ -121,7 +121,7 @@ func build(cfg models.Config, rf models.Model) (*hybrid, error) {
 
 	vocab := make(map[string]bool, len(cfg.Labels))
 	for _, l := range cfg.Labels {
-		l = strings.ToLower(strings.TrimSpace(l))
+		l = normClass(l)
 		if l != "" && l != "n/a" {
 			vocab[l] = true
 		}
@@ -192,9 +192,20 @@ func (m *hybrid) PoolSizes() map[string]int {
 
 // Infer routes to RF-DETR or GroundingDINO, then optionally segments each detected box.
 func (m *hybrid) Infer(img image.Image, prompt models.Prompt, r models.Runner) (models.Result, error) {
-	// GroundingDINO may run on this path, so serialize the whole pipeline (see PipelineMu).
-	groundingdino.PipelineMu.Lock()
-	defer groundingdino.PipelineMu.Unlock()
+	// groundingdino.PipelineMu serialises GroundingDINO pipelines end to end — the GroundingDINO
+	// pass AND the MobileSAM decoder pool chained after it — because that combination under
+	// concurrent load produced sporadic ORT errors (see its comment). It is taken only when this
+	// request actually reaches GroundingDINO, just before the pass, and held to the end so the
+	// chained SAM stage stays covered. A request answered by RF-DETR alone (every word in its
+	// vocabulary, no prompt, or the distilled head) never runs GroundingDINO and is exactly the
+	// grasp-rfdetr shape the lock has always left concurrent; taking the lock for it made the
+	// recommended default model serialise every request on the server.
+	locked := false
+	defer func() {
+		if locked {
+			groundingdino.PipelineMu.Unlock()
+		}
+	}()
 
 	classes := parseClasses(prompt.Text)
 	if m.noRF && len(classes) == 0 {
@@ -252,6 +263,8 @@ func (m *hybrid) Infer(img image.Image, prompt models.Prompt, r models.Runner) (
 		// the whole prompt, so dropping the in-vocabulary words removes them as distractors and
 		// can move the remaining scores slightly. Prompt splitting is a modelling decision, not
 		// just a dispatch optimisation.
+		groundingdino.PipelineMu.Lock()
+		locked = true
 		sub := prompt
 		sub.Text = joinClasses(unknown)
 		d, err := m.detectGDINO(img, sub, r)
@@ -297,15 +310,30 @@ func (m *hybrid) Infer(img image.Image, prompt models.Prompt, r models.Runner) (
 }
 
 // parseClasses splits a GroundingDINO-style prompt ("cat. remote.") into lowercase class
-// names ([cat, remote]). An empty prompt yields nil.
+// names ([cat, remote]), whitespace-collapsed and de-duplicated in first-seen order. An empty
+// prompt yields nil.
+//
+// De-duplication is not cosmetic: the rescorer softmaxes over the word list, so "zebra. zebra."
+// put two identical rows in the softmax and halved every rescored confidence (and asked
+// GroundingDINO the same phrase twice). Whitespace collapsing keeps "dining  table" on
+// RF-DETR's "dining table" route instead of sending it to GroundingDINO.
 func parseClasses(text string) []string {
 	var out []string
+	seen := make(map[string]bool)
 	for _, p := range strings.Split(text, ".") {
-		if p = strings.ToLower(strings.TrimSpace(p)); p != "" {
-			out = append(out, p)
+		p = normClass(p)
+		if p == "" || seen[p] {
+			continue
 		}
+		seen[p] = true
+		out = append(out, p)
 	}
 	return out
+}
+
+// normClass is the one normal form class names are compared in: lowercase, single spaces.
+func normClass(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
 }
 
 // partition splits the requested classes into the ones RF-DETR was trained on and the ones only
@@ -341,7 +369,7 @@ func filterByClass(dets []models.Detection, classes []string) []models.Detection
 	}
 	out := make([]models.Detection, 0, len(dets))
 	for _, d := range dets {
-		if want[strings.ToLower(d.Class)] {
+		if want[normClass(d.Class)] {
 			out = append(out, d)
 		}
 	}
@@ -393,12 +421,6 @@ func (m *hybrid) detectRFDETRWithFeats(img image.Image, r models.Runner) (
 		return nil, boxes, feats, meta, err
 	}
 	return res.Detections, boxes, feats, meta, nil
-}
-
-// detectRFDETR is the detections-only form, kept for callers that do not need the tensors.
-func (m *hybrid) detectRFDETR(img image.Image, r models.Runner) ([]models.Detection, error) {
-	d, _, _, _, err := m.detectRFDETRWithFeats(img, r)
-	return d, err
 }
 
 // detectGDINO runs GroundingDINO (text-prompted) for boxes + labels. It uses GroundingDINO's

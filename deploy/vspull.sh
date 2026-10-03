@@ -24,6 +24,9 @@
 # This helper is only for the no-bind-mount case (copy a host folder into a running
 # container, or fall back to the catalog).
 #
+# Extra arguments are passed through to `visionserve pull`, e.g.:
+#   vspull my-gd --force
+#
 # Config via env:
 #   VS_CONTAINER  (default: visionserve)              running container name
 #   VS_LOCAL_DIR  (default: $HOME/.visionserve_models) where your local model folders live
@@ -34,9 +37,17 @@ container="${VS_CONTAINER:-visionserve}"
 local_dir="${VS_LOCAL_DIR:-$HOME/.visionserve_models}"
 
 if [ -z "$arg" ]; then
-  echo "usage: vspull <model-name|folder>" >&2
+  echo "usage: vspull <model-name|folder> [pull flags, e.g. --force]" >&2
   echo "  installs \$VS_LOCAL_DIR/<name> if it exists, else pulls <name> from the catalog" >&2
   exit 2
+fi
+shift
+
+# -t only with a terminal on stdin: under CI, cron or a pipe, `docker exec -t` fails with
+# "the input device is not a TTY". -i is harmless either way.
+exec_flags=(-i)
+if [ -t 0 ] && [ -t 1 ]; then
+  exec_flags+=(-t)
 fi
 
 # Resolve the source folder: an explicit path, or a name under VS_LOCAL_DIR.
@@ -49,15 +60,18 @@ else
 fi
 
 if [ -n "$src" ]; then
-  name="$(basename "$src")"
-  tmp="/tmp/vspull-$name"
+  name="$(basename "$(cd "$src" && pwd)")"
+  tmp="/tmp/vspull-$name-$$"
+  # Remove the in-container copy however this script ends (success, failed install, Ctrl-C).
+  cleanup() { docker exec "$container" rm -rf "$tmp" >/dev/null 2>&1 || true; }
+  trap cleanup EXIT
   echo ">> local model folder found: $src"
   echo ">> copying into container '$container' and installing ..."
-  docker exec "$container" rm -rf "$tmp" 2>/dev/null || true
-  docker cp "$src" "$container:$tmp"
-  docker exec -it "$container" visionserve pull "$tmp"
-  docker exec "$container" rm -rf "$tmp" 2>/dev/null || true
+  # "$src/." copies the folder's CONTENTS (following the folder itself if it is a symlink).
+  docker exec "$container" mkdir -p "$tmp"
+  docker cp -L "$src/." "$container:$tmp"
+  docker exec "${exec_flags[@]}" "$container" visionserve pull "$tmp" "$@"
 else
   echo ">> no local folder for '$arg' (looked in $local_dir) — pulling from catalog"
-  docker exec -it "$container" visionserve pull "$arg"
+  docker exec "${exec_flags[@]}" "$container" visionserve pull "$arg" "$@"
 fi

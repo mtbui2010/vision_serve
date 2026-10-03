@@ -69,8 +69,8 @@ func encodePrompt(prompt models.Prompt, scale float32) (pointCoords, pointLabels
 //	"has_mask_input"   [1]               (0 = no prior mask)
 //
 // Decoder outputs: "iou_predictions" [1, M], "low_res_masks" [1, M, 256, 256]
-// NOTE: output masks are low-resolution (256×256), not upsampled to original size.
-// origH/origW are accepted for API consistency but are not sent to the decoder.
+// NOTE: output masks are low-resolution (256×256); pickBestMask upscales them to the
+// original size. origH/origW are accepted for API consistency but are not sent to the decoder.
 func runDecoder(runner models.Runner, imageEmbed, pointCoords, pointLabels engine.Tensor, origH, origW int) ([]engine.Tensor, error) {
 	zeros := make([]float32, 256*256)
 	inputs := map[string]engine.Tensor{
@@ -89,8 +89,20 @@ func runDecoder(runner models.Runner, imageEmbed, pointCoords, pointLabels engin
 	return outs, nil
 }
 
-// pickBestMask selects the highest-IoU mask from the decoder output, thresholds at
-// logit > 0, and encodes it as column-major RLE (COCO uncompressed style).
+// pickBestMask selects the highest-IoU mask from the decoder output, upscales its
+// low-res logits to the ORIGINAL image size, thresholds at logit > 0, and encodes it as
+// column-major RLE (COCO uncompressed style). BBox is in original-image pixels.
+//
+// The decoder returns low_res_masks [1, M, 256, 256] covering the whole 1024×1024 encoder
+// canvas, of which only the top-left (resized image) region holds the image — the rest is
+// padding. Upscaling mirrors upstream nanosam/utils/predictor.py upscale_mask exactly:
+//
+//	if W > H: lim_x = 256, lim_y = int(256·H/W)   else: lim_x = int(256·W/H), lim_y = 256
+//	mask = F.interpolate(mask[:, :, :lim_y, :lim_x], (H, W), mode="bilinear")  # align_corners=False
+//	binary = mask > 0
+//
+// NOTE: not verified against real NanoSAM weights (none in models/nano-sam); the recipe
+// is covered by unit tests on synthetic logits with the real [1,M,256,256] shape.
 func pickBestMask(outs []engine.Tensor, outNames []string, origW, origH int) (models.Mask, error) {
 	maskT, iouT := pickMaskAndIoU(outNames, outs)
 	if maskT == nil {
@@ -100,12 +112,21 @@ func pickBestMask(outs []engine.Tensor, outNames []string, origW, origH int) (mo
 		}
 		return models.Mask{}, fmt.Errorf("nanosam: decoder output has no mask tensor (shapes %v)", shapes)
 	}
+	if len(maskT.Shape) != 4 {
+		return models.Mask{}, fmt.Errorf("nanosam: unexpected mask shape %v (want [1,M,H,W])", maskT.Shape)
+	}
+	if origW <= 0 || origH <= 0 {
+		return models.Mask{}, fmt.Errorf("nanosam: invalid original size %dx%d", origW, origH)
+	}
 
 	n := int(maskT.Dim(1))
 	h := int(maskT.Dim(2))
 	w := int(maskT.Dim(3))
 	if n < 1 || h <= 0 || w <= 0 {
 		return models.Mask{}, fmt.Errorf("nanosam: unexpected mask shape %v", maskT.Shape)
+	}
+	if len(maskT.Data) < n*h*w {
+		return models.Mask{}, fmt.Errorf("nanosam: mask data length %d < %d (shape %v)", len(maskT.Data), n*h*w, maskT.Shape)
 	}
 
 	// Pick the channel with the highest IoU prediction.
@@ -125,25 +146,28 @@ func pickBestMask(outs []engine.Tensor, outNames []string, origW, origH int) (mo
 		conf = float64(bestScore)
 	}
 
+	limX, limY := lowResCrop(origW, origH, w, h)
 	off := best * h * w
-	bin := make([]bool, h*w)
-	minX, minY, maxX, maxY := w, h, -1, -1
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			if maskT.Data[off+y*w+x] > 0 {
-				bin[y*w+x] = true
-				if x < minX {
-					minX = x
-				}
-				if x > maxX {
-					maxX = x
-				}
-				if y < minY {
-					minY = y
-				}
-				if y > maxY {
-					maxY = y
-				}
+	bin := upscaleThreshold(maskT.Data[off:off+h*w], w, limY, limX, origH, origW)
+
+	minX, minY, maxX, maxY := origW, origH, -1, -1
+	for y := 0; y < origH; y++ {
+		row := bin[y*origW : (y+1)*origW]
+		for x, v := range row {
+			if !v {
+				continue
+			}
+			if x < minX {
+				minX = x
+			}
+			if x > maxX {
+				maxX = x
+			}
+			if y < minY {
+				minY = y
+			}
+			if y > maxY {
+				maxY = y
 			}
 		}
 	}
@@ -154,10 +178,78 @@ func pickBestMask(outs []engine.Tensor, outNames []string, origW, origH int) (mo
 	}
 
 	return models.Mask{
-		RLE:  encodeRLEColumnMajor(bin, h, w),
+		RLE:  encodeRLEColumnMajor(bin, origH, origW),
 		BBox: bbox,
 		Conf: conf,
 	}, nil
+}
+
+// lowResCrop returns the (limX, limY) extent of the image content inside the low-res
+// (lrW×lrH, normally 256×256) mask grid — upstream upscale_mask, with Python int()
+// truncation. The encoder input is the image resized long-side-to-1024 and padded
+// bottom/right, so the content occupies the top-left corner.
+func lowResCrop(origW, origH, lrW, lrH int) (limX, limY int) {
+	if origW > origH {
+		limX = lrW
+		limY = int(float64(lrH) * float64(origH) / float64(origW))
+	} else {
+		limX = int(float64(lrW) * float64(origW) / float64(origH))
+		limY = lrH
+	}
+	if limX < 1 {
+		limX = 1
+	}
+	if limY < 1 {
+		limY = 1
+	}
+	return limX, limY
+}
+
+// bilinearTaps returns, per output position, the two source indices and the weight of
+// the second, matching PyTorch F.interpolate(mode="bilinear", align_corners=False):
+// src = max((dst+0.5)·in/out − 0.5, 0), i0 = floor(src), i1 = min(i0+1, in−1).
+func bilinearTaps(in, out int) (i0, i1 []int, lambda []float32) {
+	i0 = make([]int, out)
+	i1 = make([]int, out)
+	lambda = make([]float32, out)
+	scale := float64(in) / float64(out)
+	for d := 0; d < out; d++ {
+		src := (float64(d)+0.5)*scale - 0.5
+		if src < 0 {
+			src = 0
+		}
+		a := int(src)
+		if a > in-1 {
+			a = in - 1
+		}
+		b := a + 1
+		if b > in-1 {
+			b = in - 1
+		}
+		i0[d], i1[d], lambda[d] = a, b, float32(src-float64(a))
+	}
+	return i0, i1, lambda
+}
+
+// upscaleThreshold bilinearly resizes the top-left (sh×sw) window of a row-major logit
+// map with row stride `stride` to (dh×dw) and returns the row-major mask logit > 0.
+func upscaleThreshold(src []float32, stride, sh, sw, dh, dw int) []bool {
+	y0, y1, ly := bilinearTaps(sh, dh)
+	x0, x1, lx := bilinearTaps(sw, dw)
+	bin := make([]bool, dh*dw)
+	for y := 0; y < dh; y++ {
+		r0 := src[y0[y]*stride : y0[y]*stride+sw]
+		r1 := src[y1[y]*stride : y1[y]*stride+sw]
+		wy := ly[y]
+		out := bin[y*dw : (y+1)*dw]
+		for x := 0; x < dw; x++ {
+			a, b, wx := x0[x], x1[x], lx[x]
+			top := r0[a] + (r0[b]-r0[a])*wx
+			bot := r1[a] + (r1[b]-r1[a])*wx
+			out[x] = top+(bot-top)*wy > 0
+		}
+	}
+	return bin
 }
 
 // pickMaskAndIoU identifies the masks and iou_predictions tensors from decoder output,

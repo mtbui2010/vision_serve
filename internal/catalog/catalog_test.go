@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"visionserve/internal/registry"
 )
 
 // A composed entry points INTO its dependencies' directories ("../grounding-dino/<file>"). Those
@@ -179,5 +181,31 @@ func TestPullRegeneratesOnlyGeneratedManifests(t *testing.T) {
 	}
 	if got, _ := os.ReadFile(path); string(got) != custom {
 		t.Fatalf("hand-edited manifest was overwritten:\n%s", got)
+	}
+}
+
+// depth-anything-v2's keep-aspect geometry must survive RenderManifest -> registry parsing, the
+// same path `pull` takes; midas must stay a plain squash.
+func TestDepthKeepAspectRendersAndParses(t *testing.T) {
+	for name, want := range map[string][2]int{"depth-anything-v2": {1, 14}, "midas": {0, 0}} {
+		e, ok := Lookup(name)
+		if !ok {
+			t.Fatalf("%s not in the catalog", name)
+		}
+		p := filepath.Join(t.TempDir(), "manifest.yaml")
+		if err := os.WriteFile(p, []byte(e.RenderManifest()), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		m, err := registry.LoadManifest(p)
+		if err != nil {
+			t.Fatalf("%s: rendered manifest does not parse: %v", name, err)
+		}
+		keep := 0
+		if m.Input.KeepAspect {
+			keep = 1
+		}
+		if keep != want[0] || m.Input.MultipleOf != want[1] {
+			t.Errorf("%s: keep_aspect=%v multiple_of=%d, want %v", name, m.Input.KeepAspect, m.Input.MultipleOf, want)
+		}
 	}
 }

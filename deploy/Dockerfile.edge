@@ -79,19 +79,40 @@ FROM --platform=linux/arm64 debian:bookworm-slim AS runtime-cpu
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/*
-COPY --from=ort-cpu /opt/ort/lib/libonnxruntime.so* /usr/local/lib/
+COPY --from=ort-cpu /opt/ort/lib/libonnxruntime*.so* /usr/local/lib/
 
 ############################
 # Stage 2c — extract ORT from L4T-ML (Jetson CUDA+TRT EP)
 ############################
-# L4T-ML ships libonnxruntime.so built with the CUDA+TensorRT EP as part of
-# the Python onnxruntime package. We extract it here so our slim final stage
-# gets the correct arm64+GPU-enabled .so without a manual file copy.
+# L4T-ML ships ONNX Runtime built with the CUDA+TensorRT EP as part of the Python onnxruntime
+# package. The CUDA/TensorRT execution providers are SEPARATE shared objects that ORT dlopens at
+# session creation — libonnxruntime_providers_shared.so, libonnxruntime_providers_cuda.so,
+# libonnxruntime_providers_tensorrt.so — from the directory libonnxruntime.so itself was loaded
+# from (or LD_LIBRARY_PATH). Copying only libonnxruntime.so* (as this stage used to) produced an
+# image whose CUDA/TensorRT EPs silently failed to load and fell back to CPU.
+#
+# So: pick ONE directory — the one holding the CUDA provider, i.e. the GPU build — and copy every
+# libonnxruntime*.so* from it, core and providers together, so they are guaranteed to be the same
+# ORT build. (A blind `find / -name ...` copy could mix copies from different installs.) The build
+# fails if that directory has no core library; it warns if no CUDA provider exists at all.
 FROM ${L4T_ML_IMAGE} AS ort-jetson-src
-RUN mkdir -p /export && \
-    find / -name "libonnxruntime.so*" -not -path "*/proc/*" 2>/dev/null | \
-    xargs -I{} cp -P {} /export/ && \
-    ls -lh /export/
+RUN set -eu; \
+    mkdir -p /export; \
+    cuda="$(find / -xdev -name 'libonnxruntime_providers_cuda.so' -not -path '/proc/*' 2>/dev/null | head -n1)"; \
+    if [ -n "$cuda" ]; then dir="$(dirname "$cuda")"; \
+    else \
+      echo "WARNING: no libonnxruntime_providers_cuda.so in the L4T-ML image: the image will run on CPU only"; \
+      core="$(find / -xdev -name 'libonnxruntime.so*' -not -path '/proc/*' 2>/dev/null | head -n1)"; \
+      [ -n "$core" ] || { echo "ERROR: no libonnxruntime.so in the L4T-ML image"; exit 1; }; \
+      dir="$(dirname "$core")"; \
+    fi; \
+    echo "ONNX Runtime libraries from: $dir"; \
+    ls "$dir"/libonnxruntime.so* >/dev/null 2>&1 || { echo "ERROR: $dir has providers but no libonnxruntime.so*"; exit 1; }; \
+    cp -a "$dir"/libonnxruntime*.so* /export/; \
+    if [ ! -e /export/libonnxruntime.so ]; then \
+      ln -s "$(cd /export && ls libonnxruntime.so.* | head -n1)" /export/libonnxruntime.so; \
+    fi; \
+    ls -l /export/
 
 ############################
 # Stage 3b — Jetson runtime (L4T base + ORT extracted above)
@@ -100,7 +121,11 @@ FROM ${L4T_BASE} AS runtime-jetson
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
     rm -rf /var/lib/apt/lists/* || true
-COPY --from=ort-jetson-src /export/libonnxruntime.so* /usr/local/lib/
+# Core + provider libraries, all from the same directory of the same ORT build (see stage 2c).
+# They sit next to libonnxruntime.so, where ORT looks for providers, and LD_LIBRARY_PATH below
+# also points here. The CUDA/cuDNN/TensorRT libraries the providers link against come from
+# JetPack on the host, mounted by `--runtime nvidia`.
+COPY --from=ort-jetson-src /export/ /usr/local/lib/
 
 ############################
 # Final — select runtime by ORT_SOURCE

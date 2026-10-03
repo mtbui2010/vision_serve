@@ -4,8 +4,9 @@
 #   cpu (default): slim Debian + ONNX Runtime CPU build.            ~141 MB
 #   gpu           : CUDA 12.4 + cuDNN 9 + TensorRT 10 + ORT GPU.   ~3-5 GB
 #
-# The GPU variant includes the TensorRT provider so it can be opted into per manifest; every
-# shipped manifest prefers [cuda, cpu] (TensorRT measured ~1.5x faster but 6.8 mAP lower on
+# The GPU variant includes ORT's TensorRT provider (but not the TensorRT libraries — mount
+# libnvinfer.so.10 to use it) so it can be opted into per manifest; every shipped manifest
+# prefers [cuda, cpu] (TensorRT measured ~1.5x faster but 6.8 mAP lower on
 # GroundingDINO, and rebuilds its engine per prompt length).
 #
 # Usage:
@@ -13,7 +14,7 @@
 #   make docker
 #   docker run --rm -p 11435:11435 visionserve:latest
 #
-#   # GPU image (TensorRT EP):
+#   # GPU image (CUDA EP; TensorRT EP once libnvinfer.so.10 is mounted):
 #   make docker ORT_VARIANT=gpu
 #   docker run --rm --gpus all -p 11435:11435 visionserve:gpu
 #
@@ -23,7 +24,8 @@
 # ── pinned versions ──────────────────────────────────────────────────────────
 # ORT 1.20.1: compatible with TensorRT 10.x (libnvinfer.so.10) and CUDA 12.
 ARG ORT_VERSION=1.20.1
-# TensorRT 10.6 GA — last GA release with libnvinfer.so.10, CUDA 12 compatible.
+# TensorRT version the GPU variant's ORT provider is built against. Informational: TensorRT
+# itself is NOT installed in the image (see Stage 3b).
 ARG TRT_VERSION=10.6.0
 # Build variant: "cpu" or "gpu".
 ARG ORT_VARIANT=cpu
@@ -85,14 +87,14 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 ############################
-# Stage 3b — GPU runtime: CUDA 12.4 + cuDNN 9 (no TensorRT)
+# Stage 3b — GPU runtime: CUDA 12.4 + cuDNN 9 (no TensorRT libraries)
 ############################
-# TensorRT is intentionally excluded from this image variant.
-# libonnxruntime_providers_tensorrt.so is removed below so ORT silently
-# skips the TRT EP and falls through to the CUDA EP — no hard crash on
-# systems where libnvinfer.so is absent or the wrong version.
-# For TRT acceleration, build on the Jetson (Dockerfile.edge) where JetPack
-# bundles a matched TRT version.
+# The TensorRT LIBRARIES (libnvinfer.so.10, ~2 GB) are intentionally not in this image. The
+# ORT TensorRT PROVIDER (libonnxruntime_providers_tensorrt.so) is kept — see the final stage:
+# VisionServe only asks ORT for the TensorRT EP when libnvinfer.so.10 is actually loadable
+# (internal/engine: availableProviders/TRTAvailable), so without it the EP is skipped up front
+# (no dlopen, no crash) and the chain continues with CUDA. Mount or install TensorRT 10.x to
+# opt in (deploy/README.md, "To enable TRT").
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04 AS runtime-gpu
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates && \
@@ -110,8 +112,8 @@ FROM runtime-${ORT_VARIANT} AS final
 # cpu: libonnxruntime.so only.
 # gpu: libonnxruntime.so + CUDA + TRT providers + shared provider.
 #      libonnxruntime_providers_tensorrt.so is kept in the image; VisionServe
-#      checks for libnvinfer.so.10 at runtime before enabling TRT EP, so it
-#      never tries to load TRT if the host lacks libnvinfer — no hard crash.
+#      checks for libnvinfer.so.10 at runtime before enabling the TRT EP, so it
+#      never tries to load TRT when libnvinfer is absent — no hard crash.
 COPY --from=ort-selected /opt/ort/lib/libonnxruntime*.so* /usr/local/lib/
 
 # Server binary.

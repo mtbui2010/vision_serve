@@ -24,7 +24,9 @@
 //	                 NOTE: NanoSAM decoder does NOT have "orig_im_size" input.
 //	Decoder outputs: "iou_predictions"  [1, M]
 //	                 "low_res_masks"    [1, M, 256, 256]
-//	                 NOTE: output is "low_res_masks" (256×256), not upsampled "masks".
+//	                 NOTE: output is "low_res_masks" (256×256), not upsampled "masks";
+//	                 pickBestMask upscales it to the ORIGINAL size (upstream
+//	                 predictor.py upscale_mask) before thresholding.
 //
 // ONNX files (from github.com/NVIDIA-AI-IOT/nanosam, Google Drive links in README):
 //

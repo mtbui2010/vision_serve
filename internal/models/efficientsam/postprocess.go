@@ -19,19 +19,17 @@ func (p pointSet) n() int { return len(p.labels) }
 
 // batchedTensors returns the two decoder input tensors for EfficientSAM:
 //
-//   - batched_point_coords: [1, 1, N, 2] float32, coordinates scaled to 1024-space
-//   - batched_point_labels: [1, 1, N]    int64
+//   - batched_point_coords: [1, 1, N, 2] float32, ORIGINAL-image pixel coordinates
+//   - batched_point_labels: [1, 1, N]    float32
 //
-// The outer two batch dims (1, 1) follow the onnx-community/EfficientSAM export
-// convention (batch=1, one prompt-set per call).
-//
-// TODO: verify the [1, 1, N, 2] / [1, 1, N] shape expectation against the actual ONNX.
-// Some exports may use [1, N, 2] / [1, N] (no extra batch dim).
-func (p pointSet) batchedTensors(scale float64) (coords, labels engine.Tensor) {
+// Coordinates are passed UNSCALED: the decoder graph rescales them itself
+// (x·1024/orig_W, y·1024/orig_H, from the orig_im_size input — verified by graph
+// inspection). Pre-scaling here would apply the resize twice.
+func (p pointSet) batchedTensors() (coords, labels engine.Tensor) {
 	n := p.n()
 	coordData := make([]float32, n*2)
 	for i, v := range p.coords {
-		coordData[i] = float32(v * scale)
+		coordData[i] = float32(v)
 	}
 	// EfficientSAM decoder expects batched_point_labels as float32 (verified against ONNX).
 	labelData := make([]float32, n)
@@ -78,17 +76,16 @@ func promptToPointSets(p models.Prompt) ([]pointSet, error) {
 	return sets, nil
 }
 
-// pickBestMask locates the low_res_masks and iou_predictions tensors in the decoder
-// output list, then selects the mask channel with the highest IoU score.
+// pickBestMask locates the output_masks and iou_predictions tensors in the decoder
+// output list, then selects the mask candidate with the highest predicted IoU.
 //
-// EfficientSAM decoder outputs:
-//   - low_res_masks:   [1, 1, 4, 256, 256] — 4 candidate masks at 256×256
-//   - iou_predictions: [1, 1, 4]           — per-mask IoU scores
+// EfficientSAM decoder outputs (verified on the real export):
+//   - output_masks:    [1, 1, 3, H, W] — 3 candidate logit maps at ORIGINAL resolution
+//   - iou_predictions: [1, 1, 3]       — per-candidate IoU scores (NOT sorted)
+//   - a third 4-D low-res tensor (ignored)
 //
-// Returns: selected 256×256 mask data (length 256*256), best IoU score, error.
-//
-// TODO: verify tensor names against the actual ONNX decoder file.
-func pickBestMask(names []string, outs []engine.Tensor) (maskData []float32, bestIoU float64, err error) {
+// Returns the selected plane (length mH*mW), its dims, and its IoU score.
+func pickBestMask(names []string, outs []engine.Tensor) (plane []float32, mH, mW int, bestIoU float64, err error) {
 	var maskT, iouT *engine.Tensor
 
 	for i := range outs {
@@ -100,7 +97,7 @@ func pickBestMask(names []string, outs []engine.Tensor) (maskData []float32, bes
 		case strings.Contains(name, "iou"):
 			iouT = &outs[i]
 		case strings.Contains(name, "mask"):
-			// Prefer low_res_masks (shape 5-D: [1,1,4,256,256]) over any other mask output.
+			// Prefer the 5-D output_masks over any other mask-named output.
 			if maskT == nil || len(outs[i].Shape) == 5 {
 				maskT = &outs[i]
 			}
@@ -130,83 +127,72 @@ func pickBestMask(names []string, outs []engine.Tensor) (maskData []float32, bes
 		for i, t := range outs {
 			shapes[i] = fmt.Sprint(t.Shape)
 		}
-		return nil, 0, fmt.Errorf("efficientsam: no mask tensor found in decoder outputs (shapes: %s)", strings.Join(shapes, ", "))
+		return nil, 0, 0, 0, fmt.Errorf("efficientsam: no mask tensor found in decoder outputs (shapes: %s)", strings.Join(shapes, ", "))
 	}
 
-	// Expected shape: [1, 1, 4, 256, 256] — but be lenient about leading batch dims.
-	// Find numCandidates and mask spatial dims from the last 3 dims.
+	// [.., numCandidates, mH, mW] — leading batch dims are 1; take the first batch.
 	rank := len(maskT.Shape)
 	if rank < 3 {
-		return nil, 0, fmt.Errorf("efficientsam: unexpected mask tensor rank %d, shape %v", rank, maskT.Shape)
+		return nil, 0, 0, 0, fmt.Errorf("efficientsam: unexpected mask tensor rank %d, shape %v", rank, maskT.Shape)
 	}
 	numCandidates := int(maskT.Shape[rank-3])
-	mH := int(maskT.Shape[rank-2])
-	mW := int(maskT.Shape[rank-1])
+	mH = int(maskT.Shape[rank-2])
+	mW = int(maskT.Shape[rank-1])
 	planeSize := mH * mW
-
 	if numCandidates < 1 || mH <= 0 || mW <= 0 {
-		return nil, 0, fmt.Errorf("efficientsam: degenerate mask shape %v", maskT.Shape)
+		return nil, 0, 0, 0, fmt.Errorf("efficientsam: degenerate mask shape %v", maskT.Shape)
 	}
 
-	// Find the best candidate by IoU score.
 	best := 0
-	bestScore := float64(0)
 	if iouT != nil && len(iouT.Data) >= numCandidates {
-		bestF := float32(-1e30)
-		for i := 0; i < numCandidates; i++ {
+		bestF := iouT.Data[0]
+		for i := 1; i < numCandidates; i++ {
 			if iouT.Data[i] > bestF {
 				bestF = iouT.Data[i]
 				best = i
 			}
 		}
-		bestScore = float64(bestF)
+		bestIoU = float64(bestF)
 	}
-
-	// Extract that candidate's mask plane.
-	// Total elements before the [numCandidates, mH, mW] suffix may have leading batch dims.
-	leadingElems := int(maskT.NumElements()) / (numCandidates * planeSize)
-	_ = leadingElems // structural check; we always take the first batch
 
 	off := best * planeSize
 	if off+planeSize > len(maskT.Data) {
-		return nil, 0, fmt.Errorf("efficientsam: mask data too short (need offset %d+%d, have %d)", off, planeSize, len(maskT.Data))
+		return nil, 0, 0, 0, fmt.Errorf("efficientsam: mask data too short (need offset %d+%d, have %d)", off, planeSize, len(maskT.Data))
 	}
-	selected := maskT.Data[off : off+planeSize]
-	return selected, bestScore, nil
+	return maskT.Data[off : off+planeSize], mH, mW, bestIoU, nil
 }
 
-// maskToResult upsamples the low-res mask (typically 256×256) to the original image
-// size using nearest-neighbor interpolation, thresholds at logit > 0, encodes as
-// column-major RLE, and computes a tight BBox.
+// maskToResult thresholds the selected logit plane (logit >= 0, as in the official
+// EfficientSAM example's torch.ge(logits, 0)), encodes it as column-major RLE at the
+// ORIGINAL image size, and computes a tight BBox in original-image pixels.
 //
-// EfficientSAM's decoder outputs low-resolution masks (256×256) — unlike MobileSAM's
-// decoder which upsamples to the original size via orig_im_size. We upsample here in Go.
-func maskToResult(maskData []float32, iou float64, origW, origH int) (models.Mask, error) {
-	n := len(maskData)
-	if n == 0 {
+// The decoder already returns masks at orig_im_size, so normally mW×mH == origW×origH
+// and no resampling happens. If an export ever returns a different size, the plane is
+// nearest-neighbour resampled to the original size so the RLE/BBox contract still holds.
+func maskToResult(plane []float32, mW, mH int, iou float64, origW, origH int) (models.Mask, error) {
+	if len(plane) == 0 || mW <= 0 || mH <= 0 {
 		return models.Mask{}, fmt.Errorf("efficientsam: empty mask data")
 	}
+	if len(plane) != mW*mH {
+		return models.Mask{}, fmt.Errorf("efficientsam: mask plane has %d values, want %dx%d", len(plane), mW, mH)
+	}
+	if origW <= 0 || origH <= 0 {
+		return models.Mask{}, fmt.Errorf("efficientsam: invalid original size %dx%d", origW, origH)
+	}
 
-	// Low-res spatial dimensions — assume 256×256 per the EfficientSAM spec.
-	// (pickBestMask already extracted a single candidate plane of this size.)
-	const lowResH, lowResW = 256, 256
-
-	// Nearest-neighbor upsample: for each output pixel (ox, oy), map back to low-res.
 	bin := make([]bool, origH*origW)
 	minX, minY, maxX, maxY := origW, origH, -1, -1
 	for oy := 0; oy < origH; oy++ {
-		// Map output row to low-res row.
-		ly := oy * lowResH / origH
-		if ly >= lowResH {
-			ly = lowResH - 1
+		ly := oy
+		if mH != origH {
+			ly = oy * mH / origH
 		}
 		for ox := 0; ox < origW; ox++ {
-			lx := ox * lowResW / origW
-			if lx >= lowResW {
-				lx = lowResW - 1
+			lx := ox
+			if mW != origW {
+				lx = ox * mW / origW
 			}
-			idx := ly*lowResW + lx
-			if idx < n && maskData[idx] > 0 {
+			if plane[ly*mW+lx] >= 0 {
 				bin[oy*origW+ox] = true
 				if ox < minX {
 					minX = ox

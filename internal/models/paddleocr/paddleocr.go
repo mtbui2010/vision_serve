@@ -10,7 +10,7 @@
 // V1 approach (no polygon extraction):
 //   - Threshold the DBNet++ probability map at 0.3.
 //   - Find connected components via BFS flood-fill → axis-aligned bounding boxes.
-//   - Expand each box by a 1.5× dilate factor.
+//   - Unclip each box per DBPostProcess (every side + area*1.5/perimeter).
 //   - Crop each box, resize to h=48, run SVTR-tiny, CTC-decode → text string.
 //
 // Result encoding: unified Detection schema (BBox = text region, Class = recognized text,
@@ -127,7 +127,10 @@ func (m *paddleOCR) Infer(img image.Image, _ models.Prompt, r models.Runner) (mo
 		thresh = defaultDetThresh
 	}
 
-	detBoxes := extractBBoxes(probMapTensor.Data, mapH, mapW, thresh, defaultDilate)
+	detBoxes, err := extractBBoxes(probMapTensor.Data, mapH, mapW, thresh, defaultUnclipRatio)
+	if err != nil {
+		return models.Result{}, err
+	}
 
 	if len(detBoxes) == 0 {
 		// No text regions found — return empty result.

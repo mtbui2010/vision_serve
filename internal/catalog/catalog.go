@@ -89,6 +89,9 @@ type Entry struct {
 	InputHeight int
 	InputLayout string // NCHW | NHWC
 	Letterbox   bool
+	Crop        string // "" | "center" (manifest input.crop)
+	KeepAspect  bool   // manifest input.keep_aspect (graph needs dynamic H/W)
+	MultipleOf  int    // manifest input.multiple_of; 0 => omit
 	Normalize   *Normalize
 
 	PostprocessType string  // detr | sam | grounding-dino ...
@@ -831,25 +834,30 @@ var builtin = []Entry{
 		Task:         "depth",
 		License:      "Apache-2.0",
 		Architecture: "depth-anything-v2",
-		Description:  "Depth Anything V2 small — monocular depth estimation, 518×518. UPSTREAM GONE, see Note.",
-		HFRepo:       "onnx-community/depth-anything-v2-small-hf",
+		Description:  "Depth Anything V2 small — monocular depth estimation, ~518 keep-aspect (Apache-2.0; Base/Large are CC-BY-NC).",
+		// First-party export with DYNAMIC H/W (the onnx-community repo it replaces is gone, 401).
+		// Produced and verified by `visionserve convert hf depth-anything/Depth-Anything-V2-Small-hf`:
+		// ONNX vs PyTorch 1.05e-05 at three input shapes; served map vs predicted_depth Pearson
+		// r >= 0.9999 on 7 non-square photos.
+		HFRepo: "mtbui2010/depth-anything-v2-small-ONNX",
 		Files: []File{
-			{Role: "model", HFFilename: "onnx/model.onnx", LocalFilename: "model.onnx"},
+			{Role: "model", HFFilename: "model.onnx", LocalFilename: "model.onnx",
+				SHA256: "4e456781eac92f7f8e79da50f721f65eb1876a10ed90d59ab2b7d7df04f59e71"},
 		},
-		InputWidth:        518,
-		InputHeight:       518,
-		InputLayout:       "NCHW",
-		Letterbox:         false,
+		InputWidth:  518,
+		InputHeight: 518,
+		InputLayout: "NCHW",
+		Letterbox:   false,
+		// DPTImageProcessor's own geometry (keep_aspect_ratio, ensure_multiple_of 14): an 848x480
+		// photo is fed as 910x518, not squashed to 518x518. Needs a graph with dynamic H/W.
+		KeepAspect:        true,
+		MultipleOf:        14,
 		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
 		PostprocessType:   "depth",
 		RuntimePrefer:     []string{"cuda", "cpu"},
 		IdleUnloadSeconds: 300,
-		Verified:          false,
-		Note: "UPSTREAM REMOVED: huggingface.co/onnx-community/depth-anything-v2-small-hf returns " +
-			"401 as of 2026-08-18, so this entry cannot be pulled and cannot be sha256-pinned. " +
-			"Candidate replacements exist under different names (onnx-community/depth-anything-v2-small, " +
-			"…-small-ONNX). Do NOT repoint blindly — verify the real tensor shapes first (CLAUDE.md). " +
-			"`midas` is a working MIT-licensed depth model in the meantime.",
+		Verified:          true,
+		Note:              "Input 'pixel_values' [1,3,H,W] (H, W multiples of 14), output 'predicted_depth' [1,H,W].",
 	},
 	{
 		Name:         "midas",
@@ -925,7 +933,9 @@ var builtin = []Entry{
 		License:      "MIT",
 		Architecture: "clip",
 		Description:  "CLIP ViT-B/32 image encoder — 512-d embeddings for zero-shot classification (MIT, OpenAI).",
-		HFRepo:       "khasinski/clip-ViT-B-32-onnx",
+		// Short-side resize + centre crop, as CLIP is trained: squashing measured cosine 0.88-0.92
+		// against the reference embedding on non-square photos, the crop 0.998.
+		HFRepo: "khasinski/clip-ViT-B-32-onnx",
 		Files: []File{
 			{Role: "model", HFFilename: "visual.onnx", LocalFilename: "model.onnx", SHA256: "78e896b2c7301d01eda84e280d7c7297299aa6f8bacc0f5f8fe5bd60d42d8aae"},
 		},
@@ -933,6 +943,7 @@ var builtin = []Entry{
 		InputHeight:       224,
 		InputLayout:       "NCHW",
 		Letterbox:         false,
+		Crop:              "center",
 		Normalize:         &Normalize{Mean: []float32{0.48145466, 0.4578275, 0.40821073}, Std: []float32{0.26862954, 0.26130258, 0.27577711}},
 		PostprocessType:   "embed",
 		RuntimePrefer:     []string{"cuda", "cpu"},

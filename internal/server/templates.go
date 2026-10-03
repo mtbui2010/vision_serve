@@ -5,7 +5,6 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
-	"io"
 	"mime/multipart"
 	"net/http"
 	"sort"
@@ -80,6 +79,5 @@ func decodeUploadedImage(fh *multipart.FileHeader) (image.Image, error) {
 		return nil, err
 	}
 	defer f.Close()
-	img, _, err := image.Decode(io.LimitReader(f, maxImageBytes))
-	return img, err
+	return decodeImage(f)
 }

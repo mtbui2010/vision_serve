@@ -103,6 +103,15 @@ var LicenseLedger = []LedgerEntry{
 	{SourcePrefix: "https://huggingface.co/onnx-community/depth-anything-v2-small-hf/", License: "Apache-2.0",
 		LicenseURL: "https://huggingface.co/depth-anything/Depth-Anything-V2-Small", AuditedBy: "tmbui", AuditedDate: "2026-06-09",
 		Note: "Depth-Anything-V2-Small ONNX export"},
+	{SourcePrefix: "https://huggingface.co/mtbui2010/depth-anything-v2-small-ONNX/", License: "Apache-2.0",
+		LicenseURL: "https://huggingface.co/depth-anything/Depth-Anything-V2-Small-hf", AuditedBy: "tmbui", AuditedDate: "2026-10-03",
+		Note: "FIRST-PARTY dynamic-H/W export of depth-anything/Depth-Anything-V2-Small-hf (apache-2.0 on the " +
+			"model card, checked via the Hub API). Only SMALL is permissive: Base/Large are CC-BY-NC-4.0 " +
+			"and must never be added under this prefix.",
+		WeightSHA256: []string{
+			"4e456781eac92f7f8e79da50f721f65eb1876a10ed90d59ab2b7d7df04f59e71",
+		},
+	},
 
 	// --- other audited upstreams ---
 	{SourcePrefix: "https://huggingface.co/khasinski/clip-ViT-B-32-onnx/", License: "MIT",

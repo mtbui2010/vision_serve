@@ -136,10 +136,14 @@ func newRescorer(cfg models.Config) (*rescorer, error) {
 // since RF-DETR has already answered for the known words and these boxes were never candidates
 // for them.
 //
-// Detections whose box is degenerate are DROPPED. siglip.CropTensor skips them (a low threshold
-// produces real zero-width and off-frame boxes), so they carry no embedding, and returning one
-// with an unrescored confidence would put an unranked box back into the flood this exists to
-// drain. `kept` is what keeps the crop rows and the detection list from drifting apart.
+// Detections whose box is degenerate are DROPPED: zero width or height after clamping to the
+// image, which a low threshold produces for real (zero-width queries, slivers on the frame edge).
+// They carry no pixels and so no embedding, and returning one with an unrescored confidence
+// would put an unranked box back into the flood this exists to drain. They are filtered HERE,
+// before the crop tower, so a request whose only detection is such a sliver comes back empty
+// instead of failing (siglip.CropTensor still errors when handed nothing usable — that contract
+// is for callers whose boxes should all be real). `idx` and `kept` keep the crop rows and the
+// detection list from drifting apart.
 func (m *hybrid) rescore(img image.Image, dets []models.Detection, words []string,
 	temp float64, r models.Runner) ([]models.Detection, error) {
 	if m.rs == nil || len(dets) == 0 || len(words) == 0 {
@@ -149,16 +153,21 @@ func (m *hybrid) rescore(img image.Image, dets []models.Detection, words []strin
 		temp = cropTemp
 	}
 
-	boxes := make([][4]float64, len(dets))
+	boxes := make([][4]float64, 0, len(dets))
+	idx := make([]int, 0, len(dets)) // boxes[j] is dets[idx[j]]
 	for i, d := range dets {
-		boxes[i] = d.BBox
+		if siglip.UsableBox(img, d.BBox) {
+			boxes = append(boxes, d.BBox)
+			idx = append(idx, i)
+		}
 	}
-	// A failure here fails the REQUEST rather than falling back to unrescored detections, and
-	// that is deliberate. siglip.EmbedCrops only errors when EVERY box is degenerate — which
-	// means the coordinates are not in original-image space — or when the session itself fails.
-	// Both are conditions where returning plausible output is how this project has been wrong
-	// before (a silent CPU fallback invalidated a whole sweep). The sibling crop head in
-	// textalign makes the same choice.
+	if len(boxes) == 0 {
+		return nil, nil
+	}
+	// A failure here now means the crop session itself failed, and that fails the REQUEST rather
+	// than falling back to unrescored detections: returning plausible output on a broken tower is
+	// how this project has been wrong before (a silent CPU fallback invalidated a whole sweep).
+	// The sibling crop head in textalign makes the same choice.
 	crops, kept, err := siglip.EmbedCrops(img, boxes,
 		func(in map[string]engine.Tensor) ([]engine.Tensor, error) { return r.Run(roleCrop, in) },
 		r.InputNames(roleCrop))
@@ -176,20 +185,21 @@ func (m *hybrid) rescore(img image.Image, dets []models.Detection, words []strin
 
 	n := len(words)
 	out := make([]models.Detection, 0, len(kept))
-	for j, i := range kept {
+	for j, k := range kept {
+		i := idx[k]
 		row := scores[j*n : (j+1)*n]
-		best, k := float32(math.Inf(-1)), -1
+		best, w := float32(math.Inf(-1)), -1
 		for c, s := range row {
 			if s > best {
-				best, k = s, c
+				best, w = s, c
 			}
 		}
-		if k < 0 || best < cropNameFloor {
+		if w < 0 || best < cropNameFloor {
 			continue
 		}
 		d := dets[i]
-		d.Class = words[k]
-		d.Conf *= float64(softmaxAt(row, k, temp))
+		d.Class = words[w]
+		d.Conf *= float64(softmaxAt(row, w, temp))
 		out = append(out, d)
 	}
 	return out, nil

@@ -15,9 +15,9 @@ var (
 	defaultStd  = []float32{0.26862954, 0.26130258, 0.27577711}
 )
 
-// preprocess resizes the image to cfg.Width × cfg.Height (squash, no letterbox —
-// this is correct for CLIP which was trained on square-resized images), then converts
-// to an NCHW float32 tensor [1, 3, H, W] with CLIP normalization.
+// preprocess turns the image into an NCHW float32 tensor [1, 3, H, W] with CLIP normalization.
+// With input.crop: center (the shipped manifest) it resizes the short side and keeps the centre,
+// as CLIP was trained; otherwise it squashes the whole frame to cfg.Width × cfg.Height.
 //
 // PreprocessMeta is populated with scale factors so that downstream callers follow the
 // same interface; for embedding tasks the meta is not used in postprocess (no bbox mapping).
@@ -34,7 +34,17 @@ func preprocess(img image.Image, cfg models.Config) (engine.Tensor, models.Prepr
 		h = 224
 	}
 
-	// Squash resize (no letterbox) — standard for CLIP.
+	// input.crop: center is how CLIP was trained and how its reference processor feeds it:
+	// resize the short side (bicubic) and keep the centre. Squashing the whole frame instead
+	// measured cosine 0.86-0.89 against the reference embedding on non-square photos.
+	if cfg.Crop == "center" {
+		cropped, sx, sy, offX, offY := imageproc.ResizeShortCenterCrop(img, w, h)
+		meta := models.PreprocessMeta{OrigWidth: origW, OrigHeight: origH,
+			ScaleX: sx, ScaleY: sy, PadX: -offX, PadY: -offY}
+		return imageproc.ImageToCHWFloat(cropped, pick(cfg.Mean, defaultMean), pick(cfg.Std, defaultStd)), meta, nil
+	}
+
+	// Squash resize (no letterbox): the default, kept for manifests that do not declare a crop.
 	resized := imageproc.Resize(img, w, h)
 
 	// Use manifest normalization if provided, otherwise fall back to CLIP defaults.
@@ -58,4 +68,11 @@ func preprocess(img image.Image, cfg models.Config) (engine.Tensor, models.Prepr
 	}
 
 	return imageproc.ImageToCHWFloat(resized, mean, std), meta, nil
+}
+
+func pick(v, def []float32) []float32 {
+	if len(v) == 0 {
+		return def
+	}
+	return v
 }

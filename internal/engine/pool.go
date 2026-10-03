@@ -1,5 +1,7 @@
 package engine
 
+import "sync"
+
 // Runnable is satisfied by both *Session and *SessionPool, so lifecycle can hold
 // either behind the same interface without knowing which is which.
 type Runnable interface {
@@ -20,6 +22,8 @@ type Runnable interface {
 // goroutines on a single session mutex.
 type SessionPool struct {
 	ch          chan *Session
+	done        chan struct{} // closed by Close: waiting Run calls return ErrClosed
+	closeOnce   sync.Once
 	inputNames  []string
 	outputNames []string
 	activeEP    Provider
@@ -32,7 +36,7 @@ func NewSessionPool(sessions []*Session) *SessionPool {
 	for _, s := range sessions {
 		ch <- s
 	}
-	p := &SessionPool{ch: ch}
+	p := &SessionPool{ch: ch, done: make(chan struct{})}
 	if len(sessions) > 0 {
 		p.inputNames = sessions[0].InputNames()
 		p.outputNames = sessions[0].OutputNames()
@@ -42,15 +46,37 @@ func NewSessionPool(sessions []*Session) *SessionPool {
 }
 
 func (p *SessionPool) Run(inputs []Tensor) ([]Tensor, error) {
-	s := <-p.ch
+	s, err := p.take()
+	if err != nil {
+		return nil, err
+	}
 	defer func() { p.ch <- s }()
 	return s.Run(inputs)
 }
 
 func (p *SessionPool) RunNamed(inputs map[string]Tensor) ([]Tensor, error) {
-	s := <-p.ch
+	s, err := p.take()
+	if err != nil {
+		return nil, err
+	}
 	defer func() { p.ch <- s }()
 	return s.RunNamed(inputs)
+}
+
+// take borrows a free session, or fails once the pool is closed. Without the done case a call
+// waiting for a slot while Close drained the pool blocked forever.
+func (p *SessionPool) take() (*Session, error) {
+	select {
+	case <-p.done:
+		return nil, ErrClosed
+	default:
+	}
+	select {
+	case s := <-p.ch:
+		return s, nil
+	case <-p.done:
+		return nil, ErrClosed
+	}
 }
 
 func (p *SessionPool) InputNames() []string  { return p.inputNames }
@@ -61,6 +87,7 @@ func (p *SessionPool) ActiveEP() Provider    { return p.activeEP }
 // sessions have been returned — call only after all requests are done (e.g. from
 // lifecycle.Manager.Close after the server shuts down).
 func (p *SessionPool) Close() error {
+	p.closeOnce.Do(func() { close(p.done) })
 	n := cap(p.ch)
 	var firstErr error
 	for i := 0; i < n; i++ {

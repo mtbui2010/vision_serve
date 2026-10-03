@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -168,6 +169,14 @@ func (m *Manifest) verifyWeights(depth int) error {
 		}
 	}
 
+	if err := m.verifySessionPins(hardened); err != nil {
+		return err
+	}
+	return m.verifySideFiles(hardened)
+}
+
+// verifySessionPins checks the `sha256:` pins of the ONNX session file(s).
+func (m *Manifest) verifySessionPins(hardened bool) error {
 	// Under a hardened gate an UNPINNED model must not load. An audited source_url records
 	// where the bytes were SUPPOSED to come from; it says nothing about the bytes now on disk.
 	// Binding the declared license to specific bytes is the whole point of verified mode, so
@@ -214,6 +223,63 @@ func (m *Manifest) verifyWeights(depth int) error {
 	return nil
 }
 
+// verifySideFiles checks the `sha256_files:` pins, and — under a hardened gate — refuses ONNX
+// external weight data that is not pinned.
+//
+// The session pin covers the graph file only. A graph saved with external data keeps its tensors
+// (the actual weights) in a separate file, conventionally <graph>.data, that ORT reads by the name
+// recorded inside the graph. Pinning the graph therefore fixes WHICH file is read but not its
+// bytes: without this check the weights could be swapped under a pinned graph and still load.
+func (m *Manifest) verifySideFiles(hardened bool) error {
+	rels := make([]string, 0, len(m.SHA256Files))
+	for rel := range m.SHA256Files {
+		rels = append(rels, rel)
+	}
+	sort.Strings(rels)
+	for _, rel := range rels {
+		if err := verifyFile(filepath.Join(m.dir, rel), m.SHA256Files[rel]); err != nil {
+			return fmt.Errorf("model %q file %q: %w", m.Name, rel, err)
+		}
+	}
+	if !hardened {
+		return nil
+	}
+	pinned := make(map[string]bool, len(rels))
+	for _, rel := range rels {
+		pinned[filepath.Join(m.dir, rel)] = true
+	}
+	for _, w := range m.sessionPaths() {
+		data := w + ".data"
+		if _, err := os.Stat(data); err == nil && !pinned[filepath.Clean(data)] {
+			return fmt.Errorf("model %q: %s holds external weight data but sha256_files does not pin it — "+
+				"refusing to load (verified mode requires every weight byte to be pinned)", m.Name, filepath.Base(data))
+		}
+	}
+	return nil
+}
+
+// sessionPaths returns the ONNX session file path(s) the manifest names.
+func (m *Manifest) sessionPaths() []string {
+	if files := m.FilesAbs(); len(files) > 0 {
+		out := make([]string, 0, len(files))
+		for _, p := range files {
+			out = append(out, filepath.Clean(p))
+		}
+		return out
+	}
+	return []string{filepath.Clean(m.ModelFilePath())}
+}
+
+// PinnedDigests returns every SHA-256 digest the manifest pins: the session pins (sha256:) and
+// the side-file pins (sha256_files:).
+func (m *Manifest) PinnedDigests() []string {
+	out := m.SHA256.declared()
+	for _, d := range m.SHA256Files {
+		out = append(out, d)
+	}
+	return out
+}
+
 // checkAnchoredPins requires every digest the manifest declares to be one the maintainer
 // recorded for this upstream in the in-binary ledger.
 //
@@ -231,7 +297,7 @@ func (m *Manifest) checkAnchoredPins() error {
 	for _, d := range led.WeightSHA256 {
 		audited[strings.ToLower(d)] = true
 	}
-	for _, d := range m.SHA256.declared() {
+	for _, d := range m.PinnedDigests() {
 		if !audited[strings.ToLower(d)] {
 			return fmt.Errorf("model %q: sha256 %s is not among the digests the maintainer audited "+
 				"for %s — refusing to load (a manifest cannot vouch for its own bytes; the audited "+

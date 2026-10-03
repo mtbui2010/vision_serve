@@ -134,13 +134,25 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, clas
 	temp float64, r models.Runner) ([]models.Detection, error) {
 	idx := make([]int, 0, len(dets))
 	boxes := make([][4]float64, 0, len(dets))
+	var unusable []int // marked detections whose box has no pixels: nothing to name them from
 	for i, d := range dets {
-		if d.Class == openSentinel {
-			idx = append(idx, i)
-			boxes = append(boxes, d.BBox)
+		if d.Class != openSentinel {
+			continue
 		}
+		if len(classes) > 0 && !siglip.UsableBox(img, d.BBox) {
+			unusable = append(unusable, i)
+			continue
+		}
+		idx = append(idx, i)
+		boxes = append(boxes, d.BBox)
 	}
 	if len(idx) == 0 {
+		if len(unusable) > 0 {
+			// Every marked box is degenerate (e.g. one sub-pixel sliver on the frame edge): drop
+			// them and return the rest. Handing CropTensor nothing usable is an error by its
+			// contract, and it used to fail the whole request here.
+			return dropIndices(dets, unusable), nil
+		}
 		return dets, nil
 	}
 	if len(classes) == 0 {
@@ -149,8 +161,9 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, clas
 		return dropIndices(dets, idx), nil
 	}
 
-	// Degenerate boxes are skipped rather than fatal, so `kept` says which of `boxes` actually
-	// produced a row. Losing that mapping would rename detections with another box's embedding.
+	// Degenerate boxes were filtered above, but `kept` is still honoured: it says which of
+	// `boxes` actually produced a row, and losing that mapping would rename detections with
+	// another box's embedding.
 	crops, kept, err := siglip.EmbedCrops(img, boxes,
 		func(in map[string]engine.Tensor) ([]engine.Tensor, error) { return r.Run(roleCrop, in) },
 		r.InputNames(roleCrop))
@@ -173,7 +186,8 @@ func (m *textAlign) nameOpenCrops(img image.Image, dets []models.Detection, clas
 	n := len(classes)
 	// Every marked detection is dropped unless the loop below names it. A box that was skipped as
 	// degenerate never reaches the namer, and must not survive carrying the sentinel.
-	drop := make([]int, 0, len(idx))
+	drop := make([]int, 0, len(idx)+len(unusable))
+	drop = append(drop, unusable...)
 	named := make(map[int]bool, len(kept))
 	for _, k := range kept {
 		named[idx[k]] = true

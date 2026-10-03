@@ -128,6 +128,11 @@ func (s *Server) handlePredict(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
+// errBadDepth: a depth map was sent but does not match its declared size/dtype. It used to be
+// dropped silently, so the request "worked" without the depth the client meant to use.
+var errBadDepth = fmt.Errorf("invalid depth map: its byte length must equal depth_width*depth_height*"+
+	"(2 for uint16, 4 for float32), each side <= %d", maxDepthSide)
+
 // parseDepth turns a raw little-endian depth array into a normalized float map (row-major,
 // NaN = invalid), resized to the RGB image (imgW×imgH). dtype is "float32" (kept as-is, ≤0/NaN
 // → invalid) or "uint16" (default; /65535, 0 → invalid). dw/dh default to the image size.
@@ -139,7 +144,19 @@ func parseDepth(raw []byte, dtype string, dw, dh, imgW, imgH int) ([]float32, in
 	if dw <= 0 || dh <= 0 {
 		dw, dh = imgW, imgH
 	}
+	// Validate the declared size against the bytes BEFORE allocating: dw*dh came from the client,
+	// and a 2-byte upload declaring 1e6 x 1e6 used to request 4 TB — a fatal, unrecoverable OOM.
+	if dw > maxDepthSide || dh > maxDepthSide {
+		return nil, 0, 0
+	}
 	n := dw * dh
+	elem := 2
+	if dt := strings.ToLower(strings.TrimSpace(dtype)); dt == "float32" || dt == "float" || dt == "f32" {
+		elem = 4
+	}
+	if len(raw) != n*elem {
+		return nil, 0, 0
+	}
 	depth := make([]float32, n)
 	switch strings.ToLower(strings.TrimSpace(dtype)) {
 	case "float32", "float", "f32":
@@ -282,9 +299,9 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 		if err != nil {
 			return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("invalid image_base64: %w", err)
 		}
-		img, _, err := image.Decode(bytes.NewReader(raw))
+		img, err := decodeImage(bytes.NewReader(raw))
 		if err != nil {
-			return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("failed to decode image: %w", err)
+			return "", nil, models.Prompt{}, 0, 0, err
 		}
 		prompt, err := models.ParsePrompt(req.Prompt, req.Box, req.Point)
 		if err != nil {
@@ -295,7 +312,7 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 		prompt.GripperMin, prompt.GripperMax = req.GripperMin, req.GripperMax
 		prompt.BoxThresh, prompt.TextThresh = req.BoxThreshold, req.TextThreshold
 		prompt.BgMaxArea, prompt.FgMinArea = req.BgMaxArea, req.FgMinArea
-		prompt.GridSize = req.GridSize
+		prompt.GridSize = clampGrid(req.GridSize)
 		prompt.Method = req.Method
 		prompt.ClaimThresh = req.ClaimThreshold
 		prompt.CropTemp = req.CropTemp
@@ -303,9 +320,14 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 		prompt.Dilate = req.Dilate
 		prompt.TemplateName = req.TemplateName
 		if req.DepthBase64 != "" {
-			if raw, e := base64.StdEncoding.DecodeString(req.DepthBase64); e == nil {
-				prompt.Depth, prompt.DepthW, prompt.DepthH = parseDepth(
-					raw, req.DepthDtype, req.DepthWidth, req.DepthHeight, img.Bounds().Dx(), img.Bounds().Dy())
+			raw, e := base64.StdEncoding.DecodeString(req.DepthBase64)
+			if e != nil {
+				return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("invalid depth_base64: %w", e)
+			}
+			prompt.Depth, prompt.DepthW, prompt.DepthH = parseDepth(
+				raw, req.DepthDtype, req.DepthWidth, req.DepthHeight, img.Bounds().Dx(), img.Bounds().Dy())
+			if prompt.Depth == nil {
+				return "", nil, models.Prompt{}, 0, 0, errBadDepth
 			}
 		}
 		return req.Model, img, prompt, req.MinSize, req.MaxSize, nil
@@ -324,9 +346,9 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 		return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("missing 'image' file: %w", err)
 	}
 	defer file.Close()
-	img, _, err := image.Decode(io.LimitReader(file, maxImageBytes))
+	img, err := decodeImage(file)
 	if err != nil {
-		return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("failed to decode image: %w", err)
+		return "", nil, models.Prompt{}, 0, 0, err
 	}
 	prompt, err := models.ParsePrompt(r.FormValue("prompt"), r.FormValue("box"), r.FormValue("point"))
 	if err != nil {
@@ -349,7 +371,7 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 	prompt.GripperMin, prompt.GripperMax = gripperMin, gripperMax
 	prompt.BoxThresh, prompt.TextThresh = boxThresh, textThresh
 	prompt.BgMaxArea, prompt.FgMinArea = bgMaxArea, fgMinArea
-	prompt.GridSize = gridSize
+	prompt.GridSize = clampGrid(gridSize)
 	prompt.Method = r.FormValue("method")
 	prompt.ClaimThresh, _ = strconv.ParseFloat(r.FormValue("claim_threshold"), 64)
 	prompt.CropTemp, _ = strconv.ParseFloat(r.FormValue("crop_temp"), 64)
@@ -363,12 +385,28 @@ func (s *Server) parsePredictRequest(r *http.Request) (string, image.Image, mode
 	// Optional external depth map (RGB-D) as a raw little-endian array file.
 	if df, _, derr := r.FormFile("depth"); derr == nil {
 		defer df.Close()
-		if raw, e := io.ReadAll(io.LimitReader(df, maxTensorBytes)); e == nil {
-			dw, _ := strconv.Atoi(r.FormValue("depth_width"))
-			dh, _ := strconv.Atoi(r.FormValue("depth_height"))
-			prompt.Depth, prompt.DepthW, prompt.DepthH = parseDepth(
-				raw, r.FormValue("depth_dtype"), dw, dh, img.Bounds().Dx(), img.Bounds().Dy())
+		raw, e := io.ReadAll(io.LimitReader(df, maxTensorBytes))
+		if e != nil {
+			return "", nil, models.Prompt{}, 0, 0, fmt.Errorf("reading depth: %w", e)
+		}
+		dw, _ := strconv.Atoi(r.FormValue("depth_width"))
+		dh, _ := strconv.Atoi(r.FormValue("depth_height"))
+		prompt.Depth, prompt.DepthW, prompt.DepthH = parseDepth(
+			raw, r.FormValue("depth_dtype"), dw, dh, img.Bounds().Dx(), img.Bounds().Dy())
+		if prompt.Depth == nil {
+			return "", nil, models.Prompt{}, 0, 0, errBadDepth
 		}
 	}
 	return model, img, prompt, minSize, maxSize, nil
+}
+
+// maxGridSize bounds the automatic-mask grid: N×N decoder calls (and goroutines/allocations),
+// so an unchecked grid_size=1000 asked for a million decoder runs in one request.
+const maxGridSize = 64
+
+func clampGrid(n int) int {
+	if n > maxGridSize {
+		return maxGridSize
+	}
+	return n
 }

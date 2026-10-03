@@ -11,7 +11,7 @@ import (
 )
 
 // Version is the binary version (overridden at build time via -ldflags).
-var Version = "0.1.17-dev"
+var Version = "0.1.18-dev"
 
 const usage = `visionserve — Ollama for Computer Vision (local-first, edge-GPU)
 
@@ -23,6 +23,8 @@ Usage:
   visionserve rm <model>            unload a model from memory (requires a running server)
   visionserve pull <model>          download a curated model from HuggingFace into the registry (no arg = list)
   visionserve pull <folder>         validate a local model folder (manifest.yaml + .onnx) + install it into the registry
+  visionserve convert <fmt> <ckpt>  convert a PyTorch/RF-DETR/HuggingFace/TensorFlow checkpoint to ONNX + install it
+                                    (runs the converter image via Docker; see: visionserve convert --help)
   visionserve version               print the version
 
 Common flags:
@@ -59,6 +61,8 @@ func Execute(args []string) error {
 		return runRm(args[2:])
 	case "pull":
 		return runPull(args[2:])
+	case "convert":
+		return runConvert(args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("visionserve %s\n", Version)
 		if engine.TRTAvailable() {

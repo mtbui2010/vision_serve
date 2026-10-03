@@ -6,6 +6,9 @@ import (
 	"os"
 	"strings"
 	"unicode"
+	"unicode/utf8"
+
+	"golang.org/x/text/unicode/norm" // BSD-3-Clause (the Go project)
 )
 
 // Special token ids (bert-base-uncased vocab.txt, 0-based line index == token id).
@@ -71,11 +74,13 @@ type Encoded struct {
 	TokenTypeIDs  []int64 // all zeros
 }
 
-// Encode lowercases the text, splits on whitespace, peels ASCII punctuation off as
-// standalone tokens, WordPieces each word, then wraps with [CLS]/[SEP].
+// Encode normalizes the text the way BERT's uncased BasicTokenizer does (see normalizeBERT),
+// splits on whitespace, peels punctuation off as standalone tokens, WordPieces each word,
+// then wraps with [CLS]/[SEP].
 //
 // Verified: "cat. remote." -> tokens [CLS] cat . remote . [SEP],
-// ids [101 4937 1012 6556 1012 102].
+// ids [101 4937 1012 6556 1012 102]; and against the HF reference tokenizer on accents, CJK,
+// Hangul, control/zero-width characters and punctuation (TestEncodeMatchesHFReference).
 func (t *Tokenizer) Encode(text string) Encoded {
 	tokens := t.tokenize(text)
 	ids := make([]int64, 0, len(tokens)+2)
@@ -100,14 +105,97 @@ func (t *Tokenizer) Encode(text string) Encoded {
 // tokenize produces the WordPiece token strings (without [CLS]/[SEP]).
 func (t *Tokenizer) tokenize(text string) []string {
 	var out []string
-	for _, word := range basicSplit(strings.ToLower(text)) {
+	for _, word := range basicSplit(normalizeBERT(text)) {
 		out = append(out, t.wordpiece(word)...)
 	}
 	return out
 }
 
-// basicSplit splits on whitespace and then peels off ASCII punctuation as standalone
-// tokens (so "cat." -> ["cat", "."]). Matches BERT BasicTokenizer behavior for our use.
+// normalizeBERT is the BertNormalizer that bert-base-uncased (and therefore GroundingDINO's
+// HF processor) runs before splitting, in the same order as tokenizers' BertNormalizer:
+//
+//  1. clean text: drop NUL, U+FFFD and control/format characters (category C*, except
+//     \t \n \r), and turn every whitespace character into a plain space;
+//  2. surround each CJK ideograph with spaces, so a CJK run becomes one word per character;
+//  3. strip accents: NFD, then drop non-spacing marks (Mn) — "café" -> "cafe";
+//  4. lowercase.
+//
+// Without 3, every accented word fell out of the vocabulary as a single [UNK]; without 2, a
+// CJK run was WordPieced as one word. Printable ASCII passes through steps 1-3 unchanged, so
+// the ids of ordinary English prompts are exactly what they were before this function existed.
+func normalizeBERT(text string) string {
+	ascii := true
+	for i := 0; i < len(text); i++ {
+		if c := text[i]; c >= utf8.RuneSelf || (c < 0x20 && c != '\t' && c != '\n' && c != '\r') || c == 0x7f {
+			ascii = false
+			break
+		}
+	}
+	if ascii { // fast path: nothing to clean, no CJK, NFD is the identity
+		return strings.ToLower(text)
+	}
+
+	var b strings.Builder
+	b.Grow(len(text) + 8)
+	for _, r := range text {
+		switch {
+		case r == 0 || r == utf8.RuneError || isBERTControl(r):
+			continue
+		case isBERTWhitespace(r):
+			b.WriteByte(' ')
+		case isCJK(r):
+			b.WriteByte(' ')
+			b.WriteRune(r)
+			b.WriteByte(' ')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	stripped := strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Mn, r) {
+			return -1
+		}
+		return r
+	}, norm.NFD.String(b.String()))
+	return strings.ToLower(stripped)
+}
+
+// isBERTWhitespace mirrors tokenizers' is_whitespace: \t \n \r or a Unicode White_Space
+// character (U+00A0, U+2028, U+3000, ...). Control characters are removed before this test,
+// so \v, \f and U+0085 never reach it.
+func isBERTWhitespace(r rune) bool {
+	return r == '\t' || r == '\n' || r == '\r' || unicode.IsSpace(r)
+}
+
+// isBERTControl mirrors tokenizers' is_control: any "Other" category character (Cc, Cf, Co,
+// Cs, or unassigned) except \t \n \r, which count as whitespace.
+func isBERTControl(r rune) bool {
+	if r == '\t' || r == '\n' || r == '\r' {
+		return false
+	}
+	if unicode.In(r, unicode.Cc, unicode.Cf, unicode.Co, unicode.Cs) {
+		return true
+	}
+	// Unassigned code points (Cn) have no table of their own.
+	return !unicode.In(r, unicode.L, unicode.M, unicode.N, unicode.P, unicode.S, unicode.Z)
+}
+
+// isCJK is BERT's _is_chinese_char: the CJK Unified Ideographs blocks and their extensions
+// and compatibility ideographs. Hiragana, Katakana and Hangul are NOT included (BERT leaves
+// them to WordPiece; Hangul syllables are decomposed into Jamo by the NFD step instead).
+func isCJK(r rune) bool {
+	return (r >= 0x4E00 && r <= 0x9FFF) ||
+		(r >= 0x3400 && r <= 0x4DBF) ||
+		(r >= 0x20000 && r <= 0x2A6DF) ||
+		(r >= 0x2A700 && r <= 0x2B73F) ||
+		(r >= 0x2B740 && r <= 0x2B81F) ||
+		(r >= 0x2B820 && r <= 0x2CEAF) ||
+		(r >= 0xF900 && r <= 0xFAFF) ||
+		(r >= 0x2F800 && r <= 0x2FA1F)
+}
+
+// basicSplit splits on whitespace and then peels off punctuation as standalone tokens (so
+// "cat." -> ["cat", "."]). Its input is already normalizeBERT'd.
 func basicSplit(text string) []string {
 	var words []string
 	for _, ws := range strings.Fields(text) {
@@ -141,11 +229,17 @@ func isPunct(r rune) bool {
 	return unicode.IsPunct(r)
 }
 
+// maxWordChars is WordPiece's max_input_chars_per_word: a longer word is [UNK] outright.
+const maxWordChars = 100
+
 // wordpiece greedily matches the longest vocab prefix from the front; subwords after the
-// first get a "##" prefix. If no prefix matches at some position, the whole word becomes
-// [UNK].
+// first get a "##" prefix. If no prefix matches at some position, or the word is longer than
+// maxWordChars characters, the whole word becomes [UNK].
 func (t *Tokenizer) wordpiece(word string) []string {
 	runes := []rune(word)
+	if len(runes) > maxWordChars {
+		return []string{"[UNK]"}
+	}
 	var pieces []string
 	start := 0
 	for start < len(runes) {

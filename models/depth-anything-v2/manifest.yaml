@@ -2,12 +2,22 @@ name: depth-anything-v2
 architecture: depth-anything-v2
 task: depth
 license: Apache-2.0
+# Weights (not committed): `visionserve pull depth-anything-v2`, or download model.onnx from
+# the source below into this directory. Dynamic H/W export, see its model card.
+source_url: https://huggingface.co/mtbui2010/depth-anything-v2-small-ONNX/
+sha256: 4e456781eac92f7f8e79da50f721f65eb1876a10ed90d59ab2b7d7df04f59e71
+model_file: model.onnx
 
 input:
   width: 518
   height: 518
   layout: NCHW
   letterbox: false
+  # The reference DPTImageProcessor keeps the aspect ratio (scale by whichever of 518/W, 518/H is
+  # closer to 1, each side rounded to a multiple of 14, bicubic): 848x480 -> 910x518. Squashing to
+  # 518x518 distorts the scene the model was trained on. Needs an ONNX graph with dynamic H/W.
+  keep_aspect: true
+  multiple_of: 14
   normalize:
     mean: [0.485, 0.456, 0.406]
     std:  [0.229, 0.224, 0.225]

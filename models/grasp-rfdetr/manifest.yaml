@@ -43,7 +43,7 @@ postprocess:               # describes the rf-detr detector decode
   type: detr
   box_format: cxcywh
   conf_threshold: 0.5
-  max_detections: 300      # also caps grasps returned per mask
+  max_detections: 300   # detector cap only; grasps per mask are capped separately (default 20, internal/models/grasp)
 
 labels: ../rf-detr/coco91.txt   # reuse rf-detr's labels (written when rf-detr is pulled)
 

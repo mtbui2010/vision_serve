@@ -13,26 +13,55 @@ import (
 
 const (
 	defaultDetThresh = 0.3 // probability map threshold
-	defaultDilate    = 1.5 // bbox expansion factor from center
-	minComponentSize = 16  // skip noise components smaller than this (pixels)
+	// defaultUnclipRatio is PaddleOCR DBPostProcess's unclip_ratio. The DB head predicts a
+	// SHRUNK text kernel; "unclip" grows it back by offsetting the polygon outward by
+	// d = area * ratio / perimeter (pyclipper offset). For the axis-aligned box we extract,
+	// that is an expansion of EVERY side by d — NOT a scale of the box about its centre
+	// (which over-grows long lines horizontally and under-grows them vertically).
+	defaultUnclipRatio = 1.5
+	minComponentSize   = 16 // skip noise components smaller than this (pixels)
 )
 
 // point is a 2D pixel coordinate used in the BFS flood-fill.
 type point struct{ x, y int }
 
+// unclipDistance is the DB offset distance for an axis-aligned w×h box:
+// area*ratio/perimeter = w*h*ratio / (2*(w+h)). Zero for a degenerate box.
+func unclipDistance(w, h, ratio float64) float64 {
+	per := 2 * (w + h)
+	if per <= 0 {
+		return 0
+	}
+	return w * h * ratio / per
+}
+
 // extractBBoxes thresholds the [1,1,H,W] probability map at thresh, finds connected
 // components via iterative BFS (8-connectivity), returns axis-aligned bounding boxes as
 // [x, y, w, h] in the detection model's input space (before mapping to original coords).
-// Each box is expanded by the dilate factor from its center before returning.
-func extractBBoxes(probMap []float32, h, w int, thresh, dilate float64) [][4]float64 {
+// Each box is unclipped per PaddleOCR DBPostProcess: every side is pushed outward by
+// d = area*unclipRatio/perimeter, with the box measured on pixel centres (as cv2 contours /
+// minAreaRect see it). Returns an error if probMap does not hold exactly h*w values.
+func extractBBoxes(probMap []float32, h, w int, thresh, unclipRatio float64) ([][4]float64, error) {
+	if h <= 0 || w <= 0 {
+		return nil, fmt.Errorf("paddleocr: invalid probability map size %dx%d", w, h)
+	}
+	if len(probMap) != h*w {
+		return nil, fmt.Errorf("paddleocr: probability map has %d values, want %d (%dx%d)", len(probMap), h*w, w, h)
+	}
+
 	// Build binary mask.
 	mask := make([]bool, h*w)
 	for i, v := range probMap {
 		mask[i] = float64(v) > thresh
 	}
 
+	// visited is set when a pixel is ENQUEUED, so each pixel enters the queue at most once
+	// (marking on dequeue let one pixel be queued by up to 8 neighbours). The queue is
+	// indexed rather than re-sliced (queue[1:] keeps the whole backing array alive) and is
+	// reused across components.
 	visited := make([]bool, h*w)
 	var result [][4]float64
+	var queue []point
 
 	for startY := 0; startY < h; startY++ {
 		for startX := 0; startX < w; startX++ {
@@ -42,45 +71,12 @@ func extractBBoxes(probMap []float32, h, w int, thresh, dilate float64) [][4]flo
 			}
 
 			// BFS flood-fill (iterative to avoid stack overflow on large images).
-			queue := []point{{startX, startY}}
-			component := []point{}
+			visited[idx] = true
+			queue = append(queue[:0], point{startX, startY})
+			minX, minY, maxX, maxY := startX, startY, startX, startY
 
-			for len(queue) > 0 {
-				p := queue[0]
-				queue = queue[1:]
-				pidx := p.y*w + p.x
-				if visited[pidx] {
-					continue
-				}
-				visited[pidx] = true
-				component = append(component, p)
-
-				// Check 8 neighbors.
-				for dy := -1; dy <= 1; dy++ {
-					for dx := -1; dx <= 1; dx++ {
-						if dx == 0 && dy == 0 {
-							continue
-						}
-						nx, ny := p.x+dx, p.y+dy
-						if nx >= 0 && nx < w && ny >= 0 && ny < h {
-							nidx := ny*w + nx
-							if !visited[nidx] && mask[nidx] {
-								queue = append(queue, point{nx, ny})
-							}
-						}
-					}
-				}
-			}
-
-			// Filter small components (noise).
-			if len(component) < minComponentSize {
-				continue
-			}
-
-			// Compute axis-aligned bounding box.
-			minX, minY := component[0].x, component[0].y
-			maxX, maxY := minX, minY
-			for _, p := range component {
+			for head := 0; head < len(queue); head++ {
+				p := queue[head]
 				if p.x < minX {
 					minX = p.x
 				}
@@ -93,24 +89,45 @@ func extractBBoxes(probMap []float32, h, w int, thresh, dilate float64) [][4]flo
 				if p.y > maxY {
 					maxY = p.y
 				}
+
+				// Check 8 neighbors.
+				for dy := -1; dy <= 1; dy++ {
+					for dx := -1; dx <= 1; dx++ {
+						if dx == 0 && dy == 0 {
+							continue
+						}
+						nx, ny := p.x+dx, p.y+dy
+						if nx >= 0 && nx < w && ny >= 0 && ny < h {
+							nidx := ny*w + nx
+							if !visited[nidx] && mask[nidx] {
+								visited[nidx] = true
+								queue = append(queue, point{nx, ny})
+							}
+						}
+					}
+				}
 			}
 
-			// Dilate: expand bbox by dilate factor from center.
-			cx := float64(minX+maxX) / 2.0
-			cy := float64(minY+maxY) / 2.0
-			halfW := float64(maxX-minX+1) * dilate / 2.0
-			halfH := float64(maxY-minY+1) * dilate / 2.0
+			// Filter small components (noise). len(queue) == component size.
+			if len(queue) < minComponentSize {
+				continue
+			}
 
-			x0 := math.Max(0, cx-halfW)
-			y0 := math.Max(0, cy-halfH)
-			x1 := math.Min(float64(w-1), cx+halfW)
-			y1 := math.Min(float64(h-1), cy+halfH)
+			// Unclip: expand each side by d (pixel-centre extent, as minAreaRect measures it).
+			bw := float64(maxX - minX)
+			bh := float64(maxY - minY)
+			d := unclipDistance(bw, bh, unclipRatio)
+
+			x0 := math.Max(0, float64(minX)-d)
+			y0 := math.Max(0, float64(minY)-d)
+			x1 := math.Min(float64(w), float64(maxX)+d)
+			y1 := math.Min(float64(h), float64(maxY)+d)
 
 			result = append(result, [4]float64{x0, y0, x1 - x0, y1 - y0})
 		}
 	}
 
-	return result
+	return result, nil
 }
 
 // mapBoxToOriginal maps a box [x, y, w, h] from the detection model input space back to
@@ -149,7 +166,8 @@ func mapBoxToOriginal(box [4]float64, meta detPreprocessMeta) [4]float64 {
 // ctcDecode performs greedy CTC decoding on logits [T, C] (flat, row-major).
 // Returns (text string, avgConf float64).
 // Blank class is index 0 (PP-OCRv4 convention).
-// charset maps index i to charset[i-1] (charset does not include blank at index 0).
+// charset maps index i to charset[i-1] (charset does not include blank at index 0);
+// when c == len(charset)+2 the last class is the implicit space character.
 func ctcDecode(logits []float32, t, c int, charset []string) (string, float64) {
 	if t == 0 || c == 0 || len(logits) == 0 {
 		return "", 0
@@ -184,9 +202,15 @@ func ctcDecode(logits []float32, t, c int, charset []string) (string, float64) {
 
 		prevIdx = best
 
-		// Map to character: charset[best-1] (charset has no blank entry).
-		if best-1 < len(charset) {
+		// Map to character: charset[best-1] (charset has no blank entry). PaddleOCR's
+		// CTCLabelDecode with use_space_char=True appends " " AFTER the dictionary, so a
+		// head with C == len(charset)+2 classes (blank + keys + space) emits the space at
+		// index len(charset)+1. Without this every space between words was dropped.
+		switch {
+		case best-1 < len(charset):
 			sb.WriteString(charset[best-1])
+		case best == len(charset)+1 && c == len(charset)+2:
+			sb.WriteByte(' ')
 		}
 		confSum += float64(bestVal)
 		count++

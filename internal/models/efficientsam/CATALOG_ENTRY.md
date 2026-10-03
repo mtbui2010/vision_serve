@@ -23,8 +23,8 @@ catalog is defined):
     IdleUnloadSeconds:   300,
     Verified:            false,
     Note: "Verify HF file names match encoder/decoder split before using. " +
-          "Also confirm whether encoder expects NCHW ImageNet-normalized input or raw 0..255. " +
-          "See preprocess.go TODOs.",
+          "Encoder takes raw pixel/255 at original size (graph resizes + normalizes); " +
+          "I/O verified on the local export — see efficientsam.go.",
 },
 ```
 

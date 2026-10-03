@@ -16,16 +16,15 @@ type pointSet struct {
 	labels []int64   // SAM2 labels: 2=box top-left, 3=box bottom-right, 1=fg, 0=bg
 }
 
-func (p pointSet) n() int { return len(p.labels) }
-
-// scaledPrompt maps original coords into the 1024-space expected by the SAM2 decoder,
-// returning coords as float32 pairs and labels as int64 (SAM2 uses int64, not float32).
-func (p pointSet) scaledPrompt(scale float32) (coords [][2]float32, labels []int64) {
+// scaledPrompt maps original coords into the 1024-space expected by the SAM2 decoder.
+// The encoder input is the image SQUASHED to 1024×1024 (upstream SAM2Transforms), so the
+// mapping is per axis: x·scaleX, y·scaleY with scaleX = 1024/W, scaleY = 1024/H.
+func (p pointSet) scaledPrompt(scaleX, scaleY float32) (coords [][2]float32, labels []int64) {
 	coords = make([][2]float32, len(p.labels))
 	for i := 0; i < len(p.labels); i++ {
 		coords[i] = [2]float32{
-			float32(p.coords[i*2]) * scale,
-			float32(p.coords[i*2+1]) * scale,
+			float32(p.coords[i*2]) * scaleX,
+			float32(p.coords[i*2+1]) * scaleY,
 		}
 	}
 	labels = p.labels
@@ -123,14 +122,15 @@ func pickEncoderOutputs(names []string, outs []engine.Tensor) (imageEmbed, highR
 //   - "image_embed":      [1,256,64,64]  float32 from encoder
 //   - "high_res_feats_0": [1,32,256,256] float32 from encoder
 //   - "high_res_feats_1": [1,64,128,128] float32 from encoder
-//   - "point_coords":     [1,N,2]        float32 — in 1024-space
+//   - "point_coords":     [1,N,2]        float32 — in 1024-space (per-axis scaled)
 //   - "point_labels":     [1,N]          float32 (NOT int64 — verified against ONNX)
 //   - "mask_input":       [1,1,256,256]  float32 zeros (no prior mask)
 //   - "has_mask_input":   [1]            float32 0.0
 //
 // Decoder outputs:
-//   - "masks":            [1,M,H,W] float32 logits (M candidates; pick by IoU)
-//   - "iou_predictions":  [1,M]     float32
+//   - "masks":            [1,3,256,256] float32 LOW-RES logits (3 multimask
+//     candidates, clamped to [-32,32]; pick by IoU, upsample to the original size)
+//   - "iou_predictions":  [1,3]         float32
 func runDecoder(
 	r models.Runner,
 	imageEmbed, highResFeats0, highResFeats1 engine.Tensor,
@@ -226,14 +226,22 @@ func findMaskAndIoU(names []string, outs []engine.Tensor) (mask, iou *engine.Ten
 	return mask, iou
 }
 
-// pickBestMask selects the best mask channel from the SAM2 decoder output,
-// thresholds it at 0.0, computes a tight bbox, and encodes it as column-major RLE.
+// pickBestMask selects the best mask channel from the SAM2 decoder output, upsamples its
+// logits to the ORIGINAL image size, thresholds at 0, computes a tight bbox and encodes
+// the mask as column-major RLE.
 //
-// SAM2 decoder outputs masks with shape [1, 1, H, W] (single-mask mode).
-// The function squeezes the first two dims and processes [H, W].
-func pickBestMask(maskTensor, iouTensor engine.Tensor) (models.Mask, error) {
+// Verified decoder output (SharpAI/sam2-hiera-tiny-onnx): masks [1, 3, 256, 256] — the
+// three multimask candidates (multimask_output=True is baked into the export), LOW-RES
+// logits already clamped to [-32, 32] (graph ends in Clip, no Resize) — and
+// iou_predictions [1, 3]. The 256×256 grid covers the whole squashed 1024×1024 input, so
+// upstream SAM2Transforms.postprocess_masks simply does
+// F.interpolate(masks, (H, W), mode="bilinear", align_corners=False) and then > 0.
+func pickBestMask(maskTensor, iouTensor engine.Tensor, origW, origH int) (models.Mask, error) {
 	if len(maskTensor.Shape) < 4 {
 		return models.Mask{}, fmt.Errorf("sam2: unexpected mask shape %v (want 4-D)", maskTensor.Shape)
+	}
+	if origW <= 0 || origH <= 0 {
+		return models.Mask{}, fmt.Errorf("sam2: invalid original size %dx%d", origW, origH)
 	}
 
 	// Shape: [batch, channels, H, W] — find best channel by IoU.
@@ -245,8 +253,12 @@ func pickBestMask(maskTensor, iouTensor engine.Tensor) (models.Mask, error) {
 	if batch < 1 || ch < 1 || h <= 0 || w <= 0 {
 		return models.Mask{}, fmt.Errorf("sam2: degenerate mask shape %v", maskTensor.Shape)
 	}
+	if len(maskTensor.Data) < ch*h*w {
+		return models.Mask{}, fmt.Errorf("sam2: mask data length %d < %d (shape %v)",
+			len(maskTensor.Data), ch*h*w, maskTensor.Shape)
+	}
 
-	// Pick best channel by iou_predictions (usually ch=1 for SAM2).
+	// Pick best channel by iou_predictions.
 	best, conf := 0, 0.0
 	if len(iouTensor.Data) > 0 {
 		bestScore := float32(-1e30)
@@ -263,27 +275,29 @@ func pickBestMask(maskTensor, iouTensor engine.Tensor) (models.Mask, error) {
 		conf = float64(bestScore)
 	}
 
-	// Threshold logits > 0 to get binary mask.
+	// Upsample the chosen low-res logits to (origH, origW) and threshold at 0.
 	off := best * h * w
-	bin := make([]bool, h*w)
-	minX, minY := w, h
+	bin := upsampleThreshold(maskTensor.Data[off:off+h*w], h, w, origH, origW)
+
+	minX, minY := origW, origH
 	maxX, maxY := -1, -1
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			if maskTensor.Data[off+y*w+x] > 0 {
-				bin[y*w+x] = true
-				if x < minX {
-					minX = x
-				}
-				if x > maxX {
-					maxX = x
-				}
-				if y < minY {
-					minY = y
-				}
-				if y > maxY {
-					maxY = y
-				}
+	for y := 0; y < origH; y++ {
+		row := bin[y*origW : (y+1)*origW]
+		for x, v := range row {
+			if !v {
+				continue
+			}
+			if x < minX {
+				minX = x
+			}
+			if x > maxX {
+				maxX = x
+			}
+			if y < minY {
+				minY = y
+			}
+			if y > maxY {
+				maxY = y
 			}
 		}
 	}
@@ -299,10 +313,58 @@ func pickBestMask(maskTensor, iouTensor engine.Tensor) (models.Mask, error) {
 	}
 
 	return models.Mask{
-		RLE:  encodeRLEColumnMajor(bin, h, w),
+		RLE:  encodeRLEColumnMajor(bin, origH, origW),
 		BBox: bbox,
 		Conf: conf,
 	}, nil
+}
+
+// bilinearTaps returns, for each of dst output positions, the two source indices and the
+// weight of the second one, matching PyTorch F.interpolate(mode="bilinear",
+// align_corners=False): src = max((dst+0.5)·in/out − 0.5, 0), i0 = floor(src),
+// i1 = min(i0+1, in−1), λ = src − i0.
+func bilinearTaps(in, out int) (i0, i1 []int, lambda []float32) {
+	i0 = make([]int, out)
+	i1 = make([]int, out)
+	lambda = make([]float32, out)
+	scale := float64(in) / float64(out)
+	for d := 0; d < out; d++ {
+		src := (float64(d)+0.5)*scale - 0.5
+		if src < 0 {
+			src = 0
+		}
+		a := int(src)
+		if a > in-1 {
+			a = in - 1
+		}
+		b := a + 1
+		if b > in-1 {
+			b = in - 1
+		}
+		i0[d], i1[d], lambda[d] = a, b, float32(src-float64(a))
+	}
+	return i0, i1, lambda
+}
+
+// upsampleThreshold bilinearly resizes a row-major (sh×sw) logit map to (dh×dw) with
+// PyTorch align_corners=False semantics and returns the row-major binary mask logit > 0.
+func upsampleThreshold(src []float32, sh, sw, dh, dw int) []bool {
+	y0, y1, ly := bilinearTaps(sh, dh)
+	x0, x1, lx := bilinearTaps(sw, dw)
+	bin := make([]bool, dh*dw)
+	for y := 0; y < dh; y++ {
+		r0 := src[y0[y]*sw : (y0[y]+1)*sw]
+		r1 := src[y1[y]*sw : (y1[y]+1)*sw]
+		wy := ly[y]
+		out := bin[y*dw : (y+1)*dw]
+		for x := 0; x < dw; x++ {
+			a, b, wx := x0[x], x1[x], lx[x]
+			top := r0[a] + (r0[b]-r0[a])*wx
+			bot := r1[a] + (r1[b]-r1[a])*wx
+			out[x] = top+(bot-top)*wy > 0
+		}
+	}
+	return bin
 }
 
 // encodeRLEColumnMajor encodes a binary mask as COCO-style uncompressed RLE: counts of

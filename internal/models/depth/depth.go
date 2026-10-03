@@ -1,5 +1,6 @@
 // Package depth implements monocular depth estimation models:
-//   - Depth Anything V2 (Apache-2.0) — 518×518 input
+//   - Depth Anything V2 (Apache-2.0) — DPT keep-aspect resize around 518 (multiple of 14),
+//     when its manifest sets input.keep_aspect (see preprocess.go)
 //   - MiDaS (MIT) — 256×256 input
 //
 // Both are plain Model implementations: engine+lifecycle drive the single ONNX session.

@@ -85,6 +85,10 @@ type Config struct {
 	Mean      []float32
 	Std       []float32
 	Letterbox bool
+	Crop      string // "" | "center" (manifest input.crop)
+	// KeepAspect / MultipleOf: manifest input.keep_aspect / input.multiple_of (see registry.Manifest).
+	KeepAspect bool
+	MultipleOf int
 
 	// Postprocess
 	PostType   string // e.g. "detr"
@@ -235,6 +239,14 @@ type Runner interface {
 // that role's input format (e.g. the hybrid model delegates to its rfdetr.Preprocess).
 type ExplainPreprocessor interface {
 	ExplainPreprocess(img image.Image) (engine.Tensor, PreprocessMeta, error)
+}
+
+// Exclusive is an optional interface for PipelineModels whose Infer must never run concurrently
+// with another Infer of the SAME loaded model. The runtime (lifecycle) holds a per-session lock
+// around Infer when Exclusive() is true. It replaces package-level mutexes in model packages
+// (groundingdino.PipelineMu), so the concurrency policy lives in one place.
+type Exclusive interface {
+	Exclusive() bool
 }
 
 // PoolSizer is an optional interface for PipelineModels that want multiple concurrent
