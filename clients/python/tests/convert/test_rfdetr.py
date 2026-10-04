@@ -200,13 +200,140 @@ def test_detr_parity_ignores_only_low_score_boundary_queries(tmp_path):
     b2 = b.copy()
     b2[0, 95] += 0.3  # query 95 is a different proposal in the two runs (top-K near-tie) ...
     lo2 = lo.copy()
-    lo2[0, 95] = -5.0  # ... and scores < BOUNDARY_SCORE in both
+    lo2[0, 95] = -5.0  # ... and scores < SCORE_FLOOR in both
     ref[1][0, 95] = -4.0
     fam.detr_parity(path, {"b": b2, "l": lo2}, ref, 1e-3)  # tolerated: score < 0.05 both sides
     b3 = b.copy()
     b3[0, 3] += 0.3  # a confident query moved: a real bug
     with pytest.raises(ConvertError, match="Not installed"):
         fam.detr_parity(path, {"b": b3, "l": lo}, [b, lo], 1e-3)
+
+
+def _identity_pair(tmp_path, q=100, c=3):
+    """An identity ONNX graph (b, l) -> (B, L): the 'ONNX output' is the feed, so a test sets it."""
+    import onnx
+    from onnx import TensorProto, helper
+    g = helper.make_graph([helper.make_node("Identity", ["b"], ["B"]), helper.make_node("Identity", ["l"], ["L"])],
+                          "id", [helper.make_tensor_value_info("b", TensorProto.FLOAT, [1, q, 4]),
+                                 helper.make_tensor_value_info("l", TensorProto.FLOAT, [1, q, c])],
+                          [helper.make_tensor_value_info("B", TensorProto.FLOAT, [1, q, 4]),
+                           helper.make_tensor_value_info("L", TensorProto.FLOAT, [1, q, c])])
+    path = tmp_path / "id.onnx"
+    onnx.save(helper.make_model(g, opset_imports=[helper.make_opsetid("", 17)]), path)
+    return path
+
+
+def _queries(q=100, c=3, confident=10, seed=0):
+    rng = np.random.default_rng(seed)
+    b = rng.random((1, q, 4), dtype=np.float32)
+    lo = rng.uniform(-7, -4, (1, q, c)).astype(np.float32)  # sigmoid < 0.02
+    lo[0, :confident, 0] = rng.uniform(0, 4, confident)      # sigmoid 0.5 .. 0.98
+    return b, lo
+
+
+def test_detr_parity_passes_top_k_near_ties(tmp_path):
+    """What the official COCO checkpoints do on the noise image (Nano: 100 of 300 queries differ,
+    all scoring < 0.02): many LOW-score queries differ, every confident one matches. Not a defect."""
+    path = _identity_pair(tmp_path)
+    b, lo = _queries()
+    rng = np.random.default_rng(1)
+    b2, lo2 = b.copy(), lo.copy()
+    near = rng.choice(np.arange(10, 100), 40, replace=False)  # 40% of the queries, all low-score
+    b2[0, near] = rng.random((40, 4))
+    lo2[0, near] = rng.uniform(-7, -4, (40, 3))
+    err = fam.detr_parity(path, {"b": b2, "l": lo2}, [b, lo], 1e-3)
+    assert err <= 1e-3
+    # Two confident queries that trade places in the top-K order are still the same two queries.
+    b3, lo3 = b.copy(), lo.copy()
+    b3[0, [2, 7]], lo3[0, [2, 7]] = b[0, [7, 2]], lo[0, [7, 2]]
+    fam.detr_parity(path, {"b": b3, "l": lo3}, [b, lo], 1e-3)
+
+
+@pytest.mark.parametrize("bug", ["confident box moved", "confident score changed", "query appears",
+                                 "swapped box coords", "shifted logits", "low-score majority differs",
+                                 "swapped box coords, no confident query", "shifted logits, no confident query"])
+def test_detr_parity_still_fails_real_export_bugs(tmp_path, bug):
+    """A real export bug fails however few confident queries the input has (the noise image of a
+    COCO checkpoint has almost none): rule 2 still sees every query move."""
+    path = _identity_pair(tmp_path)
+    b, lo = _queries(confident=0 if "no confident" in bug else 10)
+    bug = bug.split(",")[0]
+    g_b, g_lo = b.copy(), lo.copy()
+    if bug == "confident box moved":
+        g_b[0, 3] += 0.01
+    elif bug == "confident score changed":
+        g_lo[0, 3, 0] += 0.2
+    elif bug == "query appears":  # a low-score query becomes confident in the ONNX run only
+        g_lo[0, 50, 1] = 2.0
+    elif bug == "swapped box coords":  # cx,cy,w,h -> cy,cx,h,w
+        g_b = g_b[..., [1, 0, 3, 2]].copy()
+    elif bug == "shifted logits":
+        g_lo += 0.5
+    elif bug == "low-score majority differs":  # every confident query fine, 60% of the rest moved
+        rows = np.arange(10, 70)
+        g_b[0, rows] += 0.05
+    with pytest.raises(ConvertError, match="Not installed"):
+        fam.detr_parity(path, {"b": g_b, "l": g_lo}, [b, lo], 1e-3)
+
+
+def test_detr_parity_non_finite_must_agree(tmp_path):
+    path = _identity_pair(tmp_path)
+    b, lo = _queries()
+    lo[0, 50, 2] = -np.inf  # the same -inf in both runs: compared as equal, then left out
+    fam.detr_parity(path, {"b": b, "l": lo}, [b, lo], 1e-3)
+    g_lo = lo.copy()
+    g_lo[0, 60, 1] = np.nan  # a NaN only the ONNX graph produces
+    with pytest.raises(ConvertError, match="NaN/inf"):
+        fam.detr_parity(path, {"b": b, "l": g_lo}, [b, lo], 1e-3)
+
+
+def test_detr_parity_fails_a_wrong_normalisation_in_the_graph(tmp_path):
+    """A small linear 'detector' exported to ONNX, fed an input normalised differently from the
+    reference's (ImageNet mean/std vs /255 only): the outputs move everywhere, confident or not."""
+    import onnx
+    from onnx import TensorProto, helper, numpy_helper
+    rng = np.random.default_rng(0)
+    q, f, c = 100, 3, 3
+    wb, wl = rng.normal(0, 0.5, (f, 4)).astype(np.float32), rng.normal(0, 2, (f, c)).astype(np.float32)
+    wl[:, 0] += 3.0
+    g = helper.make_graph(
+        [helper.make_node("MatMul", ["x", "wb"], ["zb"]), helper.make_node("Sigmoid", ["zb"], ["B"]),
+         helper.make_node("MatMul", ["x", "wl"], ["L"])], "lin",
+        [helper.make_tensor_value_info("x", TensorProto.FLOAT, [1, q, f])],
+        [helper.make_tensor_value_info("B", TensorProto.FLOAT, [1, q, 4]),
+         helper.make_tensor_value_info("L", TensorProto.FLOAT, [1, q, c])],
+        [numpy_helper.from_array(wb, "wb"), numpy_helper.from_array(wl, "wl")])
+    path = tmp_path / "lin.onnx"
+    onnx.save(helper.make_model(g, opset_imports=[helper.make_opsetid("", 17)]), path)
+    px = rng.random((1, q, f)).astype(np.float32)  # "pixels" in 0..1
+    mean, std = np.array(IMAGENET_MEAN, np.float32), np.array(IMAGENET_STD, np.float32)
+    right = (px - mean) / std
+    ref = [1 / (1 + np.exp(-(right @ wb))), right @ wl]
+    fam.detr_parity(path, {"x": right}, ref, 1e-3)  # same normalisation: passes
+    with pytest.raises(ConvertError, match="Not installed"):
+        fam.detr_parity(path, {"x": px}, ref, 1e-3)
+
+
+def test_parity_inputs_add_the_first_photo(tmp_path):
+    from PIL import Image
+    (tmp_path / "b.jpg").write_bytes(b"")  # sorted after a.png; never opened
+    Image.new("RGB", (40, 30), (200, 10, 10)).save(tmp_path / "a.png")
+    got = fam.parity_inputs(32, str(tmp_path))
+    assert [(lab, real) for lab, _, real in got] == [("seed 0", False), ("seed 1", False), ("a.png", True)]
+    assert all(x.shape == (1, 3, 32, 32) and x.dtype == np.float32 for _, x, _ in got)
+    assert [lab for lab, _, _ in fam.parity_inputs(32)] == ["seed 0", "seed 1"]
+
+
+def test_tier_a_row_names_the_photo_and_counts_the_near_ties():
+    from visionserve.convert.verify import tier_a_results
+    runs = [{"what": "rfdetr[seed 0]", "max_rel_diff": 9.9e-4, "tol": 1e-3, "low_score_differ": 100,
+             "real_input": False},
+            {"what": "rfdetr[a.jpg]", "max_rel_diff": 5e-5, "tol": 1e-3, "low_score_differ": 0, "real_input": True}]
+    (row,) = tier_a_results(runs, ["m"])
+    assert row.title == "ONNX vs framework parity (synthetic + photo)"
+    assert "100 low-score queries differ" in row.summary
+    (row,) = tier_a_results(runs[:1], ["m"])
+    assert row.title == "ONNX vs framework parity (synthetic input)"
 
 
 # --------------------------------------------------------------------------------------------

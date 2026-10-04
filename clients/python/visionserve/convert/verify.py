@@ -452,7 +452,12 @@ def tier_a_results(records, names) -> List[TierResult]:
                            model=names[0] if names else "")]
     worst_err = max(r["max_rel_diff"] for r in records)
     whats = sorted({r["what"].strip() for r in records})
-    return [TierResult("A", "ONNX vs framework parity (synthetic input)", PASS,
-                       f"max|Δ|/scale {worst_err:.2e} over {len(records)} run(s), tolerance {records[0]['tol']:g}",
+    inputs = "synthetic + photo" if any(r.get("real_input") for r in records) else "synthetic input"
+    low = sum(int(r.get("low_score_differ", 0)) for r in records)
+    note = (f"; {low} low-score queries differ over the runs (DETR top-K near-ties), not judged one by one"
+            if low else "")
+    return [TierResult("A", f"ONNX vs framework parity ({inputs})", PASS,
+                       f"max|Δ|/scale {worst_err:.2e} over {len(records)} run(s), tolerance {records[0]['tol']:g}"
+                       + note,
                        model=names[0] if len(names) == 1 else "",
                        metrics={"runs": records, "checks": whats})]

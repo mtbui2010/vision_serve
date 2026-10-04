@@ -271,7 +271,7 @@ plumbing):
 
 | Tier | Compares | Passes when (defaults) |
 |---|---|---|
-| **A** | The ONNX graph vs the framework model, same input tensor | outputs agree to `--tolerance` (1e-3, relative) |
+| **A** | The ONNX graph vs the framework model, same input tensor (two synthetic images; for RF-DETR also the first `--images` photo) | outputs agree to `--tolerance` (1e-3, relative). For a DETR detector: every query scoring ≥ 0.05 agrees, and at least half of all queries agree at their own row |
 | **B1** | `/api/preprocess` vs the reference preprocessing, same photos | mean \|Δ\| ≤ 2 gray levels (WARN up to 8, FAIL above) |
 | **B2** | `/api/predict` vs the original framework pipeline, same photos (`--images`) | detection: ≥ 95 % of boxes matched (same class, IoU ≥ 0.5), mean \|Δconf\| ≤ 0.03, mean box error ≤ 1 % of the image diagonal; classification: the same top-1 on every photo |
 | **C** | Accuracy (mAP or top-1) of the reference and of the served model on **your** labelled data (`--eval`) | the served model loses ≤ 0.5 point (WARN up to 1, FAIL above, `--max-map-drop`) |
@@ -310,6 +310,33 @@ that photo the model hesitates between two classes: the reference says *desktop 
 A difference of 0.01 in probability, from the 0.22-gray-level resize difference, swaps them. This
 is a WARN, not a FAIL, on purpose: it is worth knowing, but it is not a bug. Tier C (`--eval`)
 would say whether it costs accuracy over a whole labelled set.
+
+### Tier A on a DETR: a set of queries, not a list
+
+Tier A on the official COCO RF-DETR Nano checkpoint (`rf-detr-nano.pth`, rfdetr 1.7.1, CPU;
+`--dry-run --no-server`, so tier A only; it uses the first photo of `--images`, COCO `177015.jpg`):
+
+```console
+$ visionserve-convert rfdetr ~/.roboflow/models/rf-detr-nano.pth --name coco-nano \
+      --images photos/ --device cpu --dry-run --no-server
+...
+  parity rfdetr[seed 0]: max|Δ|/scale 9.89e-04; 1 of 300 queries score >= 0.05; 200/300 match at their own row; 100 low-score queries differ (top-K near-ties, best score 0.020), not judged one by one
+  parity rfdetr[seed 1]: max|Δ|/scale 2.83e-05; 0 of 300 queries score >= 0.05; 300/300 match at their own row
+  parity rfdetr[177015.jpg]: max|Δ|/scale 5.23e-05; 107 of 300 queries score >= 0.05; 300/300 match at their own row
+...
+overall: PASS
+```
+
+On the first noise image 100 of the 300 queries differ between PyTorch and ONNX Runtime, and it
+is not a bug. RF-DETR's decoder takes the 300 best of the encoder's proposals; on noise many of
+them score alike, so a difference in the sixth decimal changes which ones make the cut, and the
+queries attend to each other, so the swap shifts the rest a little. All 100 score below 0.02,
+far under any threshold. Tier A therefore requires every query that scores 0.05 or more to match,
+and at least half of all queries to match at their own row. An export bug fails both: swapped box
+coordinates or shifted logits move every query. On the photo, 107 queries score above 0.05 and
+all 300 match. (Before 2026-10-05 tier A allowed at most 2 % of rows to differ, so it refused
+this checkpoint, and Small, which has 32 such queries on the second noise image.) The official
+Base and Medium checkpoints and a fine-tuned Small pass the same way.
 
 ### Tier B1 catching a preprocessing mistake
 
