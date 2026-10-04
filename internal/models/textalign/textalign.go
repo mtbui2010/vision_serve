@@ -360,7 +360,8 @@ func (m *textAlign) decode(h *head, boxes, feats engine.Tensor, meta models.Prep
 		[]engine.Tensor{boxes, engine.F32(logits, 1, int64(q), int64(len(h.classes)))}, meta)
 }
 
-// parseMethod maps the per-request `method` option to a scoring mode. See gated.go for why
+// parseMethod maps the per-request `method` option to a scoring mode. An unknown name is the
+// caller's mistake (models.BadPrompt, HTTP 400). See gated.go for why
 // "folded" and "gated" differ: they compute the same names and select different boxes.
 func parseMethod(method string) (scoreMode, error) {
 	switch strings.ToLower(strings.TrimSpace(method)) {
@@ -373,7 +374,7 @@ func parseMethod(method string) (scoreMode, error) {
 	case "dual", "twohead":
 		return modeDual, nil
 	default:
-		return modeExact, fmt.Errorf("textalign: unknown method %q (want \"exact\", \"folded\", \"gated\" or \"dual\")", method)
+		return modeExact, models.BadPrompt(fmt.Errorf("textalign: unknown method %q (want \"exact\", \"folded\", \"gated\" or \"dual\")", method))
 	}
 }
 

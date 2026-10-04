@@ -176,12 +176,25 @@ func (q *Request) ToPrompt(imgW, imgH int) (models.Prompt, error) {
 		return models.Prompt{}, err
 	}
 	if raw != nil {
+		if !knownDepthDtype(q.DepthDtype) {
+			return models.Prompt{}, badRequest(fmt.Errorf("unknown depth_dtype %q (use uint16 or float32)", q.DepthDtype))
+		}
 		p.Depth, p.DepthW, p.DepthH = parseDepth(raw, q.DepthDtype, q.DepthWidth, q.DepthHeight, imgW, imgH)
 		if p.Depth == nil {
 			return models.Prompt{}, badRequest(errBadDepth)
 		}
 	}
 	return p, nil
+}
+
+// knownDepthDtype reports whether parseDepth understands dtype. Anything else used to be read as
+// uint16: garbage when the byte count happened to fit, else a misleading byte-length error.
+func knownDepthDtype(dtype string) bool {
+	switch strings.ToLower(strings.TrimSpace(dtype)) {
+	case "", "uint16", "u16", "float32", "float", "f32":
+		return true
+	}
+	return false
 }
 
 // maxGridSize bounds the automatic-mask grid: N×N decoder calls (and goroutines/allocations),

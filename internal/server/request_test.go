@@ -197,6 +197,29 @@ func TestEncodingFromQueryAndValidation(t *testing.T) {
 	}
 }
 
+// An unknown depth_dtype is a 400 naming the option, not a uint16 read of float bytes (or a
+// misleading byte-length error); the known names still work.
+func TestUnknownDepthDtypeIsBadRequest(t *testing.T) {
+	req := func(dtype string) *http.Request {
+		body, _ := json.Marshal(api.PredictJSONRequest{Model: "m", ImageBase64: b64(pngBytes(t, 2, 2)),
+			DepthBase64: b64(u16bytes(1, 2, 3, 4)), DepthDtype: dtype})
+		return jsonRequest("/api/predict", body)
+	}
+	f := &fakeRuntime{}
+	_, h := newTestServer(f)
+	rec := do(h, req("int16"))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `unknown depth_dtype \"int16\"`) {
+		t.Fatalf("depth_dtype=int16: %d %s", rec.Code, rec.Body)
+	}
+	for _, ok := range []string{"", "uint16", "U16"} {
+		f := &fakeRuntime{result: api.Result{Task: api.TaskDetection}}
+		_, h := newTestServer(f)
+		if rec := do(h, req(ok)); rec.Code != http.StatusOK || len(f.prompt.Depth) != 4 {
+			t.Errorf("depth_dtype=%q: %d %s (depth len %d)", ok, rec.Code, rec.Body, len(f.prompt.Depth))
+		}
+	}
+}
+
 // Missing pieces keep the exact messages each content type always answered.
 func TestRequiredFieldMessages(t *testing.T) {
 	_, h := newTestServer(&fakeRuntime{})

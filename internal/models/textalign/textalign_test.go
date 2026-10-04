@@ -1,6 +1,7 @@
 package textalign
 
 import (
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -31,8 +32,9 @@ func TestParseMethod(t *testing.T) {
 			t.Errorf("parseMethod(%q) = %v, want %v", c.in, got, c.want)
 		}
 	}
-	if _, err := parseMethod("nonsense"); err == nil {
-		t.Errorf("expected an error for an unknown method")
+	// An unknown method is the caller's mistake: HTTP 400 (models.ErrBadPrompt), not 500.
+	if _, err := parseMethod("nonsense"); !errors.Is(err, models.ErrBadPrompt) {
+		t.Errorf("parseMethod(nonsense) = %v, want an error matching models.ErrBadPrompt", err)
 	}
 	// Only the exact mode divides by ‖P f‖; gated deliberately uses the folded head.
 	for _, c := range []struct {

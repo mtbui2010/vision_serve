@@ -26,6 +26,7 @@ package background
 import (
 	"fmt"
 	"image"
+	"strings"
 
 	"visionserve/internal/engine"
 	"visionserve/internal/imageproc"
@@ -148,9 +149,11 @@ func (m *backgroundModel) PoolSizes() map[string]int {
 	return nil
 }
 
-// resolveMethod picks the method from the request (defaulting), validating availability.
+// resolveMethod picks the method from the request (defaulting), validating availability. Every
+// refusal is the caller's (an unknown method, or one this manifest has no session for), so it is
+// a models.BadPrompt: HTTP 400, not 500.
 func (m *backgroundModel) resolveMethod(prompt models.Prompt) (string, error) {
-	method := prompt.Method
+	method := strings.ToLower(strings.TrimSpace(prompt.Method)) // as textalign's parseMethod
 	if method == "" {
 		method = defaultMethod
 	}
@@ -159,16 +162,16 @@ func (m *backgroundModel) resolveMethod(prompt models.Prompt) (string, error) {
 		// always available: tries depth (if a MiDaS session exists) then falls back to cv.
 	case methodDepth:
 		if !m.hasDepth {
-			return "", fmt.Errorf("background: method=depth needs a MiDaS session (files.depth) — not declared in the manifest")
+			return "", models.BadPrompt(fmt.Errorf("background: method=depth needs a MiDaS session (files.depth) — not declared in the manifest"))
 		}
 	case methodSAM, methodAutomask:
 		if !m.hasSAM {
-			return "", fmt.Errorf("background: method=%s needs MobileSAM (files.encoder/decoder)", method)
+			return "", models.BadPrompt(fmt.Errorf("background: method=%s needs MobileSAM (files.encoder/decoder)", method))
 		}
 	case methodCV:
 		// no session needed
 	default:
-		return "", fmt.Errorf("background: unknown method %q (use auto, depth, sam, cv, or automask)", method)
+		return "", models.BadPrompt(fmt.Errorf("background: unknown method %q (use auto, depth, sam, cv, or automask)", method))
 	}
 	return method, nil
 }
