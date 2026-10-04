@@ -17,8 +17,9 @@ GroundingDINO is a **`PipelineModel`** (text-prompted, single ONNX session):
   text with a BERT-style tokenizer (reads `vocab.txt` from this directory).
 - Infer: single ONNX session (`model.onnx`), outputs box predictions + logit scores per
   token.
-- Postprocess: filter by `conf_threshold` (box score) and `text_threshold` (token-to-label
-  assignment), decode `cxcywh`-normalized boxes to original-image `[x, y, w, h]`.
+- Postprocess: name each query by its best-scoring prompt phrase, keep it when that score is
+  above `conf_threshold` and `text_threshold`, decode `cxcywh`-normalized boxes to
+  original-image `[x, y, w, h]`.
 
 ## Get the ONNX weights
 
@@ -68,8 +69,8 @@ outputs:
   pred_boxes            [1, Q, 4]      float32   cxcywh normalized [0, 1]
 ```
 
-Post-process: `sigmoid(logits)` → box score = max over text tokens; filter by
-`conf_threshold` (box) and `text_threshold` (label assignment).
+Post-process: `sigmoid(logits)` → each query takes its best phrase (max over that phrase's
+tokens) as label and score; filter that score by `conf_threshold` and `text_threshold`.
 
 ## Known defect in this ONNX export (one pass per class phrase)
 
@@ -199,7 +200,8 @@ curl -s -F model=grounding-dino -F image=@img.jpg -F prompt="cat. remote." \
 
 Thresholds (adjustable in `manifest.yaml`):
 - `conf_threshold` (default 0.3): minimum box/query score to keep a detection.
-- `text_threshold` (default 0.25): minimum token score for assigning a label to a box.
+- `text_threshold` (default 0.25): a second minimum on the same score. It does not pick label
+  words (HF's post-processing does; VisionServe labels a box with one whole phrase).
 
 Both thresholds can also be **overridden per request** instead of editing the manifest —
 pass `box_threshold` / `text_threshold` as HTTP form/JSON fields, or as

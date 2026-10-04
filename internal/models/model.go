@@ -93,7 +93,7 @@ type Config struct {
 	PostType   string // e.g. "detr"
 	BoxFormat  string // e.g. "cxcywh" | "xyxy"
 	ConfThresh float64
-	TextThresh float64 // GroundingDINO: threshold for assigning token→label (box_threshold = ConfThresh)
+	TextThresh float64 // GroundingDINO: second floor on the best-phrase score (box_threshold = ConfThresh)
 	MaxDet     int
 	Labels     []string
 
@@ -157,10 +157,10 @@ type Prompt struct {
 	// the grasp model (0 = use the manifest default).
 	GripperMin float64
 	GripperMax float64
-	// BoxThresh/TextThresh: per-request GroundingDINO threshold overrides (0 = use the
-	// manifest value, else the built-in default). BoxThresh filters object queries by
-	// score (= box_threshold); TextThresh controls which prompt tokens are assigned as a
-	// detection's label (= text_threshold). Used by grounding-dino, grounded-sam, grasp-gd.
+	// BoxThresh/TextThresh: per-request GroundingDINO threshold overrides (0 = manifest, else
+	// built-in default). BoxThresh (= box_threshold) filters object queries by score; TextThresh
+	// (= text_threshold) is a second floor on that score, never a label rule: a label is one whole
+	// prompt phrase. Used by grounding-dino, grounded-sam, grasp-gd.
 	BoxThresh  float64
 	TextThresh float64
 	// BgMaxArea/FgMinArea: foreground model knobs (percent of image area). A MobileSAM

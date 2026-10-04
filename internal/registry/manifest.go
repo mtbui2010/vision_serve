@@ -191,7 +191,7 @@ type Manifest struct {
 		Type          string  `yaml:"type"`
 		BoxFormat     string  `yaml:"box_format"`
 		ConfThreshold float64 `yaml:"conf_threshold"`
-		TextThreshold float64 `yaml:"text_threshold"` // GroundingDINO: token→label threshold
+		TextThreshold float64 `yaml:"text_threshold"` // GroundingDINO: second score floor (labels are whole phrases)
 		MaxDetections int     `yaml:"max_detections"`
 	} `yaml:"postprocess"`
 
