@@ -58,11 +58,15 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/templates", limitBody(8*maxImageBytes, s.handleTemplateRegister))
 	mux.HandleFunc("GET /api/templates", s.handleTemplateList)
 	mux.HandleFunc("DELETE /api/templates/{name}", s.handleTemplateDelete)
-	return logRequests(mux)
+	return logRequests(corsFromEnv().wrap(mux)) // opt-in CORS (VISIONSERVE_ORIGINS), cors.go
 }
 ```
 
 [View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L75-L92)
+
+CORS is off unless `VISIONSERVE_ORIGINS` lists the web origins allowed to call the API from a
+browser ([configuration](../reference/configuration.md)); without it the middleware is not
+installed at all.
 
 | Route | What it does |
 |---|---|
