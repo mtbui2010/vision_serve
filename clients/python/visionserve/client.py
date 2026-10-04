@@ -138,8 +138,8 @@ class Client:
             box:    ``[x, y, w, h]`` or a list of such boxes (SAM box prompt).
             point:  ``[x, y]`` / ``[x, y, label]`` or a list of such points
                     (label 1=foreground, 0=background; defaults to 1).
-            box_threshold: GroundingDINO query-score threshold (``grounding-dino`` /
-                    ``grounded-sam`` / ``grasp-gd``). ``None`` = server manifest/default.
+            box_threshold: minimum box score for GroundingDINO (``grounding-dino`` / ``grounded-sam``
+                    / ``grasp-gd``) and OWLv2 templates. ``None`` = server manifest/default.
             text_threshold: GroundingDINO second score floor: a box is kept only when its best
                     phrase scores above both ``box_threshold`` and ``text_threshold``. It does
                     not change labels (a label is always the whole prompt phrase). ``None`` =

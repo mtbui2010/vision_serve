@@ -108,7 +108,7 @@ this table also documents the [plain HTTP](http.md) fields. The three exceptions
 | [`prompt`](#prompt-text) | `str` | no prompt; `"object."` for the GroundingDINO family | GroundingDINO family, `rfdetr-textalign*`, `rfdetr-gdino*`, `clip-text`, `siglip-text` | Words to look for: phrases separated by `.` |
 | [`box`](#box-boxes) | `[x, y, w, h]` or a list of them | none | SAM family (`mobile-sam`, `efficient-sam`, `sam2`, `nano-sam`), `grasp` | Cut out the object in each box: one mask per box |
 | [`point`](#point-points) | `[x, y]`, `[x, y, label]` or a list | none | SAM family | Points on (`label=1`) or off (`0`) one object: one mask |
-| [`box_threshold`](#box_threshold) | `float` in (0, 1) | manifest `conf_threshold`, else 0.3 | GroundingDINO family (also its pass in `gdino-siglip*`, `rfdetr-gdino*`) | Minimum score to keep a box |
+| [`box_threshold`](#box_threshold) | `float` in (0, 1) | manifest `conf_threshold`, else 0.3 | GroundingDINO family (also its pass in `gdino-siglip*`, `rfdetr-gdino*`), `owlv2_base_patch16` | Minimum score to keep a box |
 | [`text_threshold`](#text_threshold) | `float` in (0, 1) | manifest `text_threshold`, else 0.25 | same as `box_threshold` | A second minimum on the same score |
 | [`min_size`, `max_size`](#min_size-and-max_size) | `float`, % of the photo's area | no limit | every model that returns boxes or masks | Drop objects whose box is smaller / larger |
 | [`roi`](#roi-region-of-interest) | `[x, y, w, h]`, pixels or 0–1 fractions | whole photo | every model | Run the model on this crop only; results come back in photo pixels |
@@ -325,7 +325,8 @@ their answers with [`Result.filter_by_conf`](#helpers) instead.
 
 Keep a box only when its score is above this value. Default: the manifest's `conf_threshold`
 (0.3 on the shipped GroundingDINO models), else 0.3. Lower finds more, including wrong boxes;
-higher keeps only confident ones.
+higher keeps only confident ones. The template-prompted `owlv2_base_patch16` reads it too (see
+[`template_name`](#template_name)).
 
 #### `text_threshold`
 
@@ -710,6 +711,26 @@ requests.delete(c.host + "/api/templates/dog")
 {'count': 1, 'name': 'dog'} {'templates': ['dog']}
 instance_detection 10 detections
 ```
+
+Ten boxes, because the manifest keeps every box scoring above 0.1, the value OWLv2 uses for
+**text** queries. Scores of an image query are a raw sigmoid, not a calibrated probability:
+here the four dogs score 1.0, the two people 0.90 and 0.88, strips of grass 0.30 to 0.58. The
+Hugging Face reference (`Owlv2ForObjectDetection.image_guided_detection`) gives the same boxes
+and scores and uses `threshold=0.9` in its image-guided example, so pass `box_threshold`:
+
+```python
+res = c.predict("owlv2_base_patch16", "dogs.jpg", template_name="dog", box_threshold=0.9)
+print(len(res.detections), [round(d.conf, 3) for d in res.detections])
+```
+
+```text
+5 [1.0, 1.0, 1.0, 1.0, 0.901]
+```
+
+The model embeds the **whole** template image, not an object found inside it. Use a tight crop
+that the object fills: a crop with much background, or a thin one (padded to a square with
+black), matches background everywhere at scores near 1.0, and no threshold separates those
+boxes from the object.
 
 An unknown name is a 400 (`template "nope" not found`), and so is calling an
 `instance_detection` model without one. Templates live in the server's memory: they are gone

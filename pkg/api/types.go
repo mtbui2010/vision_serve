@@ -111,7 +111,7 @@ type PredictJSONRequest struct {
 	// GroundingDINO threshold overrides (0 = manifest/default). BoxThreshold filters object
 	// queries by score; TextThreshold is a second floor on the SAME score (a query is kept only
 	// above both). Neither changes labels: a detection is always named by one whole prompt
-	// phrase. Used by grounding-dino/grounded-sam/grasp-gd.
+	// phrase. Used by grounding-dino/grounded-sam/grasp-gd; BoxThreshold also by owlvit.
 	BoxThreshold  float64 `json:"box_threshold,omitempty"`
 	TextThreshold float64 `json:"text_threshold,omitempty"`
 	// Foreground model knobs (percent of image area): bg_max_area = a mask ≥ this is

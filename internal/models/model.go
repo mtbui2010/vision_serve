@@ -160,7 +160,7 @@ type Prompt struct {
 	// BoxThresh/TextThresh: per-request GroundingDINO threshold overrides (0 = manifest, else
 	// built-in default). BoxThresh (= box_threshold) filters object queries by score; TextThresh
 	// (= text_threshold) is a second floor on that score, never a label rule: a label is one whole
-	// prompt phrase. Used by grounding-dino, grounded-sam, grasp-gd.
+	// prompt phrase. Used by grounding-dino, grounded-sam, grasp-gd; BoxThresh also by owlvit.
 	BoxThresh  float64
 	TextThresh float64
 	// BgMaxArea/FgMinArea: foreground model knobs (percent of image area). A MobileSAM

@@ -368,3 +368,12 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   dựng tensor nên lifecycle không biết tensor nào vào input nào, chưa kiểm. Một mode có kích thước
   đổi theo ảnh (`none`, `long_side`, `keep_aspect`) trên graph có H/W cố định (ngoài
   `keep_aspect`, đã có `checkKeepAspectGraph`) cũng chưa bị từ chối lúc load.
+- OWLv2 với template (2026-10-05): decode đúng, khớp HF `Owlv2ForObjectDetection.image_guided_detection`
+  (logits lệch tối đa 1.3e-3, box 5e-5; box cuối cùng lệch < 0.1 px, score < 1e-4). Score của
+  image query là sigmoid thô, không hiệu chỉnh; ví dụ image-guided của HF dùng `threshold=0.9`,
+  còn manifest `owlvit-base` (và `defaultSimThreshold`) dùng 0.1, giá trị của text query, nên ví
+  dụ trong docs trả 10 box (4 con chó ≈ 1.0, người 0.90/0.88, dải cỏ 0.30–0.58). Đã sửa:
+  `box_threshold` theo request nay có tác dụng với owlvit (trước bị bỏ qua). Còn mở: đổi mặc định
+  sang 0.9 là thay đổi output (ví dụ docs: 10 → 5 box), chưa có protocol đo cho template nên chưa
+  đổi. Template lỏng (nhiều nền, hoặc hẹp nên bị pad đen) khớp nền khắp ảnh ở score ≈ 1.0 ở cả
+  HF lẫn VisionServe; không ngưỡng nào cứu được, docs đã ghi.

@@ -53,7 +53,7 @@ Routes are declared in
 | `prompt` | open-vocabulary models | words separated by `" . "`: `"cat. red mug."` |
 | `box` | SAM family | `"x,y,w,h"` in the photo's pixels; several separated by `;` (with curl, send it with `--form-string`: `-F` cuts at `;`) |
 | `point` | SAM family | `"x,y[,label]"`, label `1` = object, `0` = background; several separated by `;` |
-| `box_threshold`, `text_threshold` | GroundingDINO-based | override the manifest score cutoffs |
+| `box_threshold`, `text_threshold` | GroundingDINO-based (`box_threshold` also OWLv2) | override the manifest score cutoffs |
 | `min_size`, `max_size` | detectors, segmenters | drop objects smaller / larger than this % of the image |
 | `roi` | all | `"x,y,w,h"`: run on this crop only; results come back in full-photo pixels |
 | `dilate` | models that return masks | grow (`> 0`) or shrink (`< 0`) every mask by this many pixels |
