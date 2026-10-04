@@ -66,7 +66,7 @@ to test only the public surface, name the package `nms_test` instead; the
 The idiomatic Go test lists its cases in a slice of anonymous structs and loops over them.
 This is `pytest.mark.parametrize` without the decorator:
 
-```go title="internal/server/handlers_test.go (lines 28-51, trimmed)"
+```go title="internal/server/handlers_test.go (lines 28-54, trimmed)"
 func TestStatusOf(t *testing.T) {
 	maxBytes := &http.MaxBytesError{Limit: 10}
 	cases := []struct {
@@ -88,7 +88,7 @@ func TestStatusOf(t *testing.T) {
 	}
 ```
 
-[handlers_test.go#L28-L51 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers_test.go#L28-L51)
+[handlers_test.go#L28-L54 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers_test.go#L28-L54)
 
 Adding a case is one line. With `t.Run(name, func(t *testing.T) {...})` each case becomes a
 named **subtest** that reports separately and can be run alone:

@@ -127,7 +127,7 @@ runtime:
 | `license` | must be ∈ {Apache-2.0, MIT, BSD-3-Clause, BSD-2-Clause}, matched case-insensitively (`apache-2.0` from an HF model card passes); the canonical SPDX spelling is stored back on the manifest. **AGPL is strictly forbidden**, in any casing. |
 | `task` | ∈ {detection, segmentation, open_vocab, depth, classification, embed, grasp, instance_detection} |
 | `model_file` / `files` | at least one required — `model_file` OR a non-empty `files:` map |
-| `input.width/height` | > 0 (may be omitted when `preprocess:` gives `size` or `width`/`height`) |
+| `input.width/height` | > 0 (may be omitted when `preprocess:` gives `size` or `width`/`height`). At **load** time the tensor the preprocessing produces must fit the ONNX graph's input: every dimension fixed in both (size, layout, channels) must be equal, or the load fails naming the field and both shapes. Dynamic graph dims, and dims that vary per image (`keep_aspect`, `long_side`, `none`), are not compared |
 | `input.layout` | NCHW / NHWC (or empty) |
 | `input.crop` / `letterbox` / `keep_aspect` | `crop` is `center` or omitted; at most one of the three |
 | `preprocess` | optional; each field valid for its `resize` mode (table below), `mean`+`std` together with 3 values each; a field also set through its legacy `input.*` alias must agree with it — the error names both |

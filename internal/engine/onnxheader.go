@@ -517,3 +517,11 @@ func (p *pbReader) fill(n int) error {
 	p.buf, p.bufOff = p.buf[:k], p.off
 	return nil
 }
+
+// InspectHeader is Inspect without the ONNX Runtime fallback: the inputs and outputs the file's
+// header declares, or an error when the pure-Go reader cannot parse it. For load-time checks
+// that must stay cheap and need no ORT: a file it cannot read is simply not judged (creating the
+// session reports a broken file on its own).
+func InspectHeader(modelPath string) (inputs, outputs []IOInfo, err error) {
+	return readONNXHeader(modelPath)
+}

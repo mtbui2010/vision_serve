@@ -111,7 +111,7 @@ func readONNXHeader(path string) (inputs, outputs []IOInfo, err error) {
 [View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/onnxheader.go#L94-L107)
 
 It uses the names to bind inputs and outputs when a manifest does not list them, and the shapes
-for one check at load time (below). The converter reads the header with the same `onnx` code as
+for a check at load time (below). The converter reads the header with the same `onnx` code as
 the script above, in
 [`onnx_io`](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/convert/common.py#L429-L440),
 and refuses an export whose shapes the target architecture cannot decode (`check_contract`).
@@ -124,51 +124,58 @@ For a **dynamic** input (MobileSAM's encoder) any size runs, but the model still
 the sizes it was trained on, so the manifest must match the training size.
 
 What happens when they disagree? We copied the `rf-detr` manifest, changed only `width: 560` and
-`height: 560` to `640`, and served it as `rf-detr-640`:
+`height: 560` to `640`, and served it as `rf-detr-640` (CPU):
 
 ```console
-$ curl -s -H 'Content-Type: application/json' -d '{"model":"rf-detr-640"}' http://127.0.0.1:11670/api/load
-{"model":"rf-detr-640","state":"loaded"}
-
-$ curl -s -F model=rf-detr-640 -F image=@photo.jpg http://127.0.0.1:11670/api/preprocess \
-      | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['inputs'][0]['shape'], d['meta'])"
-[1, 3, 640, 640] {'orig_width': 640, 'orig_height': 480, 'scale_x': 1, 'scale_y': 1.3333333333333333, 'pad_x': 0, 'pad_y': 0}
-
-$ curl -s -w '\nHTTP %{http_code}\n' -F model=rf-detr-640 -F image=@photo.jpg http://127.0.0.1:11670/api/predict
-{"error":"engine: Run failed: Error running network: Got invalid dimensions for input: input for the following indices\n index: 2 Got: 640 Expected: 560\n index: 3 Got: 640 Expected: 560\n Please fix either the inputs/outputs or the model."}
+$ curl -s -w '\nHTTP %{http_code}\n' -H 'Content-Type: application/json' -d '{"model":"rf-detr-640"}' http://127.0.0.1:11690/api/load
+{"error":"lifecycle: \"rf-detr-640\": manifest preprocess width×height 640×640 does not match rf-detr-base-real.onnx input \"input\" [1,3,560,560] (the preprocessing produces [1,3,640,640]) — make the manifest's input size and layout match the export, or re-export the model"}
 
 HTTP 500
+
+$ curl -s -F model=rf-detr-640 -F image=@photo.jpg http://127.0.0.1:11690/api/preprocess \
+      | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['inputs'][0]['shape'], d['meta'])"
+[1, 3, 640, 640] {'orig_width': 640, 'orig_height': 480, 'scale_x': 1, 'scale_y': 1.3333333333333333, 'pad_x': 0, 'pad_y': 0}
 ```
 
-The model **loads**. The mistake shows up only on the first prediction, as a 500 from ONNX
-Runtime that names the tensor indices but no manifest field. Today the load-time check covers
-only one case of this, `keep_aspect` on a fixed-size graph:
+The model **does not load**, and the error names the manifest setting, the file, the input and
+both shapes. `/api/predict` answers the same error, because it loads the model first. It is a
+500, not a 400: the server is misconfigured, the request is fine. `/api/preprocess` still
+answers, on purpose: it shows the `[1, 3, 640, 640]` tensor the manifest produces, next to the
+`560` the file wants. (Before this check the load succeeded, and the first prediction failed
+inside ONNX Runtime with `index: 2 Got: 640 Expected: 560`, which names no manifest field.)
 
-```go title="internal/lifecycle/load.go"
-// checkKeepAspectGraph refuses input.keep_aspect on a graph whose spatial input size is fixed.
-// Keep-aspect feeds a different H×W for every image shape; a fixed graph would load fine and then
-// fail on the first non-square request with an ONNX Runtime shape error naming no manifest field.
-// An unreadable graph is not judged here: Load reports it on its own.
-func checkKeepAspectGraph(man *registry.Manifest) error {
-	if !man.Input.KeepAspect {
-		return nil
+The check runs the model's own preprocessing on three small images (landscape, portrait, square)
+and compares the tensor with the input shape in the file header:
+
+```go title="internal/lifecycle/inputshape.go"
+	produced, ok := probeShape(pre)
+	if !ok {
+		return "the probes could not be preprocessed", nil
 	}
-	ins, _, err := engine.Inspect(man.ModelFilePath())
-	// ...
-	if shp := ins[0].Shape; len(shp) == 4 && shp[2] > 0 && shp[3] > 0 {
-		return fmt.Errorf("lifecycle: %q declares input.keep_aspect, but %s has a fixed %dx%d input — "+
-			"keep_aspect needs an export with dynamic height/width (or remove keep_aspect to squash)",
-			man.Name, man.ModelFilePath(), shp[3], shp[2])
+	if !shapeFits(produced, graph.Shape) {
+		spec, _ := man.PreprocessSpec()
+		return "", &InputShapeError{
+			Model: man.Name, File: file, Input: graph.Name,
+			Graph: graph.Shape, Produced: produced,
+			Width: spec.Width, Height: spec.Height, Layout: string(spec.Layout),
+		}
 	}
-	return nil
+	return "", nil
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L513-L531)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/inputshape.go#L198-L211)
 
-So check it yourself: the `shape` that `/api/preprocess` returns (next section) must equal the
-input shape in the file. The converter writes both from the same export, so a converted model
-cannot disagree; a hand-written manifest can.
+It compares only what is fixed on both sides. A dimension the file declares dynamic (a name
+instead of a number) is not judged, and neither is one that changes with the photo
+(`keep_aspect`, `long_side` without padding, `none`): `probeShape` marks those `-1`. It also
+catches a wrong layout (an NHWC manifest for an NCHW graph) and a wrong channel count. It judges
+a plain model's main input, and a pipeline's `explain` role when that graph has one input. For
+the other inputs of a pipeline (prompts, token ids, a second session) it cannot tell which
+tensor goes where, so it does not guess. Check those by hand: the `shape` that `/api/preprocess`
+returns (next section) must fit the input shape in the file. The converter writes the manifest
+and the file from the same export, so a converted model cannot disagree; a hand-written manifest
+can.
 
 ## 2. Inspect the preprocessing
 

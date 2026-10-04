@@ -362,3 +362,9 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   hay test được khi `CGO_ENABLED=0` (ví dụ cross-build mà không có compiler aarch64). Chuyển
   `Tensor` (và các helper như `engine.F32`) sang một package không dùng cgo, `engine` giữ alias,
   thì preprocess và model build/test được mà không cần cgo. Chưa làm.
+- Kích thước input trong manifest so với graph: **đã kiểm lúc load** (2026-10-05,
+  `checkInputShape`). Còn mở: với PipelineModel chỉ kiểm role `explain` (khi graph của role đó có
+  đúng một input); các role khác (encoder SAM, GroundingDINO, tháp text) do `Infer` của model tự
+  dựng tensor nên lifecycle không biết tensor nào vào input nào, chưa kiểm. Một mode có kích thước
+  đổi theo ảnh (`none`, `long_side`, `keep_aspect`) trên graph có H/W cố định (ngoài
+  `keep_aspect`, đã có `checkKeepAspectGraph`) cũng chưa bị từ chối lúc load.
