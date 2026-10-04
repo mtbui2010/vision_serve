@@ -275,7 +275,7 @@ writing the type without a field name. The embedded type's fields and methods ar
 
 The HTTP request type embeds the public JSON request:
 
-```go title="internal/server/request.go (lines 47-51)"
+```go title="internal/server/request.go (lines 48-52)"
 type Request struct {
 	api.PredictJSONRequest
 
@@ -283,7 +283,7 @@ type Request struct {
 }
 ```
 
-[request.go#L47-L51 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L47-L51)
+[request.go#L48-L52 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L48-L52)
 
 So the handler can write `q.Model` and `q.Encoding`
 ([handlers.go#L164-L165](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L164-L165))

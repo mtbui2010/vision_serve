@@ -116,7 +116,7 @@ type Request struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L37-L51)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L38-L52)
 
 `ToPrompt` is where options become a `models.Prompt`, the one value every model receives:
 
@@ -135,7 +135,7 @@ func (q *Request) ToPrompt(imgW, imgH int) (models.Prompt, error) {
 	p.TemplateName = q.TemplateName
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L157-L172)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L158-L173)
 
 ### Admission before decoding
 
