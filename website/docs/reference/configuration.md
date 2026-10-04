@@ -55,6 +55,7 @@ The source of truth for flags is `visionserve help` and
 | `VISIONSERVE_POOL_THREADS` | auto | CPU threads per session of a session pool. `0` = ONNX Runtime's default. |
 | `VISIONSERVE_VERIFY` | off | `strict` = cross-check every model's licence against the audited provenance ledger and enforce the SHA-256 / source pins. |
 | `VISIONSERVE_CONVERT_IMAGE` | built-in | Docker image used by `visionserve convert`. |
+| `VISIONSERVE_ORIGINS` | none (no CORS) | Web origins allowed to call the API from a browser, comma-separated, e.g. `http://localhost:5173,https://app.example.com` (like Ollama's `OLLAMA_ORIGINS`). The server then answers their CORS preflight and adds `Access-Control-Allow-Origin`; other origins get no CORS headers. `*` allows every origin and is logged as a warning: the API has no authentication, so any page a user opens could use it. Unset, pages can only call the server from their own origin (or through a proxy). |
 
 ## Per model: the manifest
 

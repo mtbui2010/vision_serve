@@ -174,7 +174,19 @@ func (m *owlVIT) Infer(img image.Image, prompt models.Prompt, r models.Runner) (
 		}
 	}
 
-	return m.postprocess(patchScores, boxesData, numPatches, meta)
+	return m.postprocess(patchScores, boxesData, numPatches, meta, m.threshold(prompt))
+}
+
+// threshold is the score a patch must beat for this request: the request's box_threshold when it
+// sets one, else the manifest's (conf_threshold / sim_threshold, default 0.1). Image-guided
+// scores are a raw sigmoid and not calibrated: HF's image-guided example keeps boxes above 0.9
+// (Owlv2ForObjectDetection.image_guided_detection docstring: threshold=0.9, nms_threshold=0.3),
+// against 0.1 for text queries, so a caller that gets background boxes raises this.
+func (m *owlVIT) threshold(prompt models.Prompt) float64 {
+	if prompt.BoxThresh > 0 {
+		return prompt.BoxThresh
+	}
+	return m.simThreshold
 }
 
 // preprocessImage reproduces HF Owlv2ImageProcessor: rescale to [0,1], pad to a square
@@ -234,6 +246,7 @@ func (m *owlVIT) postprocess(
 	boxesData []float32,
 	numPatches int,
 	meta models.PreprocessMeta,
+	thresh float64,
 ) (models.Result, error) {
 	maxDet := m.cfg.MaxDet
 	if maxDet <= 0 {
@@ -259,7 +272,7 @@ func (m *owlVIT) postprocess(
 	// dropped the other instances.
 	dets := make([]api.Detection, 0, 64)
 	for p := 0; p < numPatches; p++ {
-		if !(patchScores[p] > m.simThreshold) {
+		if !(patchScores[p] > thresh) {
 			continue
 		}
 		bb := boxesData[p*4 : p*4+4]

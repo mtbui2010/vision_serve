@@ -402,10 +402,17 @@ In **Node** (18 or newer) everything above works, including file paths. Other ca
 [templates example](#templates).
 
 In a **browser**, pass a `File` from an `<input type="file">`, a `Blob` from a canvas
-(`canvas.toBlob`), or bytes; a path string does not work there. The server sends no CORS headers,
-so the browser only lets a page read the answers when the page comes from the **same origin** as
-the API: serve your page and proxy `/api/` to VisionServe from the same host and port (a
-development-server proxy, or nginx / Caddy in production), and pass that origin as the host:
+(`canvas.toBlob`), or bytes; a path string does not work there. By default the server sends no
+CORS headers, so the browser only lets a page read the answers when the page comes from the
+**same origin** as the API. Two ways to call it from a page:
+
+- **Allow your page's origin** on the server: `VISIONSERVE_ORIGINS=http://localhost:5173
+  visionserve serve` (a comma-separated list, like Ollama's `OLLAMA_ORIGINS`; see
+  [configuration](../reference/configuration.md#environment-variables)). The page then calls
+  `new Client("http://127.0.0.1:11435")` directly. `*` allows every origin, so any web page a
+  user opens could use the API, which has no authentication: list your origins instead.
+- **Proxy** `/api/` to VisionServe from your page's own host and port (a development-server
+  proxy, or nginx / Caddy in production), and pass that origin as the host:
 
 ```ts
 // page served from https://myapp.example, which proxies /api/ to VisionServe
@@ -415,8 +422,7 @@ const res = await client.predict("rf-detr", file);
 ```
 
 (This snippet was not run in a browser; the same call with a `Blob` was run in Node above.)
-Without a same-origin proxy, the request fails with "failed to reach VisionServe … Failed to
-fetch".
+Without either, the request fails with "failed to reach VisionServe … Failed to fetch".
 
 ## The JS command-line client
 

@@ -88,7 +88,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/templates", limitBody(8*maxImageBytes, s.handleTemplateRegister))
 	mux.HandleFunc("GET /api/templates", s.handleTemplateList)
 	mux.HandleFunc("DELETE /api/templates/{name}", s.handleTemplateDelete)
-	return logRequests(mux)
+	return logRequests(corsFromEnv().wrap(mux)) // opt-in CORS (VISIONSERVE_ORIGINS), cors.go
 }
 
 // ListenAndServe starts the server (blocking).

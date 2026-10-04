@@ -58,11 +58,15 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /api/templates", limitBody(8*maxImageBytes, s.handleTemplateRegister))
 	mux.HandleFunc("GET /api/templates", s.handleTemplateList)
 	mux.HandleFunc("DELETE /api/templates/{name}", s.handleTemplateDelete)
-	return logRequests(mux)
+	return logRequests(corsFromEnv().wrap(mux)) // opt-in CORS (VISIONSERVE_ORIGINS), cors.go
 }
 ```
 
 [View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L75-L92)
+
+CORS is off unless `VISIONSERVE_ORIGINS` lists the web origins allowed to call the API from a
+browser ([configuration](../reference/configuration.md)); without it the middleware is not
+installed at all.
 
 | Route | What it does |
 |---|---|
@@ -226,10 +230,14 @@ func decodeImage(r io.Reader) (image.Image, error) {
 		return nil, badRequest(fmt.Errorf("image is %dx%d; the limit is %d megapixels", cfg.Width, cfg.Height, maxImagePixels/1_000_000))
 	}
 	// ...
-	img, err := imaging.Decode(bytes.NewReader(raw), imaging.AutoOrientation(true))
+	img, err := imageproc.Decode(raw)
 ```
 
 [View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/limits.go#L26-L45)
+
+`imageproc.Decode` applies the EXIF orientation and decodes JPEG, PNG, WebP, BMP, GIF and TIFF.
+A lossy WebP is converted to RGB with libwebp's own limited-range transform: the plain
+`golang.org/x/image/webp` result uses JPEG's full-range one and washes colours out.
 
 | Limit | Value | Where |
 |---|---|---|
@@ -298,7 +306,9 @@ whose client has gone therefore does not burn GPU time, and `orClientGone` turns
 
 `server.Predict` wraps every prediction with the model-agnostic steps: crop to the region of
 interest (`roi`), run the model on the crop, map the results back to full-image coordinates,
-apply mask dilation or erosion, then the size filter. The `visionserve run` CLI calls the same
+apply mask dilation or erosion, then the size filter. A mask paired with a detection
+(Grounded-SAM, grasp) keeps its detection's box through the dilation, so the size filter makes one
+decision per object and the two lists stay index-aligned. The `visionserve run` CLI calls the same
 function, so the CLI and the API cannot drift apart.
 
 ```go title="internal/server/predict.go"
@@ -315,8 +325,9 @@ func Predict(ctx context.Context, p Predictor, model string, img image.Image, pr
 	if hasROI {
 		res = roipkg.MapResult(res, rect, fullW, fullH)
 	}
-	// Mask morphology (enlarge/shrink) in ORIGINAL-image terms, then size filter.
-	morph.ApplyToMasks(res.Masks, fullW, fullH, prompt.Dilate)
+	// Mask morphology (enlarge/shrink) in ORIGINAL-image terms, then size filter. A mask paired
+	// with a detection keeps its box, so the filter decides once per object.
+	morph.ApplyToResult(&res, fullW, fullH, prompt.Dilate)
 	if prompt.MinSize > 0 || prompt.MaxSize > 0 {
 		res = api.FilterBySizePct(res, prompt.MinSize, prompt.MaxSize, fullW, fullH)
 	}
@@ -324,7 +335,7 @@ func Predict(ctx context.Context, p Predictor, model string, img image.Image, pr
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L24-L43)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L24-L44)
 
 ### Big arrays as base64 (opt-in)
 

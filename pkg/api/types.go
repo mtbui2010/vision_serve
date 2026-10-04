@@ -109,8 +109,9 @@ type PredictJSONRequest struct {
 	GripperMin float64 `json:"gripper_min,omitempty"`
 	GripperMax float64 `json:"gripper_max,omitempty"`
 	// GroundingDINO threshold overrides (0 = manifest/default). BoxThreshold filters object
-	// queries by score; TextThreshold controls token→label assignment (lower => richer labels,
-	// e.g. "canned coffee" instead of just "coffee"). Used by grounding-dino/grounded-sam/grasp-gd.
+	// queries by score; TextThreshold is a second floor on the SAME score (a query is kept only
+	// above both). Neither changes labels: a detection is always named by one whole prompt
+	// phrase. Used by grounding-dino/grounded-sam/grasp-gd; BoxThreshold also by owlvit.
 	BoxThreshold  float64 `json:"box_threshold,omitempty"`
 	TextThreshold float64 `json:"text_threshold,omitempty"`
 	// Foreground model knobs (percent of image area): bg_max_area = a mask ≥ this is
@@ -119,7 +120,8 @@ type PredictJSONRequest struct {
 	BgMaxArea float64 `json:"bg_max_area,omitempty"`
 	FgMinArea float64 `json:"fg_min_area,omitempty"`
 	// GridSize overrides the MobileSAM automask grid (N×N → N² decoder calls); larger =
-	// catches more small objects but slower. 0 = model default. Used by foreground.
+	// catches more small objects but slower. 0 = model default. Used by mobile-sam (no prompt),
+	// grasp (no box) and background (method automask).
 	GridSize int `json:"grid_size,omitempty"`
 	// Method selects the algorithm for models that offer several (the `background` model:
 	// "auto" | "depth" | "sam" | "cv" | "automask"). "" = model default (auto for background).

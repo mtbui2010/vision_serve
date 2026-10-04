@@ -44,7 +44,10 @@ flowchart LR
 
     `make serve` / `make run` find a CUDA-enabled ONNX Runtime for you through
     [`scripts/gpu-env.sh`](https://github.com/mtbui2010/vision_serve/blob/main/scripts/gpu-env.sh)
-    and fall back to the CPU if there is none (`GPU=0` forces the CPU).
+    and fall back to the CPU if there is none (`GPU=0` forces the CPU). The script only picks
+    a library whose CUDA EP can load on your driver: an ORT built for CUDA 13 on a driver that
+    supports CUDA 12.8 is skipped, and it prints which library it chose and why it skipped the
+    others. `VISIONSERVE_TRACE=1` then shows `session for … active on EP cuda` per model.
 
 ## 2. Download a model
 

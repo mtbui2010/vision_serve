@@ -91,6 +91,20 @@ func pass1D(src []bool, w, h, r int, erode, horizontal bool) []bool {
 // ApplyToMasks dilates/erodes each mask's bitmap in place — re-encoding the RLE and
 // recomputing the tight bbox — at the given w×h resolution. radius==0 is a no-op.
 func ApplyToMasks(masks []api.Mask, w, h, radius int) {
+	applyToMasks(masks, w, h, radius, true)
+}
+
+// ApplyToResult is ApplyToMasks for a whole result, keeping the identity of a paired result
+// (api.MasksPairDetections: Grounded-SAM, grasp box mode). Each paired mask keeps its
+// detection's box (and its conf), so it stays paired with that detection for the size filter
+// and for clients that pair by box; recomputing it lost the masks' classes and made the size
+// filter judge a detection and its mask by different boxes. Masks that belong to no detection
+// (SAM prompts, automask, background) get their tight bbox recomputed as before.
+func ApplyToResult(res *api.Result, w, h, radius int) {
+	applyToMasks(res.Masks, w, h, radius, !api.MasksPairDetections(*res))
+}
+
+func applyToMasks(masks []api.Mask, w, h, radius int, retightBBox bool) {
 	if radius == 0 || len(masks) == 0 || w <= 0 || h <= 0 {
 		return
 	}
@@ -98,6 +112,8 @@ func ApplyToMasks(masks []api.Mask, w, h, radius int) {
 		b := mask.DecodeRLE(masks[i].RLE, h, w)
 		b.Data = Dilate(b.Data, w, h, radius)
 		masks[i].RLE = mask.EncodeRLE(b)
-		masks[i].BBox = b.BBox()
+		if retightBBox {
+			masks[i].BBox = b.BBox()
+		}
 	}
 }

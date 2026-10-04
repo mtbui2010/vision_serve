@@ -62,7 +62,7 @@ install: ## Install the binary into GOBIN/GOPATH bin (use `visionserve` globally
 
 ## --- Run ---
 # All of run/serve/demo use the GPU (CUDA EP) by default. They source scripts/gpu-env.sh
-# to auto-detect a CUDA-enabled ORT lib + the cuDNN/CUDA libs, and fall back to the
+# to auto-detect a CUDA-enabled ORT lib (one that loads on this driver) + cuDNN, and fall back to the
 # auto-detected CPU ORT lib if none is found. Add GPU=0 to force CPU.
 
 run: build ## Run on 1 image: make run MODEL=rf-detr IMAGE=path.jpg [OUT=r.png] [BOX=x,y,w,h] [PROMPT="cat."] [POINT=x,y] [ROI=x,y,w,h] [METHOD=cv] [MIN_SIZE=px²] [MAX_SIZE=px²] [GPU=0]

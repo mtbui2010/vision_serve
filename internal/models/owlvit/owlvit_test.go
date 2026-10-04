@@ -135,7 +135,7 @@ func TestPostprocess_NMSBeforeMaxDet(t *testing.T) {
 	scores[3000] = 0.7
 	meta := models.PreprocessMeta{OrigWidth: 640, OrigHeight: 640, ScaleX: 1.5, ScaleY: 1.5}
 
-	res, err := m.postprocess(scores, boxes, realPatches, meta)
+	res, err := m.postprocess(scores, boxes, realPatches, meta, m.simThreshold)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestPostprocess_PaddedSquareMappingAndClamp(t *testing.T) {
 	scores[30] = 0.7
 	meta := models.PreprocessMeta{OrigWidth: 640, OrigHeight: 427, ScaleX: 1.5, ScaleY: 1.5}
 
-	res, err := m.postprocess(scores, boxes, realPatches, meta)
+	res, err := m.postprocess(scores, boxes, realPatches, meta, m.simThreshold)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestPostprocess_PaddedSquareMappingAndClamp(t *testing.T) {
 func TestPostprocess_ShortBoxesIsError(t *testing.T) {
 	m := newTestModel(t, 10)
 	_, err := m.postprocess(make([]float64, realPatches), make([]float32, 8), realPatches,
-		models.PreprocessMeta{OrigWidth: 10, OrigHeight: 10, ScaleX: 96, ScaleY: 96})
+		models.PreprocessMeta{OrigWidth: 10, OrigHeight: 10, ScaleX: 96, ScaleY: 96}, m.simThreshold)
 	if err == nil {
 		t.Fatal("want error for pred_boxes shorter than P*4, got nil")
 	}
@@ -215,6 +215,42 @@ func (f *fakeRunner) InputNames(string) []string {
 	return []string{"query_pixel_values", "query_image_features"}
 }
 func (f *fakeRunner) OutputNames(string) []string { return []string{"logits", "pred_boxes"} }
+
+// box_threshold is honoured per request (it used to be silently ignored): with three far-apart
+// patches scoring 0.95, 0.6 and 0.2, the manifest's 0.1 keeps all three, box_threshold=0.5 two,
+// and 0.9 (HF's image-guided example threshold) one.
+func TestInfer_BoxThresholdOverrides(t *testing.T) {
+	boxes := realBoxes()
+	logits := make([]float32, realPatches)
+	for i := range logits {
+		logits[i] = -20
+	}
+	for k, p := range []int{100, 2000, 3500} {
+		setBox(boxes, p, 0.15+0.35*float32(k), 0.2, 0.1, 0.1)
+	}
+	logit := func(p float64) float32 { return float32(math.Log(p / (1 - p))) }
+	logits[100], logits[2000], logits[3500] = logit(0.95), logit(0.6), logit(0.2)
+
+	m := newTestModel(t, 10)
+	tImg := image.NewNRGBA(image.Rect(0, 0, 30, 40))
+	for _, c := range []struct {
+		boxThresh float64
+		want      int
+	}{{0, 3}, {0.5, 2}, {0.9, 1}} {
+		r := &fakeRunner{logits: [][]float32{logits}, boxes: boxes}
+		p := models.Prompt{TemplateImages: []image.Image{tImg}, BoxThresh: c.boxThresh}
+		res, err := m.Infer(image.NewNRGBA(image.Rect(0, 0, 400, 400)), p, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(res.Detections) != c.want {
+			t.Errorf("box_threshold=%v: %d detections, want %d: %+v", c.boxThresh, len(res.Detections), c.want, res.Detections)
+		}
+	}
+	if m.simThreshold != 0.1 {
+		t.Errorf("a request changed the model's own threshold: %v", m.simThreshold)
+	}
+}
 
 // Two templates: per-patch scores are the max over templates; boxes map to original pixels.
 func TestInfer_RealShapesTwoTemplates(t *testing.T) {

@@ -357,9 +357,9 @@ func createSession(modelPath string, inputNames, outputNames []string, providers
 					filepath.Base(modelPath), providerNames([]Provider{ep}), captured)
 				activeEP = ProviderCPU
 			}
-			if Trace && captured != "" {
-				fmt.Fprintf(os.Stderr, "engine: [trace] ORT messages for %s on %s:\n%s",
-					filepath.Base(modelPath), providerNames([]Provider{ep}), captured)
+			if Trace { // the EP that runs it, then anything ORT said while creating the session
+				fmt.Fprintf(os.Stderr, "engine: [trace] session for %s active on EP %s\n%s",
+					filepath.Base(modelPath), providerNames([]Provider{activeEP}), captured)
 			}
 			break
 		}

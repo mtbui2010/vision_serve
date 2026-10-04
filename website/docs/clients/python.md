@@ -108,14 +108,14 @@ this table also documents the [plain HTTP](http.md) fields. The three exceptions
 | [`prompt`](#prompt-text) | `str` | no prompt; `"object."` for the GroundingDINO family | GroundingDINO family, `rfdetr-textalign*`, `rfdetr-gdino*`, `clip-text`, `siglip-text` | Words to look for: phrases separated by `.` |
 | [`box`](#box-boxes) | `[x, y, w, h]` or a list of them | none | SAM family (`mobile-sam`, `efficient-sam`, `sam2`, `nano-sam`), `grasp` | Cut out the object in each box: one mask per box |
 | [`point`](#point-points) | `[x, y]`, `[x, y, label]` or a list | none | SAM family | Points on (`label=1`) or off (`0`) one object: one mask |
-| [`box_threshold`](#box_threshold) | `float` in (0, 1) | manifest `conf_threshold`, else 0.3 | GroundingDINO family (also its pass in `gdino-siglip*`, `rfdetr-gdino*`) | Minimum score to keep a box |
+| [`box_threshold`](#box_threshold) | `float` in (0, 1) | manifest `conf_threshold`, else 0.3 | GroundingDINO family (also its pass in `gdino-siglip*`, `rfdetr-gdino*`), `owlv2_base_patch16` | Minimum score to keep a box |
 | [`text_threshold`](#text_threshold) | `float` in (0, 1) | manifest `text_threshold`, else 0.25 | same as `box_threshold` | A second minimum on the same score |
 | [`min_size`, `max_size`](#min_size-and-max_size) | `float`, % of the photo's area | no limit | every model that returns boxes or masks | Drop objects whose box is smaller / larger |
 | [`roi`](#roi-region-of-interest) | `[x, y, w, h]`, pixels or 0–1 fractions | whole photo | every model | Run the model on this crop only; results come back in photo pixels |
 | [`dilate`](#dilate) | `int`, pixels | `0` (off) | every model that returns masks | Grow (`> 0`) or shrink (`< 0`) every mask |
 | [`method`](#method) | `str` | `"auto"` / `"exact"` | `background`; `rfdetr-textalign*` | Pick the algorithm |
 | [`bg_max_area`, `fg_min_area`](#bg_max_area-and-fg_min_area) | `float`, % of the photo's area | 50 / 0 | `background` with `method="sam"` or `"automask"` | Which masks count as the support surface |
-| [`grid_size`](#grid_size) | `int` | 16 (`mobile-sam`), 8 (`background`) | `mobile-sam` without a prompt, `background` `method="automask"` | Points per side of the automatic-mask grid (max 64) |
+| [`grid_size`](#grid_size) | `int` | 16 (`mobile-sam`, `grasp`), 8 (`background`) | `mobile-sam` without a prompt, `grasp` without a box, `background` `method="automask"` | Points per side of the automatic-mask grid (max 64) |
 | [`depth`](#depth-an-aligned-depth-image) ¹ | 2-D numpy array | none | `background` (`method="depth"` or `"auto"`) | Your own depth image instead of the MiDaS estimate |
 | [`gripper_min`, `gripper_max`](#gripper_min-and-gripper_max) | `float`, pixels | manifest (10 / 150 on the shipped grasp models) | `grasp`, `grasp-rfdetr`, `grasp-gd` | Allowed jaw opening |
 | [`max_grasps_per_object`](#max_grasps_per_object) ² | `int` | **3** | client side only | Keep the best N grasps per object |
@@ -145,8 +145,8 @@ reads them as integers.
 
 PIL images and arrays are encoded to PNG so the server sees exactly your pixels. That costs a
 little CPU per call; if bandwidth or speed matter more than exactness (a video loop), encode a
-JPEG yourself and pass the bytes. The server accepts JPEG, PNG and BMP (WebP is refused with
-400), up to 32 MiB and 40 megapixels per image.
+JPEG yourself and pass the bytes. The server accepts JPEG, PNG, WebP, BMP, GIF and TIFF, up to
+32 MiB and 40 megapixels per image.
 
 ```python
 import io
@@ -325,7 +325,8 @@ their answers with [`Result.filter_by_conf`](#helpers) instead.
 
 Keep a box only when its score is above this value. Default: the manifest's `conf_threshold`
 (0.3 on the shipped GroundingDINO models), else 0.3. Lower finds more, including wrong boxes;
-higher keeps only confident ones.
+higher keeps only confident ones. The template-prompted `owlv2_base_patch16` reads it too (see
+[`template_name`](#template_name)).
 
 #### `text_threshold`
 
@@ -436,10 +437,12 @@ computed with `roi` describes the crop.
 #### `dilate`
 
 Grow (`dilate > 0`) or shrink (`dilate < 0`) every returned mask by that many pixels, with a
-square kernel, after the model and after `roi`. `0` or `None` is off. Each mask's `bbox` is
-recomputed to fit the new mask; detections are not changed. Use a positive value for a safety
-margin around an object (to blur it, or to avoid touching it), a negative one to stay safely
-inside it (to sample its colour or depth).
+square kernel, after the model and after `roi`. `0` or `None` is off. Detections are not
+changed. A mask that belongs to a detection (Grounded-SAM, the grasp models: one mask per
+detection, carrying the detection's box) keeps that box, so it stays paired with its detection;
+any other mask (SAM box/point prompts, automatic masks, `background`) gets its `bbox` recomputed
+to fit the new mask. Use a positive value for a safety margin around an object (to blur it, or to
+avoid touching it), a negative one to stay safely inside it (to sample its colour or depth).
 
 ```python
 from PIL import Image
@@ -455,9 +458,9 @@ for dilate in (None, 5, -3):
 ```
 
 ```text
-None mask bbox [281, 109, 35, 78] pixels 1297 | detection bbox [281, 109, 35, 78]
-5 mask bbox [277, 106, 41, 85] pixels 2457 | detection bbox [281, 109, 35, 78]
--3 mask bbox [286, 119, 24, 62] pixels 706 | detection bbox [281, 109, 35, 78]
+None mask bbox [281, 109, 34, 78] pixels 1307 | detection bbox [281, 109, 34, 78]
+5 mask bbox [281, 109, 34, 78] pixels 2477 | detection bbox [281, 109, 34, 78]
+-3 mask bbox [281, 109, 34, 78] pixels 714 | detection bbox [281, 109, 34, 78]
 ```
 
 <figure markdown="span">
@@ -465,14 +468,14 @@ None mask bbox [281, 109, 35, 78] pixels 1297 | detection bbox [281, 109, 35, 78
   <figcaption><code>grounded-sam</code> · prompt='dog.' · dilate=-3, 0, 5 (zoomed in) · 194 ms on gpu:0 · Photo: COCO val2017 #372819 (<a href="http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
-!!! warning "`dilate` breaks the box match between masks and detections"
-    Grounded-SAM and the grasp models give each mask the box of its detection, and some code
-    pairs them by that (`Result.group_by_class` does). After `dilate` the mask boxes differ, so
-    `group_by_class` puts every mask under the label `""`. Worse, with `dilate` **and**
-    `min_size`/`max_size` together, detections and masks are filtered by different boxes and can
-    end up with different lengths, so `zip(res.detections, res.masks)` pairs the wrong objects.
-    Measured: `grounded-sam`, prompt `"dog. bench."`, `dilate=-3, min_size=1` returned 6
-    detections and 3 masks. Use one of the two options at a time, or filter on your side.
+!!! note "`dilate` keeps detections and masks paired"
+    The size filter (`min_size` / `max_size`) runs after `dilate` and judges a detection and its
+    mask by the same box, so they are kept or dropped together and `zip(res.detections,
+    res.masks)` and `Result.group_by_class` still pair the right objects. Measured on GPU:
+    `grounded-sam`, prompt `"dog. bench."`, `dilate=-3, min_size=1` returns 5 detections and 5
+    masks (3 dogs, 2 benches). Before this was fixed it returned 6 detections and 3 masks, and
+    `dilate` alone put every mask under the label `""`. If you need the tight box of a reshaped
+    paired mask, compute it from the mask (`to_ndarray`).
 
 ### Background and automatic masks
 
@@ -509,8 +512,9 @@ counts only if it touches the photo's edge and covers at least 5 %. A mask below
 
 The automatic mask generator prompts SAM at an `N × N` grid of points (`N²` decoder runs) and
 keeps the distinct masks. A finer grid finds smaller objects and takes longer. Read by
-`mobile-sam` when it gets no box or point (default 16) and by `background` with
-`method="automask"` (default 8). The server caps it at 64.
+`mobile-sam` when it gets no box or point (default 16), by the class-agnostic `grasp` model when
+it gets no box (default 16), and by `background` with `method="automask"` (default 8). The server
+caps it at 64.
 
 ```python
 from PIL import Image
@@ -707,6 +711,26 @@ requests.delete(c.host + "/api/templates/dog")
 {'count': 1, 'name': 'dog'} {'templates': ['dog']}
 instance_detection 10 detections
 ```
+
+Ten boxes, because the manifest keeps every box scoring above 0.1, the value OWLv2 uses for
+**text** queries. Scores of an image query are a raw sigmoid, not a calibrated probability:
+here the four dogs score 1.0, the two people 0.90 and 0.88, strips of grass 0.30 to 0.58. The
+Hugging Face reference (`Owlv2ForObjectDetection.image_guided_detection`) gives the same boxes
+and scores and uses `threshold=0.9` in its image-guided example, so pass `box_threshold`:
+
+```python
+res = c.predict("owlv2_base_patch16", "dogs.jpg", template_name="dog", box_threshold=0.9)
+print(len(res.detections), [round(d.conf, 3) for d in res.detections])
+```
+
+```text
+5 [1.0, 1.0, 1.0, 1.0, 0.901]
+```
+
+The model embeds the **whole** template image, not an object found inside it. Use a tight crop
+that the object fills: a crop with much background, or a thin one (padded to a square with
+black), matches background everywhere at scores near 1.0, and no threshold separates those
+boxes from the object.
 
 An unknown name is a 400 (`template "nope" not found`), and so is calling an
 `instance_detection` model without one. Templates live in the server's memory: they are gone
@@ -1192,8 +1216,8 @@ masks/04-bench.png bench 0.4
 masks/05-bench.png bench 0.32
 ```
 
-Grounded-SAM returns one mask per detection, in the same order, so `zip` pairs them (but see the
-[`dilate` warning](#dilate)). Each PNG is a black-and-white image the size of the photo.
+Grounded-SAM returns one mask per detection, in the same order, so `zip` pairs them (also with
+[`dilate`](#dilate) and the size filter). Each PNG is a black-and-white image the size of the photo.
 
 ### A depth map as a numpy array
 

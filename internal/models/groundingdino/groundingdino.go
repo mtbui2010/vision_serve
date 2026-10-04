@@ -19,8 +19,8 @@
 // box_threshold filters queries — with ONE deliberate difference: the prompt is split into
 // "."-separated phrases and each query is assigned to its single best-scoring phrase.
 // HF instead concatenates every token above text_threshold across the whole prompt, which
-// labels a query "chair tv vase bear" once the prompt holds several classes. Here
-// text_threshold gates whether the winning phrase is assignable at all.
+// labels a query "chair tv vase bear" once the prompt holds several classes. Here the label is
+// always the winning phrase, and text_threshold is only a second floor on its score.
 //
 // # KNOWN DEFECT in the COMMUNITY ONNX export (why a per-phrase path still exists)
 //

@@ -17,7 +17,7 @@ The server listens on `http://127.0.0.1:11435` by default. Requests are `multipa
 | `POST` | `/api/unload` | `{"model":"rf-detr"}` — free its memory. |
 | `POST` | `/api/predict` | Run a model on an image. **The main endpoint.** |
 | `POST` | `/api/preprocess` | Return the exact input tensor a model would receive, without running it (debugging). |
-| `POST` | `/api/infer_tensor` | Run a model on a tensor you prepared yourself (raw float32 body). |
+| `POST` | `/api/infer_tensor` | Run a model on a tensor you prepared yourself (raw float32 body). It knows nothing of the original photo: boxes come back in the tensor's pixels. |
 | `POST` | `/api/explain` | A heatmap of what the model looked at for one detection (attention map or Score-CAM). |
 | `POST` | `/api/templates` | Register example images under a name, for template-prompted models. |
 | `GET` | `/api/templates` | List registered templates. |
@@ -49,16 +49,16 @@ Routes are declared in
 | Field | Used by | Format |
 |---|---|---|
 | `model` | all | model name, required |
-| `image` / `image_base64` | all | JPEG or PNG (up to 32 MiB, 40 megapixels) |
+| `image` / `image_base64` | all | JPEG, PNG, WebP, BMP, GIF or TIFF (up to 32 MiB, 40 megapixels) |
 | `prompt` | open-vocabulary models | words separated by `" . "`: `"cat. red mug."` |
 | `box` | SAM family | `"x,y,w,h"` in the photo's pixels; several separated by `;` (with curl, send it with `--form-string`: `-F` cuts at `;`) |
 | `point` | SAM family | `"x,y[,label]"`, label `1` = object, `0` = background; several separated by `;` |
-| `box_threshold`, `text_threshold` | GroundingDINO-based | override the manifest score cutoffs |
+| `box_threshold`, `text_threshold` | GroundingDINO-based (`box_threshold` also OWLv2) | override the manifest score cutoffs |
 | `min_size`, `max_size` | detectors, segmenters | drop objects smaller / larger than this % of the image |
 | `roi` | all | `"x,y,w,h"`: run on this crop only; results come back in full-photo pixels |
 | `dilate` | models that return masks | grow (`> 0`) or shrink (`< 0`) every mask by this many pixels |
 | `method` | `background`, `rfdetr-textalign` | `auto`, `depth`, `sam`, `cv`, `automask` / `exact`, `folded`, `gated`, `dual` |
-| `bg_max_area`, `fg_min_area`, `grid_size` | `background`, `mobile-sam` | automatic-mask tuning |
+| `bg_max_area`, `fg_min_area`, `grid_size` | `background`, `mobile-sam` (`grid_size` also `grasp`) | automatic-mask tuning |
 | `claim_threshold`, `crop_temp` | `rfdetr-textalign` with `method=dual` (`crop_temp` also `gdino-siglip`) | open-vocabulary naming tuning |
 | `gripper_min`, `gripper_max` | grasp models | gripper opening range in pixels |
 | `depth` / `depth_base64` (+ `depth_dtype`, `depth_width`, `depth_height`) | `background` | an aligned depth image |

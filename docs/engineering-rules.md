@@ -37,6 +37,7 @@ CLAUDE.md carries the one-line version; this file is the "why" and "where".
 |---|---|---|
 | Record the **true per-axis** scale and pad of every resize, and map results back with it. Test extreme aspect ratios (10000×10). | SCRFD used one `det_scale` for both axes: faces on wide images shifted up to 4 px, panoramas completely. | `TestPostprocess_ExtremePanoramaMapsBack` |
 | Carry an object's **identity**, not its position, across filtering and sorting. | `/api/explain` used the index of a sorted, filtered detection as a raw query index and explained the wrong object. | `internal/lifecycle/explain_query_test.go`, `internal/explain/target_test.go` |
+| A filter makes **one decision per object**: a detection and its mask (index-aligned, the mask carrying the detection's box) are kept or dropped together, and a step that reshapes a paired mask keeps its identity (the box). | `dilate` re-tightened mask boxes: masks lost their class in `group_by_class`, and with `min_size` the size filter judged masks and detections by different boxes (6 detections, 3 masks). | `TestPredictKeepsDetectionsAndMasksPaired` |
 | A manifest setting a model cannot honour is a load error, never silently ignored. | SAM/PaddleOCR silently ignored a `preprocess:` block. | `TestFixedByExportArchitecturesRefuseABlock` |
 | The manifest's input size, layout and channels are checked against the ONNX graph's fixed input dims **at load** (dynamic dims and per-image sizes skipped). | A `width: 640` manifest for a `[1,3,560,560]` graph loaded fine; the first predict failed in ORT with "index: 2 Got: 640 Expected: 560", naming no manifest field. | `TestLoadRefusesAManifestSizeTheGraphCannotTake`, `TestShippedManifestsFitTheirGraphs` |
 | Verify real tensor shapes before writing decode logic; pin output selection against the reference rule. | — | `TestSplitRFMatchesReference` |
@@ -79,6 +80,10 @@ CLAUDE.md carries the one-line version; this file is the "why" and "where".
 - Every ```mermaid diagram is parsed in CI (`website/tools/check_mermaid.mjs`): a `;` inside a
   sequence-diagram message silently broke the README's diagram on GitHub.
 - Shell helpers: `pgrep -f PATTERN` matches its own command line — never loop on it.
+- A helper that picks a runtime library picks one that **loads on this host**, not the first or
+  newest it finds: `scripts/gpu-env.sh` picked an ORT 1.30 built for CUDA 13 on a CUDA 12.8
+  driver, and every `make serve` ran on the CPU. It now checks the CUDA runtime major against
+  the driver and that every dependency resolves, and prints its choice.
 
 ## Before you merge
 
