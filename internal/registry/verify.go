@@ -146,6 +146,14 @@ func (m *Manifest) verifyWeights(depth int) error {
 		if paths, ok := m.composedWeights(); ok {
 			return m.verifyComposed(paths, depth)
 		}
+		// A PARTLY composed model (rfdetr-textalign-*: its own detector and projection, plus a
+		// text tower in ../siglip-text/) answers for its own files through the checks below, and
+		// for the borrowed ones the way a composed model does: through the model that owns them.
+		if foreign := m.foreignWeights(); len(foreign) > 0 {
+			if err := m.verifyComposed(foreign, depth); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Verified mode: cross-check the contributor-declared license against the maintainer-audited
@@ -197,7 +205,9 @@ func (m *Manifest) verifySessionPins(hardened bool) error {
 		for role, path := range files {
 			want, ok := m.SHA256.expectedFor(role)
 			if !ok {
-				if hardened {
+				// A role borrowed from another model's directory was admitted through that model
+				// (verifyWeights); its pin lives in that model's manifest.
+				if hardened && !m.isForeign(path) {
 					return fmt.Errorf("model %q: role %q has no sha256 content pin — refusing to load "+
 						"(verified mode requires every weight file to be pinned)", m.Name, role)
 				}
@@ -251,6 +261,9 @@ func (m *Manifest) verifySideFiles(hardened bool) error {
 		pinned[filepath.Join(m.dir, rel)] = true
 	}
 	for _, w := range m.sessionPaths() {
+		if m.isForeign(w) {
+			continue // its external data is pinned, and checked, by the model that owns it
+		}
 		data := w + ".data"
 		if _, err := os.Stat(data); err == nil && !pinned[filepath.Clean(data)] {
 			return fmt.Errorf("model %q: %s holds external weight data but sha256_files does not pin it — "+
@@ -343,6 +356,42 @@ func (m *Manifest) composedWeights() ([]string, bool) {
 		paths = append(paths, abs)
 	}
 	return paths, true
+}
+
+// foreignWeights returns the session files this manifest borrows from outside its own directory
+// (absolute paths, sorted), for a model that also has files of its own. Nil when there are none.
+func (m *Manifest) foreignWeights() []string {
+	var out []string
+	for _, p := range m.FilesAbs() {
+		if m.isForeign(p) {
+			abs, err := filepath.Abs(p)
+			if err != nil {
+				abs = p
+			}
+			out = append(out, abs)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// isForeign reports whether path lies outside the manifest's own directory tree, i.e. belongs to
+// another model ("../siglip-text/model.onnx"). Undecidable paths count as own, so they keep going
+// through the strict own-file checks.
+func (m *Manifest) isForeign(path string) bool {
+	own, err := filepath.Abs(m.dir)
+	if err != nil {
+		return false
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(own, abs)
+	if err != nil {
+		return false
+	}
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // verifyComposed admits a composed model exactly when every model that owns one of its weights
