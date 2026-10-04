@@ -328,10 +328,20 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
 - Kernel GPU tất định đang là opt-in. Bật mặc định thì phải đo lại và cập nhật các con số mAP
   trong manifest. Trên Windows chưa nối. Có thể thay shim cgo bằng một PR nhỏ lên
   `yalue/onnxruntime_go` (thêm `SessionOptions.SetDeterministicCompute`).
-- Giới hạn thread của pool (`NumCPU/(4n)`) mới chỉ đo trên máy 48 luồng với automask. Trên máy
-  edge nhỏ (ví dụ 8 CPU, 4 decoder) mỗi decoder chỉ còn 1 thread, nên request SAM có prompt có thể
-  chậm hơn; chưa đo. Sweep pool×concurrency (`VS_POOL_OVERRIDE`) cũng chịu giới hạn này, nên muốn
-  so với số cũ thì đặt `VISIONSERVE_POOL_THREADS=0`.
+- Thread của pool: **đã đo, đã đổi công thức**. Đo end to end trên CPU, giả lập máy 4, 8 (4c/8t
+  và 8 core), 16, 24 CPU bằng `taskset`, cộng máy 48 luồng; 3 vòng xen kẽ, lấy trung vị. Mặc
+  định của ORT chậm nhất ở mọi cỡ máy, kể cả một request có prompt: máy 4 core, box 1.19 s so
+  với 0.47 s, automask 22.1 s so với 6.6 s. Nỗi lo "1 thread/decoder làm request có prompt chậm
+  hơn" là sai. Nhưng `NumCPU/(4n)` cho 1 thread tới 31 CPU, nên ở 16 và 24 CPU automask chậm
+  1.6–2×. Công thức mới: `NumCPU/(2n)`, kẹp trong [1, 3]. Kết quả: 1 thread tới 15 CPU, 2 ở
+  16, 3 từ 24 trở lên (ở 48 vẫn là 3 như cũ). Bảng đo nằm trong comment của
+  `poolIntraOpThreads` và trong docs/architecture.md. Output không đổi: golden 43 case trùng từng
+  byte với base1; 8 case của các model có pool, chạy ở 16 CPU với 2 thread, 1 thread và mặc định
+  ORT, cũng trùng từng byte. Lưu ý khi đo: `runtime.NumCPU()` của Go theo affinity mask, còn
+  ORT 1.26 thì không. Dưới `taskset -c 0-3`, mặc định của ORT vẫn tạo 24 thread/session và pin
+  ra cả 24 core của máy, nên bảng giả lập mặc định đó bằng 1 thread mỗi core giả lập. Còn mở:
+  chưa đo trên board ARM thật và trong container giới hạn bằng cpuset. Sweep `VS_POOL_OVERRIDE` (pool cả detector/encoder) cũng bị
+  kẹp ở 3; muốn so với số cũ thì đặt `VISIONSERVE_POOL_THREADS`.
 - `head.onnx` của textalign đã bật trong các manifest `exact` và đã sinh tại máy, nhưng vẫn chưa
   có trên catalog HF. Một bản checkout mới phải tự chạy `export_head_onnx.py` (xem
   `models/rfdetr-textalign-dec1-siglip/README.md`), nếu không các model này không load được.

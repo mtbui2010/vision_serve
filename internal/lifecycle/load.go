@@ -294,25 +294,62 @@ func newRunnable(path string, inputNames, outputNames []string, n, threads int, 
 // newEngineSession creates one ONNX session; tests replace it.
 var newEngineSession = engine.NewSessionWith
 
-// poolIntraOpThreads sizes the intra-op thread pool of EACH session in an n-session pool.
+// maxPoolThreads caps poolIntraOpThreads' default (see there for the measurements).
+const maxPoolThreads = 3
+
+// poolIntraOpThreads sizes the intra-op thread pool of EACH session in an n-session pool:
+// NumCPU/(2n) threads, at least 1 and at most maxPoolThreads.
 //
 // ORT's default gives every session one spinning thread per physical core, and a pool exists to
 // run its sessions at once: MobileSAM's automask drives its 4 decoder copies together, so the
-// default put 4×cores busy threads on the machine. Measured on CPU (2×12-core Xeon, 48 logical,
-// shared and busy; automask of a 640×480 image = 311 decoder calls), per request:
+// default put 4×cores busy threads on the machine. The lone sessions next to the pool (the SAM
+// encoder, a detector) keep that default, so they already spin on one thread per physical core —
+// half the logical CPUs with 2-way SMT. The pool gets the other half, split over its n sessions.
+// Past 2–3 threads the small SAM decoder gains nothing and its extra threads only spin, hence
+// the cap.
 //
-//	default (24 threads/session)  17–22 s, ~600–670 CPU-s
-//	6 threads/session              7–15 s, ~150–170 CPU-s
-//	3 threads/session              3.7–5.7 s, ~60–80 CPU-s
+// Measured on CPU, served end to end (2×12-core Xeon, shared and busy; hosts emulated with
+// taskset; lone sessions given one thread per emulated physical core, which is what ORT's default
+// picks on such a host — under taskset ORT counts and pins to all 24 cores of the machine
+// instead). Medians of 3 interleaved rounds, pool of 4 decoders, k = threads per decoder:
+// box = mobile-sam, one box (s); auto = mobile-sam automask, 640×480 (s); grasp = grasp-rfdetr
+// (s); conc4 = mobile-sam box, 4 clients (req/s). * = this rule, d = ORT's default.
 //
-// with identical outputs. So the pool shares a quarter of the logical CPUs (half the physical
-// cores with 2-way SMT): runtime.NumCPU()/(4n) threads per session, at least 1.
+//	host            k     box   auto  grasp  conc4
+//	4 cores         1*   0.47   6.6   2.10   2.35
+//	                2    0.83  11.2   3.17   1.30
+//	                4d   1.19  22.1   5.21   0.88
+//	4c/8t           1*   0.50   6.9   1.44   2.56
+//	                2    0.48   6.0   1.47   2.40
+//	                4d   0.61  12.4   2.64   1.80
+//	8 cores         1*   0.39   6.4   2.00   3.30
+//	                2    0.60   5.0   2.51   1.89
+//	                8d   1.21  21.9   5.65   0.89
+//	8c/16t          1    0.40   6.7   1.48   3.69
+//	                2*   0.37   4.3   1.23   3.26
+//	                4    0.38   4.4   1.67   3.25
+//	                8d   0.52  10.6   2.74   2.00
+//	12c/24t         1    0.36   6.6   1.23   4.08
+//	                2+   0.33   3.9   1.15   4.02
+//	                3*   0.31   3.4   1.21   3.98
+//	                6+   0.32   3.9   1.72   3.46
+//	                12d  0.52  10.3   2.82   1.98
+//	24c/48t         2+   0.34   4.1   1.45   4.33
+//	                3*   0.32   3.3   1.51   4.21
+//	                6    0.32   3.5   1.80   3.70
+//	                24d  0.87  15.9   4.16   1.28
+//
+// (+ = a second 3-round run, against 3 threads at 0.31/3.4/1.25/3.99 and 0.31/3.3/1.49/4.25.)
+//
+// Outputs are identical whatever the count. ORT's default is the slowest at every size, a single
+// prompted request included: its spinning threads outnumber the CPUs. The previous rule,
+// NumCPU/(4n), gave 1 thread up to 31 CPUs, which made automask 1.6–2× slower at 16 and 24.
 //
 // VISIONSERVE_POOL_THREADS (env) overrides it: an integer >= 1 is used as is (at most ncpu), 0
 // restores ORT's default. A value that is not an integer >= 0 is ignored. Either correction comes
 // back as warn, which the caller logs once (warnOnce) rather than on every load.
 func poolIntraOpThreads(n, ncpu int, env string) (threads int, warn string) {
-	heuristic := max(1, ncpu/(4*max(n, 1)))
+	heuristic := min(maxPoolThreads, max(1, ncpu/(2*max(n, 1))))
 	v := strings.TrimSpace(env)
 	if v == "" {
 		return heuristic, ""
@@ -321,7 +358,7 @@ func poolIntraOpThreads(n, ncpu int, env string) (threads int, warn string) {
 	switch {
 	case err != nil || k < 0:
 		return heuristic, fmt.Sprintf("lifecycle: ignoring VISIONSERVE_POOL_THREADS=%q (want an integer >= 0; "+
-			"0 = ONNX Runtime's default) — pooled sessions get NumCPU/(4n) intra-op threads", env)
+			"0 = ONNX Runtime's default) — pooled sessions get NumCPU/(2n) intra-op threads, 1 to %d", env, maxPoolThreads)
 	case k > ncpu:
 		return ncpu, fmt.Sprintf("lifecycle: VISIONSERVE_POOL_THREADS=%d is more than the %d logical CPUs — "+
 			"capped at %d intra-op threads per pooled session", k, ncpu, ncpu)

@@ -360,13 +360,20 @@ of 4 refused an ordinary client that sent 16 requests in parallel.
 ONNX Runtime gives every CPU session its own pool of worker threads, one per physical core by
 default, and idle threads in that pool keep spinning for a while. One session per model is fine.
 A pool of 4 decoder copies running at once, each with a full set of spinning threads, puts four
-times the core count of busy threads on the machine. Measured on a 48-thread server, MobileSAM's
-automask went from 17–22 s to 3.7–5.7 s per image when each pooled session got fewer threads, with
-identical output.
+times the core count of busy threads on the machine. Measured end to end on CPU, ORT's default was
+the slowest choice at every host size from 4 to 48 CPUs, even for a single prompted request: on a
+4-core host a MobileSAM box took 1.19 s instead of 0.47 s, and automask 22.1 s instead of 6.6 s.
+Outputs are identical whatever the thread count.
+
+The lone sessions next to the pool (the SAM encoder, a detector) keep ORT's default, one thread per
+physical core, which is half the logical CPUs on a machine with 2-way SMT. The pool gets the other
+half, split over its sessions, and at most 3 threads each: the small SAM decoder gains nothing past
+2–3 threads, and the extra ones only spin. For a pool of 4 that is 1 thread per session up to 15
+CPUs, 2 at 16 and 3 from 24 on.
 
 ```go title="internal/lifecycle/load.go"
 func poolIntraOpThreads(n, ncpu int, env string) (threads int, warn string) {
-	heuristic := max(1, ncpu/(4*max(n, 1)))
+	heuristic := min(maxPoolThreads, max(1, ncpu/(2*max(n, 1))))
 	v := strings.TrimSpace(env)
 	if v == "" {
 		return heuristic, ""
@@ -375,7 +382,7 @@ func poolIntraOpThreads(n, ncpu int, env string) (threads int, warn string) {
 	switch {
 	case err != nil || k < 0:
 		return heuristic, fmt.Sprintf("lifecycle: ignoring VISIONSERVE_POOL_THREADS=%q (want an integer >= 0; "+
-			"0 = ONNX Runtime's default) — pooled sessions get NumCPU/(4n) intra-op threads", env)
+			"0 = ONNX Runtime's default) — pooled sessions get NumCPU/(2n) intra-op threads, 1 to %d", env, maxPoolThreads)
 	case k > ncpu:
 		return ncpu, fmt.Sprintf("lifecycle: VISIONSERVE_POOL_THREADS=%d is more than the %d logical CPUs — "+
 			"capped at %d intra-op threads per pooled session", k, ncpu, ncpu)
@@ -384,7 +391,7 @@ func poolIntraOpThreads(n, ncpu int, env string) (threads int, warn string) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L314-L330)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L351-L367)
 
 The rules, in order of precedence:
 
@@ -393,7 +400,8 @@ The rules, in order of precedence:
    capped at the host's logical CPU count. `0` means ONNX Runtime's default. Use it for a tiny
    session that runs between a big one's calls: a 1 ms score head with its default spinning pool
    slowed a whole CPU request about 3×.
-2. Otherwise each session of an n-session pool gets `NumCPU / (4n)` threads, at least 1.
+2. Otherwise each session of an n-session pool gets `NumCPU / (2n)` threads, at least 1 and at
+   most 3.
    `VISIONSERVE_POOL_THREADS=k` replaces that with `k` (at most `NumCPU`); `0` restores ORT's
    default.
 3. A lone session keeps ORT's default.
@@ -518,9 +526,10 @@ var (
 !!! tip "Thread counts do not change results"
     `VISIONSERVE_POOL_THREADS` and `runtime.threads` only change speed and CPU usage. If you
     compare timings against older numbers measured before the pool cap existed, set
-    `VISIONSERVE_POOL_THREADS=0`. The `NumCPU/(4n)` rule was measured on a 48-thread machine; on a
-    small edge CPU (say 8 threads with 4 decoder copies) each copy gets a single thread, which has
-    not been measured yet.
+    `VISIONSERVE_POOL_THREADS=0`. The rule was measured on hosts of 4, 8, 16, 24 and 48 CPUs,
+    emulated with `taskset` on one Xeon; the table is in docs/architecture.md. When you emulate a
+    small host that way, note that Go's `NumCPU` follows the affinity mask but ONNX Runtime's
+    default does not: it still starts one thread per physical core of the whole machine.
 
 !!! note "The manifest is snapshotted at load"
     A loaded `Session` keeps the manifest it was built from. If you edit `manifest.yaml` while the
