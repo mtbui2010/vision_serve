@@ -310,7 +310,7 @@ All of the binding's Go files contain `import "C"`; with cgo off, none of them i
 The fix is to turn cgo on and name a C compiler **for the target CPU**. This is what CI does
 for the Jetson target:
 
-```yaml title=".github/workflows/ci.yml (lines 56-64)"
+```yaml title=".github/workflows/ci.yml (lines 65-73)"
       - name: Cài cross toolchain aarch64
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Build arm64 (Jetson target)
@@ -322,7 +322,7 @@ for the Jetson target:
         run: go build ./...
 ```
 
-[ci.yml#L56-L64 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/.github/workflows/ci.yml#L56-L64)
+[ci.yml#L65-L73 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/.github/workflows/ci.yml#L65-L73)
 
 The edge Docker image does the same in its build stage
 ([deploy/Dockerfile.edge#L41-L61](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile.edge#L41-L61)):

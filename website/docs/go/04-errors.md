@@ -55,7 +55,7 @@ A bare `"file not found"` is useless in a log. Each layer adds what it knows, wi
 `fmt.Errorf`. The `%w` verb **wraps** the original error: the message gets longer, and the
 original stays reachable for code that wants to inspect it.
 
-```go title="internal/lifecycle/load.go (lines 379-387)"
+```go title="internal/lifecycle/load.go (lines 416-424)"
 	if !ok {
 		return nil, nil, fmt.Errorf("lifecycle: %w: %q is not in the registry", ErrModelNotFound, name)
 	}
