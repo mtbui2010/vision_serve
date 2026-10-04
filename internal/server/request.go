@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"image"
 	"io"
+	"math"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -242,7 +243,10 @@ func decodeFields(w http.ResponseWriter, r *http.Request, dst any, keep map[stri
 		d.Close()
 		return nil, err
 	}
-	formInto(dst, value)
+	if err := formInto(dst, value); err != nil {
+		d.Close()
+		return nil, badRequest(err)
+	}
 	return d, nil
 }
 
@@ -258,17 +262,21 @@ func drainBody(body io.Reader) {
 // json name — the multipart twin of json.Unmarshal. Embedded structs are walked. Supported field
 // kinds: string, int, float32/64, and pointers to them (set only when the value is present).
 // A number that does not parse leaves the field at its zero value, which every option treats as
-// "use the default" — the way these handlers always treated a malformed optional number.
-func formInto(dst any, value func(name string) string) {
-	formFields(reflect.ValueOf(dst).Elem(), value)
+// "use the default" — the way these handlers always treated a malformed optional number. A float
+// that parses to NaN or ±Inf ("NaN", "Inf") is an error instead: JSON cannot carry one,
+// and through a form it used to slip past every bound (NaN read as "unset", Inf dropped everything).
+func formInto(dst any, value func(name string) string) error {
+	return formFields(reflect.ValueOf(dst).Elem(), value)
 }
 
-func formFields(v reflect.Value, value func(string) string) {
+func formFields(v reflect.Value, value func(string) string) error {
 	t := v.Type()
 	for i := 0; i < t.NumField(); i++ {
 		f, fv := t.Field(i), v.Field(i)
 		if f.Anonymous && f.Type.Kind() == reflect.Struct {
-			formFields(fv, value)
+			if err := formFields(fv, value); err != nil {
+				return err
+			}
 			continue
 		}
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
@@ -277,8 +285,27 @@ func formFields(v reflect.Value, value func(string) string) {
 		}
 		if s := value(name); s != "" {
 			setFromString(fv, s)
+			if x, ok := floatValue(fv); ok && (math.IsNaN(x) || math.IsInf(x, 0)) {
+				return fmt.Errorf("form field %q: %q is not a finite number", name, s)
+			}
 		}
 	}
+	return nil
+}
+
+// floatValue returns fv's value when fv is a float or a non-nil pointer to one.
+func floatValue(fv reflect.Value) (float64, bool) {
+	if fv.Kind() == reflect.Pointer {
+		if fv.IsNil() {
+			return 0, false
+		}
+		fv = fv.Elem()
+	}
+	switch fv.Kind() {
+	case reflect.Float32, reflect.Float64:
+		return fv.Float(), true
+	}
+	return 0, false
 }
 
 // setFromString parses s into fv; it reports whether fv was set.

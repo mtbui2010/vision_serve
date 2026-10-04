@@ -303,8 +303,12 @@ func loadImage(path string) (image.Image, error) {
 		return nil, fmt.Errorf("failed to open image %s: %w", path, err)
 	}
 	defer f.Close()
-	// Same EXIF handling as the server (server/limits.go decodeImage), so `run` and the API agree.
-	img, err := imaging.Decode(f, imaging.AutoOrientation(true))
+	raw, err := io.ReadAll(f)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read image %s: %w", path, err)
+	}
+	// Same decoder as the server (EXIF orientation, libwebp colours), so `run` and the API agree.
+	img, err := imageproc.Decode(raw)
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode image %s: %w", path, err)
 	}
