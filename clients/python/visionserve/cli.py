@@ -236,6 +236,37 @@ def build_parser() -> argparse.ArgumentParser:
         help="morph every output mask by |N| px (square kernel): >0 enlarge, <0 shrink",
     )
     p.add_argument(
+        "--claim-threshold",
+        type=float,
+        metavar="P",
+        help="rfdetr-textalign* with --method dual: probability the trained head needs to name a box "
+        "(>= 1 = never claims)",
+    )
+    p.add_argument(
+        "--crop-temp",
+        type=float,
+        metavar="T",
+        help="softmax temperature of the SigLIP crop namer (textalign / gdino-siglip); lower = more decisive",
+    )
+    p.add_argument(
+        "--template-name",
+        metavar="NAME",
+        help="instance_detection models: a template set registered on the server via POST /api/templates",
+    )
+    p.add_argument(
+        "--depth",
+        metavar="PATH",
+        help="aligned depth image for the background model: .npy, a 16-bit/float .png/.tif, or raw "
+        "little-endian bytes (then --depth-dtype; size defaults to the image's). Needs numpy",
+    )
+    p.add_argument(
+        "--depth-dtype",
+        choices=("uint16", "float32"),
+        help="raw --depth files only: element type (default: uint16)",
+    )
+    p.add_argument("--depth-width", type=int, metavar="W", help="raw --depth files only: width (default: the image's)")
+    p.add_argument("--depth-height", type=int, metavar="H", help="raw --depth files only: height (default: the image's)")
+    p.add_argument(
         "--save",
         action="store_true",
         help="save an annotated image with an auto name <stem>.python.<model>.<task>.png",
@@ -304,9 +335,83 @@ def build_parser() -> argparse.ArgumentParser:
 # --------------------------------------------------------------------------- #
 # Command implementations
 # --------------------------------------------------------------------------- #
+_RAW_DEPTH_FLAGS = ("depth_dtype", "depth_width", "depth_height")
+
+
+def _image_size(path: str) -> "tuple[int, int]":
+    """(width, height) of the image as the server sees it: after its EXIF orientation, which
+    swaps the sides for orientations 5-8. Reads the header only."""
+    try:
+        from PIL import Image
+    except ImportError as e:
+        raise ValueError(
+            "a raw --depth file without --depth-width/--depth-height takes the image's size, "
+            "which needs Pillow (pip install 'visionserve[images]'); or pass both flags"
+        ) from e
+    with Image.open(path) as img:
+        w, h = img.size
+        if img.getexif().get(0x0112) in (5, 6, 7, 8):  # EXIF Orientation: rotated 90 or 270 degrees
+            w, h = h, w
+    return w, h
+
+
+def load_depth(args: argparse.Namespace):
+    """The ``--depth`` file as a 2-D numpy array for :meth:`Client.predict` (``None`` without
+    ``--depth``), which then sends integer arrays as ``uint16`` and float arrays as ``float32``.
+
+    * ``.npy``: loaded as is (it carries its dtype and shape);
+    * ``.png`` / ``.tif`` / ``.tiff``: decoded with Pillow (a 16-bit PNG gives integers, a float
+      TIFF floats);
+    * anything else: raw little-endian bytes of ``--depth-dtype`` (default ``uint16``, the
+      server's default), ``--depth-width`` x ``--depth-height`` (default: the image's size).
+    """
+    raw_flags = [f for f in _RAW_DEPTH_FLAGS if getattr(args, f, None) is not None]
+    if args.depth is None:
+        if raw_flags:
+            raise ValueError("--%s needs --depth" % raw_flags[0].replace("_", "-"))
+        return None
+    try:
+        import numpy as np
+    except ImportError as e:
+        raise ValueError("--depth needs numpy: pip install 'visionserve[images]'") from e
+    path = Path(args.depth)
+    suffix = path.suffix.lower()
+    if suffix in (".npy", ".png", ".tif", ".tiff"):
+        if raw_flags:
+            raise ValueError(
+                "--%s is for raw depth files; a %s file carries its own type and size"
+                % (raw_flags[0].replace("_", "-"), suffix)
+            )
+        if suffix == ".npy":
+            return np.load(path, allow_pickle=False)
+        try:
+            from PIL import Image
+        except ImportError as e:
+            raise ValueError("a %s --depth file needs Pillow: pip install 'visionserve[images]'" % suffix) from e
+        with Image.open(path) as img:
+            return np.asarray(img)
+    if (args.depth_width is None) != (args.depth_height is None):
+        raise ValueError("--depth-width and --depth-height go together: give both, or neither (= the image's size)")
+    if args.depth_width is not None:
+        w, h = args.depth_width, args.depth_height
+        if w <= 0 or h <= 0:
+            raise ValueError("--depth-width/--depth-height must be > 0, got %dx%d" % (w, h))
+    else:
+        w, h = _image_size(args.image)
+    dtype = np.dtype("<f4") if args.depth_dtype == "float32" else np.dtype("<u2")
+    data = path.read_bytes()
+    if len(data) != w * h * dtype.itemsize:
+        raise ValueError(
+            "--depth %s has %d bytes, but %dx%d %s needs %d"
+            % (path, len(data), w, h, args.depth_dtype or "uint16", w * h * dtype.itemsize)
+        )
+    return np.frombuffer(data, dtype=dtype).reshape(h, w)
+
+
 def cmd_predict(client: Client, args: argparse.Namespace) -> int:
     boxes = _parse_boxes(args.box)
     points = _parse_points(args.point)
+    depth = load_depth(args)
 
     # --- Inference: time ONLY the predict() round-trip (excludes draw + save). ---
     t0 = time.perf_counter()
@@ -329,6 +434,10 @@ def cmd_predict(client: Client, args: argparse.Namespace) -> int:
         gripper_min=args.gripper_min,
         gripper_max=args.gripper_max,
         max_grasps_per_object=args.max_grasps_per_object,
+        claim_threshold=args.claim_threshold,
+        crop_temp=args.crop_temp,
+        template_name=args.template_name,
+        depth=depth,
     )
     client_ms = (time.perf_counter() - t0) * 1000.0
     server_ms = res.duration_ms

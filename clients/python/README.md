@@ -134,6 +134,11 @@ Global flags (accepted **before or after** the subcommand):
 | `--grid-size N` | `background` / MobileSAM automask grid (N×N decoder calls) |
 | `--min-size PCT` / `--max-size PCT` | Drop objects whose bbox area is below/above PCT% of the image (e.g. `0.1`, `90`) |
 | `--gripper-min PX` / `--gripper-max PX` | Grasp models only: jaw-opening bounds in original-image pixels |
+| `--dilate N` | Grow (`> 0`) or shrink (`< 0`) every output mask by N pixels |
+| `--claim-threshold P` / `--crop-temp T` | `rfdetr-textalign*` (`--method dual`) claim probability / SigLIP crop-namer temperature |
+| `--template-name NAME` | `instance_detection` models: a template set registered via `POST /api/templates` |
+| `--depth PATH` | Aligned depth image for `background` (`--method depth`/`auto`): `.npy`, a 16-bit/float `.png`/`.tif`, or raw little-endian bytes (needs numpy) |
+| `--depth-dtype uint16\|float32`, `--depth-width W`, `--depth-height H` | Raw `--depth` files only: element type (default `uint16`) and size (default: the image's) |
 | `--save` | Save an annotated image, auto-named `<stem>.python.<model>.<task>.png` |
 | `--save-as PATH` | Save the annotated image to this exact path (extension picks the format) |
 | `--alpha FLOAT` | Mask overlay opacity for `--save` (0..1, default `0.45`) |
