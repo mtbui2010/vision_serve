@@ -49,7 +49,7 @@ Routes are declared in
 | Field | Used by | Format |
 |---|---|---|
 | `model` | all | model name, required |
-| `image` / `image_base64` | all | JPEG or PNG (up to 32 MiB, 40 megapixels) |
+| `image` / `image_base64` | all | JPEG, PNG, WebP, BMP, GIF or TIFF (up to 32 MiB, 40 megapixels) |
 | `prompt` | open-vocabulary models | words separated by `" . "`: `"cat. red mug."` |
 | `box` | SAM family | `"x,y,w,h"` in the photo's pixels; several separated by `;` (with curl, send it with `--form-string`: `-F` cuts at `;`) |
 | `point` | SAM family | `"x,y[,label]"`, label `1` = object, `0` = background; several separated by `;` |

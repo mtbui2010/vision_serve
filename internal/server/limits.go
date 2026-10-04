@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/disintegration/imaging"
+	"visionserve/internal/imageproc"
 )
 
 // maxImagePixels caps a decoded image. maxImageBytes only caps the COMPRESSED upload, and image
@@ -38,11 +38,11 @@ func decodeImage(r io.Reader) (image.Image, error) {
 	if cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > maxImagePixels {
 		return nil, badRequest(fmt.Errorf("image is %dx%d; the limit is %d megapixels", cfg.Width, cfg.Height, maxImagePixels/1_000_000))
 	}
-	// AutoOrientation applies the EXIF orientation tag, so a phone photo is processed the way
+	// imageproc.Decode applies the EXIF orientation tag, so a phone photo is processed the way
 	// every viewer shows it (and the way transformers' load_image feeds models), and the
 	// returned boxes are in that frame. Without it, a portrait JPEG stored sideways was
-	// detected sideways. Formats without EXIF decode exactly as image.Decode would.
-	img, err := imaging.Decode(bytes.NewReader(raw), imaging.AutoOrientation(true))
+	// detected sideways. It also converts a lossy WebP's colours the way libwebp does.
+	img, err := imageproc.Decode(raw)
 	if err != nil {
 		return nil, badRequest(fmt.Errorf("failed to decode image: %w", err))
 	}

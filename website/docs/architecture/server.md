@@ -226,10 +226,14 @@ func decodeImage(r io.Reader) (image.Image, error) {
 		return nil, badRequest(fmt.Errorf("image is %dx%d; the limit is %d megapixels", cfg.Width, cfg.Height, maxImagePixels/1_000_000))
 	}
 	// ...
-	img, err := imaging.Decode(bytes.NewReader(raw), imaging.AutoOrientation(true))
+	img, err := imageproc.Decode(raw)
 ```
 
 [View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/limits.go#L26-L45)
+
+`imageproc.Decode` applies the EXIF orientation and decodes JPEG, PNG, WebP, BMP, GIF and TIFF.
+A lossy WebP is converted to RGB with libwebp's own limited-range transform: the plain
+`golang.org/x/image/webp` result uses JPEG's full-range one and washes colours out.
 
 | Limit | Value | Where |
 |---|---|---|

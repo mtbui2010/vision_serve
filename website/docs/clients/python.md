@@ -145,8 +145,8 @@ reads them as integers.
 
 PIL images and arrays are encoded to PNG so the server sees exactly your pixels. That costs a
 little CPU per call; if bandwidth or speed matter more than exactness (a video loop), encode a
-JPEG yourself and pass the bytes. The server accepts JPEG, PNG and BMP (WebP is refused with
-400), up to 32 MiB and 40 megapixels per image.
+JPEG yourself and pass the bytes. The server accepts JPEG, PNG, WebP, BMP, GIF and TIFF, up to
+32 MiB and 40 megapixels per image.
 
 ```python
 import io
