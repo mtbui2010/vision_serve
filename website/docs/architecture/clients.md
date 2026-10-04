@@ -10,6 +10,9 @@ exactly what the server must not depend on, so it ships as a separate Docker ima
 once and exits. Finally, the **Docker images** in `deploy/` package the server itself for CPU,
 NVIDIA GPU and arm64 machines.
 
+This page is about how the clients are built. To *use* them (every `predict` option, what it
+means, which models read it, with real outputs), see the [Clients](../clients/index.md) tab.
+
 ## The picture
 
 ```mermaid

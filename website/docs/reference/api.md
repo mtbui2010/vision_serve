@@ -38,9 +38,10 @@ Routes are declared in
 === "JSON"
 
     ```bash
-    curl -H 'Content-Type: application/json' \
-         -d '{"model":"grounding-dino","image_base64":"'"$(base64 -w0 photo.jpg)"'","prompt":"cat. laptop."}' \
-         http://127.0.0.1:11435/api/predict
+    # the base64 of a photo is too long for a command line: write the body to a file
+    printf '{"model":"grounding-dino","prompt":"cat. laptop.","image_base64":"%s"}' \
+           "$(base64 -w0 photo.jpg)" > req.json
+    curl -H 'Content-Type: application/json' -d @req.json http://127.0.0.1:11435/api/predict
     ```
 
 ### Request fields
@@ -50,19 +51,25 @@ Routes are declared in
 | `model` | all | model name, required |
 | `image` / `image_base64` | all | JPEG or PNG (up to 32 MiB, 40 megapixels) |
 | `prompt` | open-vocabulary models | words separated by `" . "`: `"cat. red mug."` |
-| `box` | SAM family | `"x,y,w,h"` in the photo's pixels; several separated by `;` |
+| `box` | SAM family | `"x,y,w,h"` in the photo's pixels; several separated by `;` (with curl, send it with `--form-string`: `-F` cuts at `;`) |
 | `point` | SAM family | `"x,y[,label]"`, label `1` = object, `0` = background; several separated by `;` |
-| `box_threshold`, `text_threshold` | GroundingDINO-based | override the manifest thresholds |
+| `box_threshold`, `text_threshold` | GroundingDINO-based | override the manifest score cutoffs |
 | `min_size`, `max_size` | detectors, segmenters | drop objects smaller / larger than this % of the image |
 | `roi` | all | `"x,y,w,h"`: run on this crop only; results come back in full-photo pixels |
-| `method` | `background` | `auto`, `depth`, `sam`, `cv`, `automask` |
+| `dilate` | models that return masks | grow (`> 0`) or shrink (`< 0`) every mask by this many pixels |
+| `method` | `background`, `rfdetr-textalign` | `auto`, `depth`, `sam`, `cv`, `automask` / `exact`, `folded`, `gated`, `dual` |
+| `bg_max_area`, `fg_min_area`, `grid_size` | `background`, `mobile-sam` | automatic-mask tuning |
+| `claim_threshold`, `crop_temp` | `rfdetr-textalign` with `method=dual` (`crop_temp` also `gdino-siglip`) | open-vocabulary naming tuning |
 | `gripper_min`, `gripper_max` | grasp models | gripper opening range in pixels |
-| `depth` / `depth_base64` | grasp / background | an aligned depth image |
+| `depth` / `depth_base64` (+ `depth_dtype`, `depth_width`, `depth_height`) | `background` | an aligned depth image |
 | `template_name` | template-prompted models | a name registered with `/api/templates` |
 | `encoding` | depth, embeddings | `base64`: return big float arrays as base64 float32 (≈6× faster than JSON numbers) |
 
 All fields are listed in `PredictJSONRequest` in
 [`pkg/api/types.go`](https://github.com/mtbui2010/vision_serve/blob/main/pkg/api/types.go).
+For every field's default, valid range, the models that read it and a real example, see
+[Clients › Python](../clients/python.md#every-option-at-a-glance) (the Python keyword arguments
+have the same names as these fields).
 
 ### Answer
 
@@ -106,5 +113,6 @@ The mapping lives in `statusOf` in
 
 ## Clients
 
-You rarely need to build requests by hand: the [Python and JavaScript clients](../architecture/clients.md)
-handle uploads, prompts, RLE decoding and base64 arrays for you.
+You rarely need to build requests by hand: the [Python and JavaScript clients](../clients/index.md)
+handle uploads, prompts, RLE decoding and base64 arrays for you. How they are built is in
+[Clients and the converter](../architecture/clients.md).
