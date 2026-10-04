@@ -165,9 +165,33 @@ live when it finishes; only `Unload` and `Close` cancel a load.
 
 **Intra-op threads.** ONNX Runtime gives every session its own spinning thread pool sized to the
 physical cores. A lone session keeps that default. Each session of an n-session pool (e.g.
-MobileSAM's decoder copies, which automask drives at once) gets `NumCPU / (4n)` threads, at
-least 1, so a pool does not put n × cores busy threads on the machine; outputs do not depend on
-the thread count. `VISIONSERVE_POOL_THREADS=k` sets k threads per pooled session (at most
+MobileSAM's decoder copies, which automask drives at once) gets `NumCPU / (2n)` threads, at
+least 1 and at most 3, so a pool does not put n × cores busy threads on the machine; outputs do
+not depend on the thread count. The lone sessions already spin on one thread per physical core
+(half the logical CPUs with SMT); the pool takes the other half, and the small SAM decoder gains
+nothing past 2–3 threads. For a pool of 4 that is 1 thread per session up to 15 CPUs, 2 at 16, 3
+from 24 on. Measured end to end on CPU (hosts emulated with `taskset`, medians of 3 rounds; full
+table in `poolIntraOpThreads`, `internal/lifecycle/load.go`):
+
+| host | threads/decoder | mobile-sam box | automask 640×480 | grasp-rfdetr | box, 4 clients |
+|------|-----------------|---------------|------------------|--------------|----------------|
+| 4 cores | **1** / ORT default 4 | **0.47 s** / 1.19 s | **6.6 s** / 22.1 s | **2.10 s** / 5.21 s | **2.35** / 0.88 req/s |
+| 4c/8t | **1** / 2 / ORT default 4 | **0.50** / 0.48 / 0.61 s | **6.9** / 6.0 / 12.4 s | **1.44** / 1.47 / 2.64 s | **2.56** / 2.40 / 1.80 req/s |
+| 8 cores | **1** / ORT default 8 | **0.39 s** / 1.21 s | **6.4 s** / 21.9 s | **2.00 s** / 5.65 s | **3.30** / 0.89 req/s |
+| 8c/16t | **2** / old rule 1 / ORT default 8 | **0.37** / 0.40 / 0.52 s | **4.3** / 6.7 / 10.6 s | **1.23** / 1.48 / 2.74 s | **3.26** / 3.69 / 2.00 req/s |
+| 12c/24t | **3** / old rule 1 / ORT default 12 | **0.31** / 0.36 / 0.52 s | **3.4** / 6.6 / 10.3 s | **1.21** / 1.23 / 2.82 s | **3.98** / 4.08 / 1.98 req/s |
+| 24c/48t | **3** (= old rule) / 6 / ORT default 24 | **0.32** / 0.32 / 0.87 s | **3.3** / 3.5 / 15.9 s | **1.51** / 1.80 / 4.16 s | **4.21** / 3.70 / 1.28 req/s |
+
+ORT's default is the slowest at every size, a single prompted request included: with 5 sessions
+each spinning one thread per core, the busy threads outnumber the CPUs. (Go's `NumCPU` follows
+the affinity mask, ORT 1.26 does not: under `taskset -c 0-3` its default still made 24 threads
+per session, pinned across all 24 cores of the machine. The table therefore emulates a real small
+host by giving lone sessions one thread per emulated core. A cpuset-limited container was not
+tested.) The old rule `NumCPU / (4n)` gave 1 thread up to 31 CPUs: automask was 1.6–2× slower
+at 16 and 24 CPUs, while 4 clients got ~10% more throughput at 16. On the eval sweep's
+`VS_POOL_OVERRIDE` pools (every role pooled, detectors and encoders too) the cap of 3 applies as
+well; set `VISIONSERVE_POOL_THREADS` to compare with numbers taken without it.
+`VISIONSERVE_POOL_THREADS=k` sets k threads per pooled session (at most
 `NumCPU`), and `0` restores ORT's default; a value that is not an integer >= 0 is ignored, and
 both corrections are logged once. A manifest can set a role's count itself with `runtime.threads`
 (`{head: 1}`), which overrides both defaults for that role: a tiny session that runs between a

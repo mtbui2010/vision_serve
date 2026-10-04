@@ -182,7 +182,7 @@ function stored in a field or package variable, and the test replaces it. You wi
 several, e.g. `var createORTSession = createSession` in the engine
 ([ort.go#L263-L264](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L263-L264))
 and `newEngineSession` swapped in
-[pool_threads_test.go#L51-L69](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/pool_threads_test.go#L51-L69)
+[pool_threads_test.go#L56-L74](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/pool_threads_test.go#L56-L74)
 together with `t.Setenv`. It is Go's version of `unittest.mock.patch`, but explicit. The
 HTTP tests use the other approach, a fake behind an interface (chapter 3).
 

@@ -402,7 +402,7 @@ The struct tags of chapter 2 turn this file into a `registry.Manifest`, and life
 the fields into the `models.Config` that `New` receives: `conf_threshold` becomes
 `cfg.ConfThresh`, the lines of `imagenet1k.txt` become `cfg.Labels`, `input:` becomes the
 preprocessing spec
-([load.go#L415-L439](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L415-L439)).
+([load.go#L452-L476](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L452-L476)).
 
 !!! danger "The license field is not decoration"
     Change `license:` to `AGPL-3.0` and the registry refuses the whole manifest:

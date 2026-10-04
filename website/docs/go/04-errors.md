@@ -67,7 +67,7 @@ original stays reachable for code that wants to inspect it.
 	}
 ```
 
-[load.go#L379-L387 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L379-L387)
+[load.go#L416-L424 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L416-L424)
 
 A client asking for a model that does not exist then receives:
 

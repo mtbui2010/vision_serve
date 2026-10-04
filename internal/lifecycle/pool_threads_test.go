@@ -23,12 +23,17 @@ func TestPoolIntraOpThreads(t *testing.T) {
 		want    int
 		warn    string // "" = no warning
 	}{
-		{4, 48, "", 3, ""},             // a quarter of 48 logical CPUs, split over 4 sessions
-		{4, 32, "", 2, ""},             // 16-core workstation
-		{4, 8, "", 1, ""},              // never below 1
-		{4, 4, "", 1, ""},              // edge board
-		{2, 48, "", 6, ""},             // smaller pool, more threads each
-		{0, 8, "", 2, ""},              // a non-positive n counts as 1
+		// The default, NumCPU/(2n) clamped to [1, 3], at the host sizes measured in load.go.
+		{4, 4, "", 1, ""},              // 4-core edge board: never below 1
+		{4, 8, "", 1, ""},              // 4c/8t or 8 cores
+		{4, 16, "", 2, ""},             // 8c/16t: half the logical CPUs over 4 sessions
+		{4, 24, "", 3, ""},             // 12c/24t
+		{4, 48, "", 3, ""},             // 24c/48t: 6 would be the half, capped at 3
+		{4, 15, "", 1, ""},             // rounds down
+		{2, 8, "", 2, ""},              // smaller pool, more threads each
+		{2, 48, "", 3, ""},             // ... still capped
+		{0, 4, "", 2, ""},              // a non-positive n counts as 1
+		{4, 1, "", 1, ""},              // one CPU
 		{4, 48, "5", 5, ""},            // override
 		{4, 48, " 1 ", 1, ""},          // override, whitespace
 		{4, 48, "0", 0, ""},            // 0 = ORT default
