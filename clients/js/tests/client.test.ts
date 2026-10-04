@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { Client, VisionServeError, Result, Mask, Detection } from "../src/index.js";
+import { Client, VisionServeError, Result, Mask, Detection, filterBySize } from "../src/index.js";
 
 /** Install a fake global fetch; returns a handle to inspect the last request. */
 function mockFetch(responder: (url: string, init: RequestInit) => Response) {
@@ -179,4 +179,23 @@ test("non-2xx surfaces the server error field", async () => {
   } finally {
     m.restore();
   }
+});
+
+test("filterBySize keeps grasps and device (only detections and masks are filtered)", () => {
+  const res = Result.fromJSON({
+    task: "grasp",
+    model: "grasp-rfdetr",
+    device: "gpu:0",
+    detections: [
+      { bbox: [0, 0, 10, 10], class: "cup", conf: 0.9 },
+      { bbox: [0, 0, 1, 1], class: "crumb", conf: 0.5 },
+    ],
+    grasps: [{ x: 5, y: 5, theta: 0.5, width: 8, quality: 0.9, class: "cup", conf: 0.9 }],
+    duration_ms: 3,
+  });
+  const out = filterBySize(res, { minSize: 50 });
+  assert.deepEqual(out.detections.map((d) => d.cls), ["cup"]);
+  assert.equal(out.grasps.length, 1);
+  assert.equal(out.grasps[0]!.cls, "cup");
+  assert.equal(out.device, "gpu:0");
 });

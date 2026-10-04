@@ -31,11 +31,17 @@ PointInput = Union[Sequence[float], Sequence[Sequence[float]], None]
 
 
 class VisionServeError(Exception):
-    """Raised when the server returns a non-2xx response or transport fails."""
+    """Raised when the server returns a non-2xx response or transport fails.
 
-    def __init__(self, message: str, status: Optional[int] = None):
+    ``status`` is the HTTP status code, or ``None`` when no answer came back (server unreachable,
+    timeout, dropped connection). ``retry_after`` is the server's ``Retry-After`` in seconds (sent
+    with a 503 when the model's queue is full), else ``None``.
+    """
+
+    def __init__(self, message: str, status: Optional[int] = None, retry_after: Optional[float] = None):
         super().__init__(message)
         self.status = status
+        self.retry_after = retry_after
 
 
 class Client:
@@ -134,18 +140,20 @@ class Client:
                     (label 1=foreground, 0=background; defaults to 1).
             box_threshold: GroundingDINO query-score threshold (``grounding-dino`` /
                     ``grounded-sam`` / ``grasp-gd``). ``None`` = server manifest/default.
-            text_threshold: GroundingDINO token→label threshold; lower values keep more
-                    prompt words in each label (e.g. ``"canned coffee"`` instead of just
-                    ``"coffee"``). ``None`` = server manifest/default (0.25).
-            bg_max_area, fg_min_area: ``foreground`` model only — a MobileSAM automask
-                    whose area is ``>= bg_max_area`` percent of the image is treated as
-                    BACKGROUND (a support surface); one ``< fg_min_area`` percent is dropped
-                    as noise. ``None`` = model default (50 / 0). Use these to tune the
-                    foreground union — do NOT use ``min_size`` / ``max_size`` for it (those
-                    are an output bbox-area filter that drops the full-image union mask).
-            grid_size: ``foreground`` model only — MobileSAM automask grid ``N`` (``N×N``
-                    point prompts → ``N²`` decoder calls). Default ``8`` (fast, ~1 s); raise
-                    to ``16`` to catch more small objects (~4× slower). ``None`` = default.
+            text_threshold: GroundingDINO second score floor: a box is kept only when its best
+                    phrase scores above both ``box_threshold`` and ``text_threshold``. It does
+                    not change labels (a label is always the whole prompt phrase). ``None`` =
+                    server manifest/default (0.25).
+            bg_max_area, fg_min_area: ``background`` model, ``method="sam"`` / ``"automask"``
+                    only — a MobileSAM mask whose area is ``>= bg_max_area`` percent of the
+                    image counts as BACKGROUND (a support surface); one ``< fg_min_area``
+                    percent is dropped as noise. ``None`` = model default (50 / 0). Do NOT use
+                    ``min_size`` / ``max_size`` for this (those are an output bbox-area filter
+                    that can drop the surface mask).
+            grid_size: MobileSAM automask grid ``N`` (``N×N`` point prompts → ``N²`` decoder
+                    calls), for ``mobile-sam`` with no prompt (default 16) and ``background``
+                    with ``method="automask"`` (default 8). Larger catches more small objects
+                    but is slower; the server caps it at 64. ``None`` = default.
             roi:    optional region of interest ``[x, y, w, h]``. The server crops to it, runs
                     the model on the crop ONLY, and maps results back to original coordinates
                     — generic to every model. Accepts PIXELS or NORMALIZED ``0..1`` fractions
@@ -154,7 +162,9 @@ class Client:
             dilate: morph every output mask by ``|dilate|`` pixels (square kernel) — ``>0``
                     enlarges, ``<0`` shrinks, ``None``/``0`` = off.
             min_size, max_size: object bbox-area filter as a percent of the image
-                    area (e.g. ``0.1`` = 0.1%); ``None`` = no limit.
+                    area (e.g. ``0.1`` = 0.1%), applied to detections and masks after the
+                    model (grasp models also apply it to objects before planning grasps);
+                    ``None`` = no limit.
             gripper_min, gripper_max: grasp models only — parallel-jaw opening bounds
                     in ORIGINAL-image pixels; ``None`` = use the manifest default.
             max_grasps_per_object: client-side post-filter — keep at most this many
@@ -304,7 +314,8 @@ class Client:
                 raw = b""
             message = _extract_error(raw) or e.reason or "HTTP error"
             raise VisionServeError(
-                "%s %s -> %s: %s" % (method, path, e.code, message), status=e.code
+                "%s %s -> %s: %s" % (method, path, e.code, message), status=e.code,
+                retry_after=_retry_after(e.headers),
             )
         except urllib_error.URLError as e:
             raise VisionServeError(
@@ -640,6 +651,17 @@ def normalize_prompt(model: str, prompt: Optional[str]) -> Optional[str]:
     if "." not in text:
         text += "."
     return text
+
+
+def _retry_after(headers: Any) -> Optional[float]:
+    """The ``Retry-After`` header as seconds (the server sends an integer), or ``None`` when it is
+    absent or not a non-negative number (the HTTP-date form is not used by VisionServe)."""
+    value = headers.get("Retry-After") if headers is not None else None
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return None
+    return seconds if 0 <= seconds < float("inf") else None
 
 
 def _extract_error(raw: bytes) -> Optional[str]:

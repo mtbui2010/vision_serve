@@ -158,7 +158,7 @@ class Mask:
               counts, starting with a background (0) run, read column-major (column
               outer, row inner) over the ORIGINAL image ``H x W``.
         bbox: ``[x, y, w, h]`` bounding box of the mask in ORIGINAL image pixels.
-        conf: confidence (e.g. predicted IoU) in ``[0, 1]``.
+        conf: confidence; for a SAM mask the predicted IoU, which can slightly exceed 1.
     """
 
     rle: str
@@ -325,8 +325,8 @@ class Result:
     """Unified prediction result returned by ``POST /api/predict``.
 
     Attributes:
-        task:           one of ``detection`` | ``segmentation`` | ``open_vocab`` |
-                        ``classification`` | ``depth`` | ``embedding`` | ``grasp``.
+        task:           one of ``detection`` | ``segmentation`` | ``open_vocab`` | ``classification``
+                        | ``depth`` | ``embed`` | ``grasp`` | ``instance_detection``.
         model:          model name that produced the result.
         detections:     list of :class:`Detection` (may be empty).
         masks:          list of :class:`Mask` (may be empty).

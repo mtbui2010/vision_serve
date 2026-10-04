@@ -58,7 +58,7 @@ that unlock array and PIL inputs, mask decoding and drawing.
         self.base64_arrays = bool(base64_arrays)
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L57-L67)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L63-L73)
 
 `Client.predict(model, image, ...)` accepts a file path, encoded bytes, a `PIL.Image` or a
 `numpy` array (PIL and arrays are encoded to lossless PNG, so the server sees exactly your
@@ -95,7 +95,7 @@ and answer 503 without receiving megabytes for nothing (see [HTTP server](server
         _write_file("image", image_bytes, filename)
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L564-L584)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L575-L595)
 
 Other calls mirror the HTTP routes: `health()`, `list_models()`, `load()`, `unload()`, `ps()`,
 and `preprocess()` / `tokenize()`, which return the exact tensors the server would feed the

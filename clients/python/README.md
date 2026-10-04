@@ -191,7 +191,7 @@ visionserve load rf-detr
 
 ## Public API
 
-### `Client(host="http://localhost:11435", timeout=120)`
+### `Client(host="http://localhost:11435", timeout=120, *, base64_arrays=False)`
 
 | Method | HTTP | Returns |
 | --- | --- | --- |
@@ -200,13 +200,17 @@ visionserve load rf-detr
 | `load(model)` | `POST /api/load` | `{"model", "state"}` |
 | `unload(model)` | `POST /api/unload` | `{"model", "state"}` |
 | `ps()` | `GET /api/models` (filtered) | loaded `list[ModelInfo]` |
-| `predict(model, image, *, prompt=None, box=None, point=None, roi=None, box_threshold=None, text_threshold=None, min_size=0, max_size=0, gripper_min=None, gripper_max=None, method=None, bg_max_area=None, fg_min_area=None, grid_size=None)` | `POST /api/predict` | `Result` |
+| `predict(model, image, *, prompt=None, box=None, point=None, box_threshold=None, text_threshold=None, bg_max_area=None, fg_min_area=None, grid_size=None, method=None, roi=None, dilate=None, depth=None, min_size=None, max_size=None, gripper_min=None, gripper_max=None, max_grasps_per_object=3, claim_threshold=None, crop_temp=None, template_name=None)` | `POST /api/predict` | `Result` |
+| `preprocess(model, image=None, *, prompt=None, box=None, point=None)` / `tokenize(model, text)` | `POST /api/preprocess` | `PreprocessResult` / token ids |
+
+Every `predict` option, what it does and which models read it, with real outputs:
+[Clients › Python](https://mtbui2010.github.io/vision_serve/clients/python/) on the docs site.
 
 `min_size` / `max_size` filter by bounding-box area as a **percentage of the image area** (0–100; `0` = no limit). Example: `min_size=0.5` keeps only objects covering at least 0.5% of the image. The conversion to absolute pixels is done server-side using the uploaded image dimensions.
 
 `roi=[x, y, w, h]` (ORIGINAL image pixels) crops to that region, runs the model on the **crop only**, and maps every result back to original coordinates — generic to **all** models (detection / segmentation / grasp / background). Box / point prompts are given in original coords and shifted into the crop automatically.
 
-`box_threshold` / `text_threshold` are **GroundingDINO** tuning knobs (`grounding-dino`, `grounded-sam`, `grasp-gd`); `None` = use the server manifest/default. `box_threshold` is the query-score cutoff that filters detections; `text_threshold` controls how many prompt tokens are kept in each label. Lowering `text_threshold` keeps more words per label — e.g. `"canned coffee"` instead of just `"coffee"`. See [Open-vocab / Grounded-SAM](#open-vocab--grounded-sam).
+`box_threshold` / `text_threshold` are **GroundingDINO** tuning knobs (`grounding-dino`, `grounded-sam`, `grasp-gd`); `None` = use the server manifest/default. `box_threshold` is the score cutoff that filters detections; `text_threshold` is a second cutoff on the same score (it does not change labels, which are always a whole prompt phrase). See [Open-vocab / Grounded-SAM](#open-vocab--grounded-sam).
 
 `method` selects the **`background`** algorithm per request (`auto`, `depth`, `sam`, `cv`, `automask`; `None` = the server default, `auto`). `bg_max_area` / `fg_min_area` / `grid_size` are **`background`** tuning knobs (`None` = use the server manifest/default); `bg_max_area` and `fg_min_area` are percentages of the image area and only affect the `sam` / `automask` methods, while `grid_size` only affects `automask`. See [Background segmentation](#background-segmentation). Do **not** use `min_size` / `max_size` with `background` — they filter the *output* bboxes and drop the surface mask (whose bbox spans the support surface).
 
@@ -247,7 +251,7 @@ Prompts (serialized to the server's string format):
 - `box`: `[x, y, w, h]` or a list of boxes → `"x,y,w,h"` joined by `;`.
 - `point`: `[x, y]` / `[x, y, label]` or a list (label 1=fg, 0=bg) → `"x,y[,label]"` joined by `;`.
 - `prompt`: free text, e.g. `"cat. remote."`. The client normalizes `,` and `|` to the GroundingDINO phrase separator `.` and appends a trailing `.` if missing.
-- `box_threshold` / `text_threshold`: GroundingDINO thresholds (open-vocab models). `text_threshold` lower → richer per-detection labels; see [Open-vocab / Grounded-SAM](#open-vocab--grounded-sam).
+- `box_threshold` / `text_threshold`: GroundingDINO score cutoffs (open-vocab models); see [Open-vocab / Grounded-SAM](#open-vocab--grounded-sam).
 - `gripper_min` / `gripper_max`: grasp models only — jaw-opening bounds in **original-image pixels** (e.g. `gripper_min=20, gripper_max=150`). Server filters out grasps outside the range.
 
 ### Result types
@@ -373,27 +377,20 @@ res = c.predict("grounded-sam", "img.jpg", prompt="cat. remote.")
 print([d.cls for d in res.detections], "→", len(res.masks), "masks")
 ```
 
-**Tuning thresholds** — `box_threshold` filters detections by query score; `text_threshold`
-controls how many prompt tokens land in each label. GroundingDINO only keeps tokens whose
-per-box probability exceeds `text_threshold`, so adjectives often drop out at the default
-(`0.25`), leaving just the noun. Lower it to keep the full phrase:
+**Tuning thresholds** — each box is scored against every `.`-separated phrase and named after
+the best one, so a label is always a whole phrase (`"canned coffee"`, never a fragment of it).
+The box is kept when that score is above `box_threshold` (default `0.3`) **and** above
+`text_threshold` (default `0.25`); with the defaults only `box_threshold` matters, and
+`text_threshold` changes the result only when you set it above `box_threshold`.
 
 ```python
-# Default text_threshold (0.25): the adjective is dropped → label "coffee"
-res = c.predict("grounding-dino", "coffee.jpg", prompt="canned coffee")
-print(sorted({d.cls for d in res.detections}))      # ['coffee']
-
-# Lower text_threshold keeps more tokens → label "canned coffee"
-res = c.predict("grounding-dino", "coffee.jpg", prompt="canned coffee", text_threshold=0.15)
-print(sorted({d.cls for d in res.detections}))      # ['canned coffee']
-
 # box_threshold raises/lowers the detection cutoff (fewer/more boxes)
-res = c.predict("grounding-dino", "coffee.jpg", prompt="canned coffee",
-                box_threshold=0.35, text_threshold=0.15)
+res = c.predict("grounding-dino", "coffee.jpg", prompt="canned coffee. cup.", box_threshold=0.35)
 ```
 
-Both apply to `grounding-dino`, `grounded-sam`, and `grasp-gd`. `None` (default) defers to
-the model's manifest value.
+Both apply to `grounding-dino`, `grounded-sam`, `grasp-gd` and the GroundingDINO pass of the
+`gdino-siglip*` / `rfdetr-gdino*` models. `None` (default) defers to the model's manifest value.
+Every option, with real outputs: <https://mtbui2010.github.io/vision_serve/clients/python/>.
 
 ### Depth estimation
 

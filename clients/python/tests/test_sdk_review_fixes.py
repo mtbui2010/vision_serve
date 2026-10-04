@@ -55,6 +55,15 @@ class _Recorder:
                 if rec.mode == "disconnect":
                     self.connection.shutdown(socket.SHUT_RDWR)
                     return
+                if rec.mode in ("busy", "bad"):  # the server's 503 + Retry-After, and a plain 400
+                    payload = json.dumps({"error": "queue full" if rec.mode == "busy" else "bad box"}).encode()
+                    self.send_response(503 if rec.mode == "busy" else 400)
+                    if rec.mode == "busy":
+                        self.send_header("Retry-After", "1")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    return
                 payload = json.dumps(rec.reply).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -184,6 +193,44 @@ def test_s3_dropped_connection_is_a_visionserve_error(mode):
             Client(r.url, timeout=5).predict("m", _img())
     finally:
         r.close()
+
+
+@pytest.mark.parametrize("mode,status,retry_after", [("busy", 503, 1.0), ("bad", 400, None)])
+def test_s3_status_and_retry_after_on_the_error(mode, status, retry_after):
+    r = _Recorder(mode=mode)
+    try:
+        with pytest.raises(VisionServeError) as ei:
+            Client(r.url, timeout=5).predict("m", _img())
+        assert ei.value.status == status
+        assert ei.value.retry_after == retry_after
+    finally:
+        r.close()
+
+
+def test_s3_python_m_visionserve_exits_nonzero_on_error():
+    import subprocess
+    root = str(Path(__file__).resolve().parents[1])
+    env = dict(os.environ, PYTHONPATH=root + os.pathsep + os.environ.get("PYTHONPATH", ""))
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()  # nothing listens there: the request fails to connect
+    p = subprocess.run([sys.executable, "-m", "visionserve", "--host", "http://127.0.0.1:%d" % port, "health"],
+                       env=env, capture_output=True, text=True, timeout=60)
+    assert p.returncode == 1, p.stderr
+    assert "error:" in p.stderr
+    p = subprocess.run([sys.executable, "-m", "visionserve", "--version"], env=env, capture_output=True,
+                       text=True, timeout=60)
+    assert p.returncode == 0
+
+
+def test_s3_retry_after_parsing():
+    from visionserve.client import _retry_after
+    assert _retry_after({"Retry-After": "2"}) == 2.0
+    for bad in ({}, {"Retry-After": "Wed, 21 Oct 2015 07:28:00 GMT"}, {"Retry-After": "-1"},
+                {"Retry-After": "nan"}, {"Retry-After": "inf"}, None):
+        assert _retry_after(bad) is None
+    assert VisionServeError("x").retry_after is None
 
 
 # --------------------------------------------------------------------------------------------
