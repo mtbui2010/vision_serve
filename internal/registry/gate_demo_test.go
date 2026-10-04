@@ -312,6 +312,100 @@ func TestGate_ComposedModels(t *testing.T) {
 	})
 }
 
+// TestGate_PartlyComposedModel covers a model with weights of its own AND a session borrowed from
+// another model's directory (rfdetr-textalign-*: own detector + head, text tower in
+// ../siglip-text/). Its own files go through source_url + pins; the borrowed one is admitted
+// through its owner, like a composed model's. Before, verified mode refused these: the borrowed
+// role had no pin in this manifest, and the owner's external data (model.onnx.data) could not be
+// pinned here at all, since sha256_files may only name files inside the model directory.
+func TestGate_PartlyComposedModel(t *testing.T) {
+	const audited = "https://huggingface.co/onnx-community/grounding-dino-tiny-ONNX/" // no recorded digests
+
+	setup := func(t *testing.T) (root string, m *Manifest) {
+		t.Helper()
+		root = t.TempDir()
+		depDir := filepath.Join(root, "text-tower")
+		if err := os.MkdirAll(depDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, depDigest := writeWeight(t, depDir, "model.onnx", []byte("text graph"))
+		_, dataDigest := writeWeight(t, depDir, "model.onnx.data", []byte("text weights"))
+		dep := "name: text-tower\ntask: embed\nlicense: Apache-2.0\nsource_url: " + audited + "\n" +
+			"sha256:\n  model: " + depDigest + "\nsha256_files:\n  model.onnx.data: " + dataDigest + "\n" +
+			"files:\n  model: model.onnx\ninput:\n  width: 64\n  height: 1\n  layout: NCHW\nruntime:\n  prefer: [cpu]\n"
+		if err := os.WriteFile(filepath.Join(depDir, "manifest.yaml"), []byte(dep), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		dir := filepath.Join(root, "partly")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		_, own := writeWeight(t, dir, "detector.onnx", []byte("own detector"))
+		m = &Manifest{Name: "partly-composed", License: "Apache-2.0", Task: "open_vocab", SourceURL: audited,
+			Files:  map[string]string{"rfdetr": "detector.onnx", "text": "../text-tower/model.onnx"},
+			SHA256: SHA256Field{byRole: map[string]string{"rfdetr": own}}, dir: dir}
+		m.Input.Width, m.Input.Height = 512, 512
+		m.Input.Layout = "NCHW"
+		m.Runtime.Prefer = []string{"cpu"}
+		return root, m
+	}
+
+	t.Run("admitted", func(t *testing.T) {
+		_, m := setup(t)
+		EnableVerifiedMode()
+		defer DisableVerifiedMode()
+		if err := m.VerifyWeights(); err != nil {
+			t.Fatalf("own pinned files + an admitted dependency's declared file must be admitted, got: %v", err)
+		}
+	})
+
+	t.Run("own_file_unpinned_refused", func(t *testing.T) {
+		_, m := setup(t)
+		m.SHA256 = SHA256Field{byRole: map[string]string{"other": strings.Repeat("ab", 32)}}
+		EnableVerifiedMode()
+		defer DisableVerifiedMode()
+		err := m.VerifyWeights()
+		if err == nil || !strings.Contains(err.Error(), `role "rfdetr" has no sha256`) {
+			t.Fatalf("an unpinned OWN role must still be refused, got: %v", err)
+		}
+	})
+
+	t.Run("tampered_dependency_refused", func(t *testing.T) {
+		root, m := setup(t)
+		if err := os.WriteFile(filepath.Join(root, "text-tower", "model.onnx.data"), []byte("swapped"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		EnableVerifiedMode()
+		defer DisableVerifiedMode()
+		err := m.VerifyWeights()
+		if err == nil || !strings.Contains(err.Error(), "is not admitted") {
+			t.Fatalf("a dependency whose pinned bytes changed must refuse the model, got: %v", err)
+		}
+	})
+
+	t.Run("undeclared_borrowed_file_refused", func(t *testing.T) {
+		root, m := setup(t)
+		if err := os.WriteFile(filepath.Join(root, "text-tower", "stray.onnx"), []byte("unvetted"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		m.Files["text"] = "../text-tower/stray.onnx"
+		EnableVerifiedMode()
+		defer DisableVerifiedMode()
+		err := m.VerifyWeights()
+		if err == nil || !strings.Contains(err.Error(), "does not declare") {
+			t.Fatalf("borrowing a file its owner does not declare must be refused, got: %v", err)
+		}
+	})
+
+	t.Run("default_gate_unchanged", func(t *testing.T) {
+		_, m := setup(t)
+		if err := m.VerifyWeights(); err != nil {
+			t.Fatalf("default gate: %v", err)
+		}
+	})
+}
+
 // setAllowlist sets the package-global VerifiedSourcePrefixes for a test and returns a
 // restore func (call via defer) so other tests see the default empty allowlist.
 func setAllowlist(prefixes []string) func() {

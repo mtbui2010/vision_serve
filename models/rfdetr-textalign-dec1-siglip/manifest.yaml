@@ -53,7 +53,7 @@ files:
   text:   ../siglip-text/model.onnx
   # ENABLED: method "exact" (the default when a request names no method) runs on ONNX Runtime
   # instead of scalar Go. head.onnx is proj.bin exported as a graph. It is NOT committed (*.onnx
-  # is gitignored) and NOT on the HF catalog, so generate it once per checkout, from the repo root:
+  # is gitignored) and only downloaded by `visionserve pull`, so generate it once per checkout, from the repo root:
   #
   #   python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py
   #

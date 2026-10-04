@@ -91,7 +91,7 @@ func longestLedgerMatch(src string) *registry.LedgerEntry {
 // loader takes, so the rendered YAML shape is checked too.
 func TestRenderedManifestPinsEveryPinnedFile(t *testing.T) {
 	for _, e := range builtin {
-		if len(e.VirtualFiles) > 0 {
+		if e.composed() {
 			continue // composed: the pins live in the dependencies
 		}
 		var pinned []File

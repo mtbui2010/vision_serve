@@ -90,12 +90,17 @@ every shipped entry prefers `[cuda, cpu]` (TensorRT is opt-in, see [Engine](engi
 	},
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/catalog.go#L141-L170)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/catalog.go#L156-L185)
 
 *Composed* entries such as `grounded-sam`, `rfdetr-gdino-siglip` or `grasp-rfdetr` download
 nothing. They list `Dependencies` and `VirtualFiles`, a role-to-path map that points into the
 sibling folders (`../grounding-dino/model-fixedmask.onnx`), so the big weights exist once on
-disk. Some entries also accept `Aliases` (`groundingdino`, `gdino` for `grounding-dino`); the
+disk. *Partly composed* entries set both `Files` and `VirtualFiles`: the four
+`rfdetr-textalign-*` models download their own detector, `proj.bin` and `head.onnx` from one
+folder each of [`mtbui2010/rfdetr-textalign-ONNX`](https://huggingface.co/mtbui2010/rfdetr-textalign-ONNX)
+(`HFSubdir`), and borrow the text tower from `../clip-text/` or `../siglip-text/`. Their manifest
+pins only their own files. In verified mode the borrowed tower is admitted through the model that
+owns it, as for a composed entry. Some entries also accept `Aliases` (`groundingdino`, `gdino` for `grounding-dino`); the
 model is always installed under its main name.
 
 The `internal/catalog/labels` folder holds the two class-name lists that are small enough to
@@ -227,7 +232,7 @@ it (416) simply get a fresh download.
 		}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L152-L164)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L160-L172)
 
 Unpinned files restart from zero: without a pin, nothing would notice a prefix that came from a
 different upstream version than the rest.
@@ -284,7 +289,7 @@ edited by hand (kept; `--force` regenerates).
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L191-L206)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/pull.go#L199-L214)
 
 The pins land in the manifest too (`sha256:` for the ONNX sessions, `sha256_files:` for side
 files such as `model.onnx.data` or a tokenizer), so the registry re-checks the bytes every time

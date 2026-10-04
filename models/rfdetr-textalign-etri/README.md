@@ -110,9 +110,11 @@ relative path and pins their SHA-256.
 | — | `proj.bin` (512 KB, here) | the trained projection |
 | `head` | `head.onnx` (~0.5 MB, here) | `proj.bin` exported as an ONNX graph: method `exact` on ONNX Runtime, same outputs as the Go head (enabled with `runtime.threads: {head: 1}`) |
 
-`head.onnx` is **generated locally, not committed, and not on the HF catalog** (no
-`rfdetr-textalign-*` model has a catalog entry). Generate it once per checkout and again whenever
-`proj.bin` changes — a stale one is refused per request:
+`head.onnx` is **not committed**. `visionserve pull rfdetr-textalign-etri` downloads it (and the
+detector, the explain graph as `detector-qf.onnx`, and `clip-text` as a dependency) from
+[`mtbui2010/rfdetr-textalign-ONNX`](https://huggingface.co/mtbui2010/rfdetr-textalign-ONNX). In a
+checkout, generate it once and again whenever `proj.bin` changes — a stale one is refused per
+request:
 
 ```sh
 python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py --proj models/rfdetr-textalign-etri/proj.bin

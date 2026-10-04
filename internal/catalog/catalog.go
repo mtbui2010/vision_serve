@@ -82,7 +82,12 @@ type Entry struct {
 
 	// HFRepo is the HuggingFace repo id, e.g. "PierreMarieCurie/rf-detr-onnx".
 	HFRepo string
-	Files  []File
+	// HFSubdir, when set, is the folder of HFRepo that holds this entry's files (each
+	// File.HFFilename still gives the full path, and must lie under it). It narrows SourceURL to
+	// that folder, so one repo can host several models — under different licences — and the
+	// registry's ledger, which matches by the longest URL prefix, audits each folder on its own.
+	HFSubdir string
+	Files    []File
 
 	// Manifest fields (mirrors registry.Manifest).
 	InputWidth  int
@@ -107,6 +112,9 @@ type Entry struct {
 
 	RuntimePrefer     []string
 	IdleUnloadSeconds int
+	// RuntimeThreads is the manifest's runtime.threads: role → ONNX Runtime intra-op threads for
+	// that role's session. Nil leaves every role on the default. Keys must be roles of files:.
+	RuntimeThreads map[string]int
 
 	// Verified is false when the exact HF source (filenames/license) could not
 	// be fully confirmed; `pull` warns the user before downloading such a model.
@@ -117,9 +125,12 @@ type Entry struct {
 	// Dependencies lists model names that must already be downloaded before this
 	// virtual model can be "pulled" (e.g. grounded-sam needs grounding-dino + mobile-sam).
 	Dependencies []string
-	// VirtualFiles, if non-nil, makes Pull skip all network downloads and instead
-	// write a manifest whose files: block contains these role→relative-path pairs
-	// (relative to <modelsDir>/<name>/). Dependencies are checked first.
+	// VirtualFiles are role→relative-path pairs (relative to <modelsDir>/<name>/) that point into
+	// a dependency's directory, written into the manifest's files: block. Dependencies are pulled
+	// and checked first. An entry with VirtualFiles and no Files is COMPOSED: it downloads nothing
+	// and its pins live in its dependencies (grounded-sam). An entry with both is PARTLY composed:
+	// it downloads and pins its own Files, and borrows the rest (rfdetr-textalign-*: own detector
+	// and head, a shared text tower in ../siglip-text/).
 	VirtualFiles map[string]string
 
 	// Grasp-pipeline fields (architecture "grasp").
@@ -135,6 +146,10 @@ type Entry struct {
 	// Instance: optional one-shot detection config. Nil means model does not accept template prompts.
 	Instance *registry.InstanceConfig
 }
+
+// textalignRepo hosts the rfdetr-textalign-* models (one folder each) and the clip-text tower
+// two of them need. One repo, several licences: see Entry.HFSubdir.
+const textalignRepo = "mtbui2010/rfdetr-textalign-ONNX"
 
 // builtin is the curated catalog. Keep entries permissive-only.
 var builtin = []Entry{
@@ -654,6 +669,186 @@ var builtin = []Entry{
 		RuntimePrefer:     []string{"cuda", "cpu"},
 		IdleUnloadSeconds: 300,
 		Verified:          true,
+	},
+	{
+		// The text half of CLIP ViT-B/32 (models/clip ships the image half). First-party export,
+		// published next to the textalign models that need it: no public ONNX of it existed.
+		Name:         "clip-text",
+		Task:         "embed",
+		License:      "MIT",
+		Architecture: "clip-text",
+		Description:  "CLIP ViT-B/32 text tower + pure-Go BPE tokenizer — 512-d text embeddings, same space as clip (MIT, OpenAI).",
+		HFRepo:       textalignRepo,
+		HFSubdir:     "clip-text",
+		Files: []File{
+			{Role: "model", HFFilename: "clip-text/model.onnx", LocalFilename: "model.onnx", ManifestRole: "model", SHA256: "a104b96e1a9ce466e24dac4e32f406ffc412eb1a459049b4040eab97b196b580"},
+			// The BPE tokenizer reads these two from the model directory (internal/models/clip).
+			{Role: "vocab", HFFilename: "clip-text/vocab.json", LocalFilename: "vocab.json", SHA256: "5047b556ce86ccaf6aa22b3ffccfc52d391ea4accdab9c2f2407da5b742d4363"},
+			{Role: "merges", HFFilename: "clip-text/merges.txt", LocalFilename: "merges.txt", SHA256: "f526393189112391ce6f9795d4695f704121ce452c3aad1f5335cc41337eba85"},
+			// MIT asks for the notice to travel with copies.
+			{Role: "license", HFFilename: "clip-text/LICENSE", LocalFilename: "LICENSE", SHA256: "987e63b32f6c89ff5160e429458a872ff048e6860b590a3912e938f9da8f14db"},
+		},
+		// No image input: the validator needs width/height > 0, so these describe the token input
+		// (77 = CLIP's context length). Nothing reads them.
+		InputWidth:        77,
+		InputHeight:       1,
+		InputLayout:       "NCHW",
+		PostprocessType:   "embed",
+		RuntimePrefer:     []string{"cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		Verified:          true,
+		Note:              "Input input_ids [N,77] int64 (exported from openai/clip-vit-base-patch32 CLIPTextModelWithProjection, opset 18); output text_embeds [N,512].",
+	},
+	{
+		// Text-aligned open-vocabulary heads on RF-DETR Small (internal/models/textalign). Each
+		// downloads its own detector, projection and head.onnx, and borrows a text tower from a
+		// dependency. The generated manifests mirror models/rfdetr-textalign-*/manifest.yaml in
+		// the repo (TestTextalignEntriesMatchRepoManifests).
+		Name:         "rfdetr-textalign-dec1",
+		Task:         "open_vocab",
+		License:      "Apache-2.0",
+		Architecture: "rfdetr-textalign",
+		Description:  "RF-DETR Small (22 tabletop classes, partial fine-tune) + CLIP-aligned head — open-vocabulary; tuned for method=gated.",
+		HFRepo:       textalignRepo,
+		HFSubdir:     "dec1",
+		Dependencies: []string{"clip-text"},
+		VirtualFiles: map[string]string{"text": "../clip-text/model.onnx"},
+		Files: []File{
+			{Role: "rfdetr", HFFilename: "dec1/detector.onnx", LocalFilename: "detector.onnx", ManifestRole: "rfdetr", SHA256: "cd4cb2166978635de3ab2323ed0d7198cc1ae5b77dc6e21c4c90845877579125"},
+			{Role: "head", HFFilename: "dec1/head.onnx", LocalFilename: "head.onnx", ManifestRole: "head", SHA256: "ab6db90d0e921931be6303d06c2691ee777ce56fd9a7750e7741f9a8d667b3ab"},
+			{Role: "proj", HFFilename: "dec1/proj.bin", LocalFilename: "proj.bin", SHA256: "1d81d692de4c7cd3b3345cfe317afd78f752be0347181798847709cc3a2aff2b"},
+			{Role: "labels", HFFilename: "dec1/labels.txt", LocalFilename: "labels.txt", SHA256: "fdd0d4e9dc1965b37e46959d1fd2f3964fb407e5b176ea84a357dbeb921d183e"},
+			{Role: "templates", HFFilename: "dec1/templates.txt", LocalFilename: "templates.txt", SHA256: "dd37dd428e8c0700e26b86a6c7701a9e50a26a9c32b932febdbcb9ebb45c663c"},
+		},
+		InputWidth:      512,
+		InputHeight:     512,
+		InputLayout:     "NCHW",
+		Letterbox:       false, // squash, as RF-DETR is trained (square_resize_div_64) — BUGS_TO_FIX.md #1
+		Normalize:       &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		PostprocessType: "detr",
+		BoxFormat:       "cxcywh",
+		// F1 peak (0.768) for method gated on the 62 held-out images. Under the default method
+		// exact the thresholded score is head B's, on another scale: few or no detections.
+		ConfThreshold:     0.35,
+		MaxDetections:     300,
+		LabelsFile:        "labels.txt", // the detector's own order: gated finds N/A by position
+		RuntimePrefer:     []string{"cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		RuntimeThreads:    map[string]int{"head": 1}, // ~1 ms head; ORT's default pool slows the detector ~3x on CPU
+		Verified:          true,
+		Note:              "Detector input 'input' [1,3,512,512]; outputs dets [1,300,4], labels [1,300,23], query_feats [1,300,256] (in that order). proj.bin P [512,256]; head.onnx is proj.bin as a graph.",
+	},
+	{
+		Name:         "rfdetr-textalign-dec1-siglip",
+		Task:         "open_vocab",
+		License:      "Apache-2.0",
+		Architecture: "rfdetr-textalign",
+		Description:  "RF-DETR Small (17 tabletop classes, 5 held out) + SigLIP-distilled head — open-vocabulary; tuned for method=gated.",
+		HFRepo:       textalignRepo,
+		HFSubdir:     "dec1-siglip",
+		Dependencies: []string{"siglip-text"},
+		VirtualFiles: map[string]string{"text": "../siglip-text/model.onnx"},
+		Files: []File{
+			{Role: "rfdetr", HFFilename: "dec1-siglip/detector.onnx", LocalFilename: "detector.onnx", ManifestRole: "rfdetr", SHA256: "7de8ca150390b8e5d64d4541695a6b167c76793fdc0887e60c7e1481572c5a09"},
+			{Role: "head", HFFilename: "dec1-siglip/head.onnx", LocalFilename: "head.onnx", ManifestRole: "head", SHA256: "ec724f1a1c338795e1db37dcb9892d27b8ffb6d1f69f2c47c0c2558f281cce5e"},
+			{Role: "proj", HFFilename: "dec1-siglip/proj.bin", LocalFilename: "proj.bin", SHA256: "302640c92684e78b64e7c0fd89b4f1c2761184408c7735dbb74ab43257372c85"},
+			// 17 base names + N/A — must match the detector's class tensor width (18).
+			{Role: "labels", HFFilename: "dec1-siglip/labels.txt", LocalFilename: "labels.txt", SHA256: "321bf1eb6803aa638016b48b7597f4fd56e73df11c36ebcf52dacbea65daa787"},
+			{Role: "templates", HFFilename: "dec1-siglip/templates.txt", LocalFilename: "templates.txt", SHA256: "dd37dd428e8c0700e26b86a6c7701a9e50a26a9c32b932febdbcb9ebb45c663c"},
+			// All 22 names, for pasting into a prompt; not read by the model.
+			{Role: "vocab", HFFilename: "dec1-siglip/vocab-all22.txt", LocalFilename: "vocab-all22.txt", SHA256: "fdd0d4e9dc1965b37e46959d1fd2f3964fb407e5b176ea84a357dbeb921d183e"},
+		},
+		InputWidth:      512,
+		InputHeight:     512,
+		InputLayout:     "NCHW",
+		Letterbox:       false,
+		Normalize:       &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		PostprocessType: "detr",
+		BoxFormat:       "cxcywh",
+		// Inherited from rfdetr-textalign-dec1 (method gated); not re-tuned for this detector.
+		ConfThreshold:     0.35,
+		MaxDetections:     300,
+		LabelsFile:        "labels.txt",
+		RuntimePrefer:     []string{"cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		RuntimeThreads:    map[string]int{"head": 1},
+		Verified:          true,
+		Note:              "Detector outputs dets [1,300,4], labels [1,300,18], query_feats [1,300,256]. proj.bin P [768,256] in siglip-text space.",
+	},
+	{
+		Name:         "rfdetr-textalign-dec1-siglip-prod",
+		Task:         "open_vocab",
+		License:      "Apache-2.0",
+		Architecture: "rfdetr-textalign",
+		Description:  "RF-DETR Small (22 tabletop classes, partial fine-tune) + SigLIP-space head — open-vocabulary, conf_threshold 0.001.",
+		HFRepo:       textalignRepo,
+		HFSubdir:     "dec1-siglip-prod",
+		Dependencies: []string{"siglip-text"},
+		VirtualFiles: map[string]string{"text": "../siglip-text/model.onnx"},
+		Files: []File{
+			// Same bytes as dec1/detector.onnx.
+			{Role: "rfdetr", HFFilename: "dec1-siglip-prod/detector.onnx", LocalFilename: "detector.onnx", ManifestRole: "rfdetr", SHA256: "cd4cb2166978635de3ab2323ed0d7198cc1ae5b77dc6e21c4c90845877579125"},
+			{Role: "head", HFFilename: "dec1-siglip-prod/head.onnx", LocalFilename: "head.onnx", ManifestRole: "head", SHA256: "3f19241baa19cafb2f673a101f639aba55f445a944d055516745ab966e7fb804"},
+			{Role: "proj", HFFilename: "dec1-siglip-prod/proj.bin", LocalFilename: "proj.bin", SHA256: "57ceaa1539bca398f3e495353f1761422594c11b8c683064a650a4fc6dcea91c"},
+			{Role: "labels", HFFilename: "dec1-siglip-prod/labels.txt", LocalFilename: "labels.txt", SHA256: "fdd0d4e9dc1965b37e46959d1fd2f3964fb407e5b176ea84a357dbeb921d183e"},
+			{Role: "templates", HFFilename: "dec1-siglip-prod/templates.txt", LocalFilename: "templates.txt", SHA256: "dd37dd428e8c0700e26b86a6c7701a9e50a26a9c32b932febdbcb9ebb45c663c"},
+		},
+		InputWidth:        512,
+		InputHeight:       512,
+		InputLayout:       "NCHW",
+		Letterbox:         false,
+		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		PostprocessType:   "detr",
+		BoxFormat:         "cxcywh",
+		ConfThreshold:     0.001, // as the local manifest: every query comes back, the client thresholds
+		MaxDetections:     300,
+		LabelsFile:        "labels.txt",
+		RuntimePrefer:     []string{"cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		RuntimeThreads:    map[string]int{"head": 1},
+		Verified:          true,
+		Note:              "Detector outputs dets [1,300,4], labels [1,300,23], query_feats [1,300,256]. proj.bin P [768,256] in siglip-text space.",
+	},
+	{
+		Name:         "rfdetr-textalign-etri",
+		Task:         "open_vocab",
+		License:      "Apache-2.0",
+		Architecture: "rfdetr-textalign",
+		Description:  "Frozen rfdetr-small-etri (22 tabletop classes) + CLIP-aligned head — open-vocabulary, with /api/explain.",
+		HFRepo:       textalignRepo,
+		HFSubdir:     "etri",
+		Dependencies: []string{"clip-text"},
+		VirtualFiles: map[string]string{"text": "../clip-text/model.onnx"},
+		Files: []File{
+			// The qf export minus cross_attn_weights: 59 MB per inference the head never reads.
+			{Role: "rfdetr", HFFilename: "etri/detector-noattn.onnx", LocalFilename: "detector-noattn.onnx", ManifestRole: "rfdetr", SHA256: "efcf3af08d5e0512095946b69866425645fca81dc5e05aaea775eff9abc11b4c"},
+			// The un-stripped export, for /api/explain only: not in textalign's Roles(), so it is
+			// opened lazily on the first explain call.
+			{Role: "explain", HFFilename: "etri/detector-qf.onnx", LocalFilename: "detector-qf.onnx", ManifestRole: "explain", SHA256: "5d87e22067458c9af1f679a8eeb85588569a84881a060ac0f1d8f8f252379818"},
+			{Role: "head", HFFilename: "etri/head.onnx", LocalFilename: "head.onnx", ManifestRole: "head", SHA256: "5484c2cdd32deb74776b9b8d7b9621354a330ac417eee2ba4cf0b497333f3c38"},
+			{Role: "proj", HFFilename: "etri/proj.bin", LocalFilename: "proj.bin", SHA256: "314302bf7549d85ef2467375fa2d415dca2eb1dbfee6bf6e3f8efddafd89392b"},
+			{Role: "labels", HFFilename: "etri/labels.txt", LocalFilename: "labels.txt", SHA256: "fdd0d4e9dc1965b37e46959d1fd2f3964fb407e5b176ea84a357dbeb921d183e"},
+			{Role: "templates", HFFilename: "etri/templates.txt", LocalFilename: "templates.txt", SHA256: "dd37dd428e8c0700e26b86a6c7701a9e50a26a9c32b932febdbcb9ebb45c663c"},
+		},
+		InputWidth:      512,
+		InputHeight:     512,
+		InputLayout:     "NCHW",
+		Letterbox:       false,
+		Normalize:       &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		PostprocessType: "detr",
+		BoxFormat:       "cxcywh",
+		// F1 peak (0.730) for method exact on the 62 held-out images; this head's confidence
+		// never reaches 0.5, so the detector's usual 0.5 returns nothing.
+		ConfThreshold:     0.28,
+		MaxDetections:     300,
+		LabelsFile:        "labels.txt",
+		RuntimePrefer:     []string{"cuda", "cpu"},
+		IdleUnloadSeconds: 300,
+		RuntimeThreads:    map[string]int{"head": 1},
+		Explain: &registry.ExplainConfig{Type: "attention", Role: "explain",
+			Outputs: map[string]string{"attention": "cross_attn_weights"}, SpatialStride: 16},
+		Verified: true,
+		Note:     "Detector input 'input' [1,3,512,512]; outputs dets, labels [1,300,23], query_feats [1,300,256]. proj.bin P [512,256], trained with the unit-norm penalty.",
 	},
 	{
 		Name:         "background",

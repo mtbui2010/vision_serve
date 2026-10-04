@@ -166,8 +166,9 @@ type instanceDoc struct {
 }
 
 type runtimeDoc struct {
-	Prefer            []string `yaml:"prefer,flow,omitempty"`
-	IdleUnloadSeconds int      `yaml:"idle_unload_seconds,omitempty"`
+	Prefer            []string       `yaml:"prefer,flow,omitempty"`
+	IdleUnloadSeconds int            `yaml:"idle_unload_seconds,omitempty"`
+	Threads           map[string]int `yaml:"threads,omitempty"`
 }
 
 // manifestDoc maps the entry onto the manifest schema.
@@ -184,15 +185,13 @@ func (e Entry) manifestDoc() manifestDoc {
 		Segmenter:    e.Segmenter,
 		Labels:       e.LabelsFile,
 	}
-	// model_file (single-file) vs files: map (multi-session, or virtual: paths into sibling model
-	// directories).
-	if len(e.VirtualFiles) > 0 {
-		d.Files = make(map[string]string, len(e.VirtualFiles))
+	// model_file (single-file) vs files: map (multi-session: the entry's own files, plus virtual
+	// paths into sibling model directories).
+	if mfs := e.manifestFiles(); len(e.VirtualFiles) > 0 || len(mfs) > 0 {
+		d.Files = make(map[string]string, len(e.VirtualFiles)+len(mfs))
 		for role, rel := range e.VirtualFiles {
 			d.Files[role] = rel
 		}
-	} else if mfs := e.manifestFiles(); len(mfs) > 0 {
-		d.Files = make(map[string]string, len(mfs))
 		for _, f := range mfs {
 			d.Files[f.ManifestRole] = f.LocalFilename
 		}
@@ -219,9 +218,14 @@ func (e Entry) manifestDoc() manifestDoc {
 	if in := e.Instance; in != nil {
 		d.Instance = &instanceDoc{MaxTemplates: in.MaxTemplates, SimThreshold: in.SimThreshold, PatchSize: in.PatchSize}
 	}
-	d.Runtime = runtimeDoc{Prefer: e.RuntimePrefer, IdleUnloadSeconds: e.IdleUnloadSeconds}
+	d.Runtime = runtimeDoc{Prefer: e.RuntimePrefer, IdleUnloadSeconds: e.IdleUnloadSeconds,
+		Threads: e.RuntimeThreads}
 	return d
 }
+
+// composed reports whether the entry downloads nothing and only wires together files its
+// dependencies own (grounded-sam): its manifest declares no pins and no source of its own.
+func (e Entry) composed() bool { return len(e.VirtualFiles) > 0 && len(e.Files) == 0 }
 
 // blockKeys are the top-level keys the generated file sets off with a blank line, for reading.
 var blockKeys = map[string]bool{
@@ -261,9 +265,16 @@ func commentLines(text string) string {
 // verified-source allowlist both match by URL prefix, and the ledger records repo roots in
 // exactly this form. Entries served from DirectURL have no single canonical repo page, so
 // they get no source_url and stay outside verified mode until one is recorded by hand.
+//
+// An entry with HFSubdir gets that folder's page ("https://huggingface.co/<repo>/tree/main/<dir>/"),
+// which still starts with the repo root, so a ledger record for the whole repo covers it unless a
+// longer record for the folder says otherwise.
 func (e Entry) SourceURL() string {
 	if e.HFRepo == "" {
 		return ""
+	}
+	if e.HFSubdir != "" {
+		return "https://huggingface.co/" + e.HFRepo + "/tree/main/" + strings.Trim(e.HFSubdir, "/") + "/"
 	}
 	return "https://huggingface.co/" + e.HFRepo + "/"
 }
@@ -273,11 +284,15 @@ func (e Entry) SourceURL() string {
 // role→digest map for a multi-session one. Side files that carry no ManifestRole (external data,
 // a vocab) are not in the manifest's `files:` map; their pins go in `sha256_files:`
 // (manifestSHA256Files).
+//
+// A partly composed entry (own Files + VirtualFiles) pins its own files only: the files it
+// borrows are pinned by the dependency that owns them, and verified mode admits them through that
+// dependency (registry verifyWeights).
 func (e Entry) manifestSHA256() any {
-	if len(e.VirtualFiles) > 0 {
+	if e.composed() {
 		return nil // composed model: the pins live in the dependencies it references
 	}
-	if mf := e.modelFile(); mf != "" {
+	if mf := e.modelFile(); mf != "" && len(e.VirtualFiles) == 0 {
 		for _, f := range e.Files {
 			if f.LocalFilename == mf && f.SHA256 != "" {
 				return f.SHA256
@@ -302,10 +317,13 @@ func (e Entry) manifestSHA256() any {
 // tokenizers, labels. Without it those bytes were checked once at download and never again; with
 // it the registry re-verifies them at load like the session weights. nil when there are none.
 func (e Entry) manifestSHA256Files() map[string]string {
-	if len(e.VirtualFiles) > 0 {
+	if e.composed() {
 		return nil
 	}
 	mf := e.modelFile()
+	if len(e.VirtualFiles) > 0 {
+		mf = "" // files: map, never model_file (manifestDoc)
+	}
 	var side map[string]string
 	for _, f := range e.Files {
 		if f.SHA256 != "" && f.ManifestRole == "" && f.LocalFilename != mf {

@@ -70,6 +70,11 @@ func goldenEntries() []Entry {
 func TestRenderManifestMatchesLegacyRenderer(t *testing.T) {
 	for _, e := range goldenEntries() {
 		t.Run(e.Name, func(t *testing.T) {
+			if postLegacy(e) {
+				// The frozen renderer predates these fields and cannot express them;
+				// TestTextalignEntriesMatchRepoManifests is these entries' reference instead.
+				t.Skip("uses fields added after the legacy renderer (own files + VirtualFiles, runtime.threads)")
+			}
 			// Both files are loaded from the SAME path, so the unexported dir field compares equal too.
 			p := filepath.Join(t.TempDir(), e.Name, "manifest.yaml")
 			legacy := loadRendered(t, p, legacyRenderManifest(e))
@@ -214,6 +219,13 @@ func TestPullRegeneratesLegacyGeneratedManifest(t *testing.T) {
 	if isUneditedGenerated(strings.Replace(want, "letterbox: false", "letterbox: true", 1)) {
 		t.Fatal("an edited new rendering is still treated as unedited")
 	}
+}
+
+// postLegacy reports whether e uses a field the frozen legacy renderer never knew: a partly
+// composed entry (own Files and VirtualFiles) or runtime.threads. (HFSubdir only changes
+// SourceURL(), which the legacy renderer calls too.)
+func postLegacy(e Entry) bool {
+	return (len(e.Files) > 0 && len(e.VirtualFiles) > 0) || len(e.RuntimeThreads) > 0
 }
 
 // render is RenderManifest for tests: a rendering error fails the test.
