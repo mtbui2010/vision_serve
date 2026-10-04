@@ -82,6 +82,8 @@ nav:
       - Pipelines: architecture/pipelines.md
       - Catalog and installing models: architecture/catalog.md
       - Clients and the converter: architecture/clients.md
+  - Guides:
+      - Inspect and verify a model: guides/inspect.md
   - Model gallery: gallery.md
   - Go for this project:
       - go/index.md

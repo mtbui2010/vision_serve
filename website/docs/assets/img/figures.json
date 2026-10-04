@@ -371,6 +371,99 @@
       "device": "gpu:0"
     },
     {
+      "file": "inspect-b1-177015.jpg",
+      "figure": "Tier B1: the server's input tensor vs the training preprocessing, three deliberate mistakes",
+      "model": [
+        "rf-detr",
+        "rf-detr-letterbox",
+        "rf-detr-mean05"
+      ],
+      "request": {
+        "endpoint": "/api/preprocess"
+      },
+      "image": {
+        "dataset": "COCO val2017",
+        "coco_id": 177015,
+        "file": "000000177015.jpg",
+        "flickr_url": "http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg",
+        "license": "CC BY 2.0",
+        "credit": "Photo: COCO val2017 #177015, Flickr http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg, CC BY 2.0"
+      },
+      "b1": [
+        {
+          "model": "rf-detr",
+          "case": "correct manifest",
+          "status": "PASS",
+          "summary": "mean|\u0394| 0.24 gray levels (tensor 0.00413), max 4.0 levels, p99 1.0; 9 image(s)",
+          "diagnosis": {},
+          "notes": []
+        },
+        {
+          "model": "rf-detr-letterbox",
+          "case": "manifest says letterbox: true",
+          "status": "FAIL",
+          "summary": "mean|\u0394| 50.32 gray levels (tensor 0.873), max 255.0 levels, p99 255.0; 9 image(s)",
+          "diagnosis": {
+            "letterbox_server": 9
+          },
+          "notes": [
+            "[9/9 images] geometry: the server LETTERBOXES (keeps aspect, pads x=0 y=70) but the reference SQUASHES the whole frame \u2014 set `letterbox: false` in the manifest unless the model was trained letterboxed (e.g. 000000034873.jpg)"
+          ]
+        },
+        {
+          "model": "rf-detr-mean05",
+          "case": "manifest says mean = std = 0.5",
+          "status": "FAIL",
+          "summary": "mean|\u0394| 76.47 gray levels (tensor 0.6), max 211.1 levels, p99 206.7; 9 image(s)",
+          "diagnosis": {
+            "normalisation": 9
+          },
+          "notes": [
+            "[9/9 images] normalisation: the reference looks like ImageNet mean/std (per-channel fit ref = a*server + b: a=[2.18, 2.22, 2.22], b=[0.0665, 0.196, 0.417], r^2>=1.000); the manifest declares mean [0.5, 0.5, 0.5], std [0.5, 0.5, 0.5] (e.g. 000000034873.jpg)"
+          ]
+        },
+        {
+          "model": "rf-detr",
+          "case": "training read photos as BGR",
+          "status": "FAIL",
+          "summary": "mean|\u0394| 26.44 gray levels (tensor 0.457), max 255.0 levels, p99 217.0; 9 image(s)",
+          "diagnosis": {
+            "channel_swap": 9,
+            "normalisation": 9
+          },
+          "notes": [
+            "[9/9 images] channel order: reference channels [0, 1, 2] match server channels [2, 1, 0] \u2014 RGB/BGR swap (e.g. 000000034873.jpg)",
+            "[9/9 images] normalisation: the reference looks like mean ~ [0.565, 0.456, 0.328], std ~ [0.234, 0.225, 0.222] (per-channel fit ref = a*server + b: a=[0.98, 0.996, 1.01], b=[-0.344, 0.00056, 0.352], r^2>=1.000); the manifest declares mean [0.485, 0.456, 0.406], std [0.229, 0.224, 0.225] (e.g. 000000034873.jpg)"
+          ]
+        }
+      ],
+      "b2_c": [
+        {
+          "model": "rf-detr",
+          "b2": {
+            "status": "PASS",
+            "summary": "47/47 matched (100.0%), |\u0394conf| mean 0.00422 max 0.0667, box err mean 0.0706 px max 3.62 px (ref 47 / served 48 dets)"
+          },
+          "c": {
+            "status": "PASS",
+            "summary": "mAP 47.28 ref / 47.62 served (\u0394 +0.34), mAP50 58.59 / 59.13 (\u0394 +0.54); 200 images, 80 classes"
+          }
+        },
+        {
+          "model": "rf-detr-letterbox",
+          "b2": {
+            "status": "WARN",
+            "summary": "43/45 matched (95.6%), |\u0394conf| mean 0.0591 max 0.311, box err mean 1.65 px max 48 px (ref 47 / served 45 dets)"
+          },
+          "c": {
+            "status": "FAIL",
+            "summary": "mAP 47.28 ref / 45.61 served (\u0394 -1.67), mAP50 58.59 / 57.00 (\u0394 -1.59); 200 images, 80 classes"
+          }
+        }
+      ],
+      "eval_set": "/mnt/nas/huggingface/trung_w6/coco/annotations/instances_val2017.json (200 images, 1460 boxes)"
+    },
+    {
       "file": "ocr-paddle-receipt.png",
       "figure": "OCR (text detection + recognition)",
       "model": "paddle-ocr",
