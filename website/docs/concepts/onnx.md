@@ -55,6 +55,18 @@ runtime:
 | `openvino` | Intel | |
 | `cpu` | any | Always appended last. |
 
+**Turning TensorRT on.** The chain an NVIDIA model (`[cuda, cpu]`) actually gets:
+
+| Switch | Chain |
+|---|---|
+| none (default) | `cuda → cpu` |
+| `visionserve serve --tensorrt` (or `run --tensorrt`), or `VISIONSERVE_TENSORRT=1` | `tensorrt → cuda → cpu`: `tensorrt` goes right before `cuda` in every chain that has `cuda`; other chains and manifests that already list `tensorrt` are left alone |
+| `VISIONSERVE_EP=<ep>[,<ep>...]` | **replaces** every chain (CPU still appended) and wins over the two above; `VISIONSERVE_EP=tensorrt` gives `tensorrt → cpu`, without CUDA. Meant for benchmarking |
+
+Without `libnvinfer.so.10` the TensorRT opt-in falls back to CUDA (nothing crashes) and answers
+carry a `hint` saying so. `visionserve version` and the server's start-up log print the chain in
+effect.
+
 If an EP is missing (for example no GPU), ORT falls back silently to the next one. Set
 `VISIONSERVE_TRACE=1` to log which EP each model really loaded on; every answer also carries a
 `device` field (`cpu`, `gpu:0`, `gpu:0+trt`).

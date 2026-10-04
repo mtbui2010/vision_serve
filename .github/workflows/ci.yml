@@ -50,6 +50,19 @@ jobs:
           grep -E -- '--- FAIL|^FAIL|panic:|_test\.go:[0-9]+:' go-test.log | head -40 |
             while IFS= read -r line; do echo "::error::${line}"; done
 
+  mermaid:
+    name: Mermaid diagrams parse
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # GitHub and the docs site render ```mermaid blocks; a parse error shows up only as an
+      # "Unable to render" box, so parse them all here (the README once shipped a broken one).
+      - run: npm install --no-save --no-package-lock mermaid@11 jsdom@24
+      - run: node website/tools/check_mermaid.mjs .
+
   cross-build-edge:
     name: Cross-build edge (linux/arm64)
     runs-on: ubuntu-latest

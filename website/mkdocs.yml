@@ -94,6 +94,7 @@ nav:
       - 7. cgo and build tags: go/07-cgo.md
       - 8. Walkthrough — add a model: go/08-add-a-model.md
   - Reference:
+      - Models and performance: reference/models.md
       - HTTP API: reference/api.md
       - Configuration: reference/configuration.md
       - Manifest format: reference/manifest.md
