@@ -115,7 +115,7 @@ this table also documents the [plain HTTP](http.md) fields. The three exceptions
 | [`dilate`](#dilate) | `int`, pixels | `0` (off) | every model that returns masks | Grow (`> 0`) or shrink (`< 0`) every mask |
 | [`method`](#method) | `str` | `"auto"` / `"exact"` | `background`; `rfdetr-textalign*` | Pick the algorithm |
 | [`bg_max_area`, `fg_min_area`](#bg_max_area-and-fg_min_area) | `float`, % of the photo's area | 50 / 0 | `background` with `method="sam"` or `"automask"` | Which masks count as the support surface |
-| [`grid_size`](#grid_size) | `int` | 16 (`mobile-sam`), 8 (`background`) | `mobile-sam` without a prompt, `background` `method="automask"` | Points per side of the automatic-mask grid (max 64) |
+| [`grid_size`](#grid_size) | `int` | 16 (`mobile-sam`, `grasp`), 8 (`background`) | `mobile-sam` without a prompt, `grasp` without a box, `background` `method="automask"` | Points per side of the automatic-mask grid (max 64) |
 | [`depth`](#depth-an-aligned-depth-image) ¹ | 2-D numpy array | none | `background` (`method="depth"` or `"auto"`) | Your own depth image instead of the MiDaS estimate |
 | [`gripper_min`, `gripper_max`](#gripper_min-and-gripper_max) | `float`, pixels | manifest (10 / 150 on the shipped grasp models) | `grasp`, `grasp-rfdetr`, `grasp-gd` | Allowed jaw opening |
 | [`max_grasps_per_object`](#max_grasps_per_object) ² | `int` | **3** | client side only | Keep the best N grasps per object |
@@ -511,8 +511,9 @@ counts only if it touches the photo's edge and covers at least 5 %. A mask below
 
 The automatic mask generator prompts SAM at an `N × N` grid of points (`N²` decoder runs) and
 keeps the distinct masks. A finer grid finds smaller objects and takes longer. Read by
-`mobile-sam` when it gets no box or point (default 16) and by `background` with
-`method="automask"` (default 8). The server caps it at 64.
+`mobile-sam` when it gets no box or point (default 16), by the class-agnostic `grasp` model when
+it gets no box (default 16), and by `background` with `method="automask"` (default 8). The server
+caps it at 64.
 
 ```python
 from PIL import Image

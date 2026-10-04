@@ -58,7 +58,7 @@ Routes are declared in
 | `roi` | all | `"x,y,w,h"`: run on this crop only; results come back in full-photo pixels |
 | `dilate` | models that return masks | grow (`> 0`) or shrink (`< 0`) every mask by this many pixels |
 | `method` | `background`, `rfdetr-textalign` | `auto`, `depth`, `sam`, `cv`, `automask` / `exact`, `folded`, `gated`, `dual` |
-| `bg_max_area`, `fg_min_area`, `grid_size` | `background`, `mobile-sam` | automatic-mask tuning |
+| `bg_max_area`, `fg_min_area`, `grid_size` | `background`, `mobile-sam` (`grid_size` also `grasp`) | automatic-mask tuning |
 | `claim_threshold`, `crop_temp` | `rfdetr-textalign` with `method=dual` (`crop_temp` also `gdino-siglip`) | open-vocabulary naming tuning |
 | `gripper_min`, `gripper_max` | grasp models | gripper opening range in pixels |
 | `depth` / `depth_base64` (+ `depth_dtype`, `depth_width`, `depth_height`) | `background` | an aligned depth image |

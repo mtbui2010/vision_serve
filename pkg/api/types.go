@@ -119,7 +119,8 @@ type PredictJSONRequest struct {
 	BgMaxArea float64 `json:"bg_max_area,omitempty"`
 	FgMinArea float64 `json:"fg_min_area,omitempty"`
 	// GridSize overrides the MobileSAM automask grid (N×N → N² decoder calls); larger =
-	// catches more small objects but slower. 0 = model default. Used by foreground.
+	// catches more small objects but slower. 0 = model default. Used by mobile-sam (no prompt),
+	// grasp (no box) and background (method automask).
 	GridSize int `json:"grid_size,omitempty"`
 	// Method selects the algorithm for models that offer several (the `background` model:
 	// "auto" | "depth" | "sam" | "cv" | "automask"). "" = model default (auto for background).

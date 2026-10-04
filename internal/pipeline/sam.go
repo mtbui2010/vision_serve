@@ -27,9 +27,9 @@ type MaskInferer interface {
 type SAMBitmaps struct{ Model MaskInferer }
 
 // SegmentBitmaps implements BitmapSegmenter: box prompts when boxes is non-empty, the automatic
-// mask generator (the model's default grid) when it is nil.
+// mask generator when it is nil (the request's grid_size, else the model's default grid).
 func (s SAMBitmaps) SegmentBitmaps(c Call, boxes [][4]float64) ([]models.Mask, []mask.Bitmap, error) {
-	masks, bms, err := s.Model.InferMasks(c.Img, models.Prompt{Boxes: boxes}, c.Runner)
+	masks, bms, err := s.Model.InferMasks(c.Img, segPrompt(c, boxes), c.Runner)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -54,8 +54,15 @@ func (s SAMBitmaps) SegmentEach(c Call, boxes [][4]float64, fn func(m models.Mas
 	if !ok {
 		return nil, false, nil
 	}
-	out, err = me.InferMasksEach(c.Img, models.Prompt{Boxes: boxes}, c.Runner, func(b mobilesam.MaskBitmap) any {
+	out, err = me.InferMasksEach(c.Img, segPrompt(c, boxes), c.Runner, func(b mobilesam.MaskBitmap) any {
 		return fn(b.ToMask(), mask.Bitmap{Data: b.Data, W: b.W, H: b.H})
 	})
 	return out, true, err
+}
+
+// segPrompt is the segmenter's prompt: the boxes to cut out, or none for automatic masks, which
+// then use the request's grid_size (0 = the model's default grid). Only these two fields: the
+// request's text, points and thresholds belong to the pipeline, not to the segmenter.
+func segPrompt(c Call, boxes [][4]float64) models.Prompt {
+	return models.Prompt{Boxes: boxes, GridSize: c.Prompt.GridSize}
 }
