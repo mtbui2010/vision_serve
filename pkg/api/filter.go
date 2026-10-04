@@ -15,8 +15,27 @@ func FilterBySizePct(res Result, minPct, maxPct float64, imgW, imgH int) Result 
 	return FilterBySize(res, minAbs, maxAbs)
 }
 
+// MasksPairDetections reports whether res.Masks is index-aligned with res.Detections: as many
+// masks as detections, and mask i carrying detection i's box. That is how Grounded-SAM and the
+// grasp models return one object (a detection and its mask), and how clients pair them
+// (Result.group_by_class). Every step that filters or reshapes a paired result must keep it
+// paired: one decision per object, applied to the detection and its mask alike.
+func MasksPairDetections(res Result) bool {
+	if len(res.Masks) == 0 || len(res.Masks) != len(res.Detections) {
+		return false
+	}
+	for i := range res.Masks {
+		if res.Masks[i].BBox != res.Detections[i].BBox {
+			return false
+		}
+	}
+	return true
+}
+
 // FilterBySize removes detections and masks whose bounding-box area (w*h, px²) is
-// outside [minSize, maxSize]. Zero means no limit for that bound.
+// outside [minSize, maxSize]. Zero means no limit for that bound. A paired result
+// (MasksPairDetections) stays paired: a mask carries its detection's box, so both get the same
+// decision.
 func FilterBySize(res Result, minSize, maxSize float64) Result {
 	res.Detections = filterDetections(res.Detections, minSize, maxSize)
 	res.Masks = filterMasks(res.Masks, minSize, maxSize)

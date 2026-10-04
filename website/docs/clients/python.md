@@ -436,10 +436,12 @@ computed with `roi` describes the crop.
 #### `dilate`
 
 Grow (`dilate > 0`) or shrink (`dilate < 0`) every returned mask by that many pixels, with a
-square kernel, after the model and after `roi`. `0` or `None` is off. Each mask's `bbox` is
-recomputed to fit the new mask; detections are not changed. Use a positive value for a safety
-margin around an object (to blur it, or to avoid touching it), a negative one to stay safely
-inside it (to sample its colour or depth).
+square kernel, after the model and after `roi`. `0` or `None` is off. Detections are not
+changed. A mask that belongs to a detection (Grounded-SAM, the grasp models: one mask per
+detection, carrying the detection's box) keeps that box, so it stays paired with its detection;
+any other mask (SAM box/point prompts, automatic masks, `background`) gets its `bbox` recomputed
+to fit the new mask. Use a positive value for a safety margin around an object (to blur it, or to
+avoid touching it), a negative one to stay safely inside it (to sample its colour or depth).
 
 ```python
 from PIL import Image
@@ -455,9 +457,9 @@ for dilate in (None, 5, -3):
 ```
 
 ```text
-None mask bbox [281, 109, 35, 78] pixels 1297 | detection bbox [281, 109, 35, 78]
-5 mask bbox [277, 106, 41, 85] pixels 2457 | detection bbox [281, 109, 35, 78]
--3 mask bbox [286, 119, 24, 62] pixels 706 | detection bbox [281, 109, 35, 78]
+None mask bbox [281, 109, 34, 78] pixels 1307 | detection bbox [281, 109, 34, 78]
+5 mask bbox [281, 109, 34, 78] pixels 2477 | detection bbox [281, 109, 34, 78]
+-3 mask bbox [281, 109, 34, 78] pixels 714 | detection bbox [281, 109, 34, 78]
 ```
 
 <figure markdown="span">
@@ -465,14 +467,14 @@ None mask bbox [281, 109, 35, 78] pixels 1297 | detection bbox [281, 109, 35, 78
   <figcaption><code>grounded-sam</code> · prompt='dog.' · dilate=-3, 0, 5 (zoomed in) · 194 ms on gpu:0 · Photo: COCO val2017 #372819 (<a href="http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
-!!! warning "`dilate` breaks the box match between masks and detections"
-    Grounded-SAM and the grasp models give each mask the box of its detection, and some code
-    pairs them by that (`Result.group_by_class` does). After `dilate` the mask boxes differ, so
-    `group_by_class` puts every mask under the label `""`. Worse, with `dilate` **and**
-    `min_size`/`max_size` together, detections and masks are filtered by different boxes and can
-    end up with different lengths, so `zip(res.detections, res.masks)` pairs the wrong objects.
-    Measured: `grounded-sam`, prompt `"dog. bench."`, `dilate=-3, min_size=1` returned 6
-    detections and 3 masks. Use one of the two options at a time, or filter on your side.
+!!! note "`dilate` keeps detections and masks paired"
+    The size filter (`min_size` / `max_size`) runs after `dilate` and judges a detection and its
+    mask by the same box, so they are kept or dropped together and `zip(res.detections,
+    res.masks)` and `Result.group_by_class` still pair the right objects. Measured on GPU:
+    `grounded-sam`, prompt `"dog. bench."`, `dilate=-3, min_size=1` returns 5 detections and 5
+    masks (3 dogs, 2 benches). Before this was fixed it returned 6 detections and 3 masks, and
+    `dilate` alone put every mask under the label `""`. If you need the tight box of a reshaped
+    paired mask, compute it from the mask (`to_ndarray`).
 
 ### Background and automatic masks
 
@@ -1151,8 +1153,8 @@ masks/04-bench.png bench 0.4
 masks/05-bench.png bench 0.32
 ```
 
-Grounded-SAM returns one mask per detection, in the same order, so `zip` pairs them (but see the
-[`dilate` warning](#dilate)). Each PNG is a black-and-white image the size of the photo.
+Grounded-SAM returns one mask per detection, in the same order, so `zip` pairs them (also with
+[`dilate`](#dilate) and the size filter). Each PNG is a black-and-white image the size of the photo.
 
 ### A depth map as a numpy array
 

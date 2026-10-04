@@ -298,7 +298,9 @@ whose client has gone therefore does not burn GPU time, and `orClientGone` turns
 
 `server.Predict` wraps every prediction with the model-agnostic steps: crop to the region of
 interest (`roi`), run the model on the crop, map the results back to full-image coordinates,
-apply mask dilation or erosion, then the size filter. The `visionserve run` CLI calls the same
+apply mask dilation or erosion, then the size filter. A mask paired with a detection
+(Grounded-SAM, grasp) keeps its detection's box through the dilation, so the size filter makes one
+decision per object and the two lists stay index-aligned. The `visionserve run` CLI calls the same
 function, so the CLI and the API cannot drift apart.
 
 ```go title="internal/server/predict.go"
@@ -315,8 +317,9 @@ func Predict(ctx context.Context, p Predictor, model string, img image.Image, pr
 	if hasROI {
 		res = roipkg.MapResult(res, rect, fullW, fullH)
 	}
-	// Mask morphology (enlarge/shrink) in ORIGINAL-image terms, then size filter.
-	morph.ApplyToMasks(res.Masks, fullW, fullH, prompt.Dilate)
+	// Mask morphology (enlarge/shrink) in ORIGINAL-image terms, then size filter. A mask paired
+	// with a detection keeps its box, so the filter decides once per object.
+	morph.ApplyToResult(&res, fullW, fullH, prompt.Dilate)
 	if prompt.MinSize > 0 || prompt.MaxSize > 0 {
 		res = api.FilterBySizePct(res, prompt.MinSize, prompt.MaxSize, fullW, fullH)
 	}
@@ -324,7 +327,7 @@ func Predict(ctx context.Context, p Predictor, model string, img image.Image, pr
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L24-L43)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L24-L44)
 
 ### Big arrays as base64 (opt-in)
 

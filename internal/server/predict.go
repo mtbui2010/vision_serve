@@ -34,8 +34,9 @@ func Predict(ctx context.Context, p Predictor, model string, img image.Image, pr
 	if hasROI {
 		res = roipkg.MapResult(res, rect, fullW, fullH)
 	}
-	// Mask morphology (enlarge/shrink) in ORIGINAL-image terms, then size filter.
-	morph.ApplyToMasks(res.Masks, fullW, fullH, prompt.Dilate)
+	// Mask morphology (enlarge/shrink) in ORIGINAL-image terms, then size filter. A mask paired
+	// with a detection keeps its box, so the filter decides once per object.
+	morph.ApplyToResult(&res, fullW, fullH, prompt.Dilate)
 	if prompt.MinSize > 0 || prompt.MaxSize > 0 {
 		res = api.FilterBySizePct(res, prompt.MinSize, prompt.MaxSize, fullW, fullH)
 	}
