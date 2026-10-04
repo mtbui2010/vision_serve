@@ -41,6 +41,9 @@ func TestStatusOf(t *testing.T) {
 		{"image over the byte limit", tooLargeError{"image is larger than 32 MiB"}, 413},
 		{"model refused its prompt (wrapped by the pipeline)",
 			fmt.Errorf("rfdetr-gdino: %w", models.BadPrompt(errors.New("a text prompt is required"))), 400},
+		{"manifest size the graph cannot take (server misconfiguration, a load error)",
+			fmt.Errorf("predict: %w", &lifecycle.InputShapeError{Model: "m", Input: "input",
+				Graph: []int64{1, 3, 560, 560}, Produced: []int64{1, 3, 640, 640}, Width: 640, Height: 640}), 500},
 		{"client gone", errClientGone, 499},
 		{"anything else", errors.New("onnx: run failed"), 500},
 	}

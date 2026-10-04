@@ -138,7 +138,7 @@ func (m *Manager) lead(name string, call *loadCall) (err error) {
 
 // load builds the model and its sessions without publishing them; only lead calls it.
 func (m *Manager) load(name string) (*Session, error) {
-	base, man, err := m.buildModel(name)
+	base, man, err := m.buildChecked(name)
 	if err != nil {
 		return nil, err
 	}

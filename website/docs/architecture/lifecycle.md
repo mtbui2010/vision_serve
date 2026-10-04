@@ -151,8 +151,10 @@ the next one (the idle reaper unloads it if nobody comes). Only `Unload` and `Cl
 Building a model (`buildModel`) runs the load-time checks in order: the name is in the registry
 (rescanning the models directory at most once per second, so a model pulled while the server runs
 is found), the weights exist, their SHA-256 matches the manifest when it pins one, the labels
-load, the execution-provider chain is valid, and the `preprocess:` block resolves. Only then are
-ONNX sessions opened. If anything fails half way, the sessions already opened are closed again, so
+load, the execution-provider chain is valid, and the `preprocess:` block resolves. A load then
+checks that the tensor this preprocessing produces fits the input shape the ONNX file declares
+(`checkInputShape`: a `width: 640` manifest for a `[1,3,560,560]` graph fails here, not on the
+first prediction). Only then are ONNX sessions opened. If anything fails half way, the sessions already opened are closed again, so
 a failed load never leaves GPU memory behind. A panic during the build is turned into an error,
 because a stuck "loading" entry would make every later request for that model hang.
 

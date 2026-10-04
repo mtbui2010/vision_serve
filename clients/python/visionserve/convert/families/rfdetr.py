@@ -12,7 +12,8 @@ What this module does, in order:
      land — rfdetr's own loader is lenient and would silently keep random weights);
   4. export with rfdetr's own ONNX exporter (legacy TorchScript path, `dynamo=False`, what rfdetr
      ships and tests), static batch 1, square input;
-  5. parity: the PyTorch model in export mode vs ONNX Runtime on `to_nchw(sample_image)` (2 images).
+  5. parity: the PyTorch model in export mode vs ONNX Runtime on `to_nchw(sample_image)` (2 images)
+     and the first --images photo, query by query for the confident ones (detr_parity).
 
 Output contract (Go `internal/models/rfdetr`): input [1,3,R,R] ImageNet-normalised and SQUASHED
 (letterbox false — rfdetr trains with square_resize_div_64 and `predict()` squashes too; see
@@ -307,18 +308,50 @@ class _Exportable:
         return WithQueryFeats(net).eval(), ["dets", "labels", "query_feats"]
 
 
-BOUNDARY_SCORE = 0.05     # a query below this sigmoid score in BOTH runs cannot reach any sane threshold
+def parity_inputs(R, images_dir=None):
+    """The tier A inputs, as (label, NCHW float32, real): the synthetic images of seeds 0 and 1, and the
+    first photo of --images when given. Noise has almost no confident query (each COCO checkpoint
+    has at most one query scoring >= 0.05 on it), so only a real photo exercises the decoder the way
+    serving does: there 69-107 queries score >= 0.05, and all must match."""
+    out = [(f"seed {seed}", to_nchw(sample_image(R, R, seed=seed), IMAGENET_MEAN, IMAGENET_STD), False)
+           for seed in (0, 1)]
+    if images_dir:
+        import numpy as np
+        from PIL import Image
+        from ..verify import list_images
+        photos = list_images(images_dir)
+        if photos:
+            with Image.open(photos[0]) as im:
+                img = np.asarray(im.convert("RGB").resize((R, R), Image.BILINEAR))
+            out.append((photos[0].name, to_nchw(img, IMAGENET_MEAN, IMAGENET_STD), True))
+    return out
 
 
-def detr_parity(onnx_path, feeds, reference, tol, what=""):
+SCORE_FLOOR = 0.05   # sigmoid score; a query below it in BOTH runs is not judged one by one
+MIN_ROW_MATCH = 0.5  # ... but at least this share of ALL queries must still match at their own row
+
+
+def detr_parity(onnx_path, feeds, reference, tol, what="", floor=SCORE_FLOOR, min_match=MIN_ROW_MATCH, real=False):
     """common.parity, made aware that DETR queries are a SET chosen by a top-K.
 
-    RF-DETR is two-stage: the decoder's queries are the top-K encoder proposals. On a noise image a
-    few proposals sit on a near-tie at the K-th place, and a 1e-6 float difference (ORT vs PyTorch)
-    swaps which one gets in — measured on the 22-class tabletop fine-tune: seed 1 differs in exactly
-    2 of 300 queries (ranks 280/281, sigmoid score 0.011/0.012), every other query to 1e-5; on a real
-    tabletop image all 300 match to 2e-5. So: every query must match to `tol`, EXCEPT at most 2% of
-    them whose best score is < BOUNDARY_SCORE in both runs. Anything else is a real export bug."""
+    RF-DETR is two-stage: the decoder's queries are the top-K encoder proposals, and they attend to
+    each other. On an image where many proposals score alike (the synthetic noise image above all),
+    a 1e-6 float difference (ORT vs PyTorch) swaps which proposals make the top K, and the swapped
+    queries shift the others a little through self-attention. Measured 2026-10-05 (rfdetr 1.7.1,
+    torch 2.10, ORT CPU), row by row at tolerance 1e-3 on the noise images: the official COCO Nano
+    checkpoint differs on 100 of 300 queries (seed 0, best score among them 0.020), Small on 32
+    (seed 1, 0.010), Base and Medium on none, the 22-class tabletop fine-tune on 2 (0.012). Every
+    query scoring >= 0.05 matched (max|Δ|/scale 4.2e-4). On a real photo (COCO 177015 for the COCO
+    checkpoints: 69-107 queries score >= 0.05) all 300 queries match, max|Δ|/scale <= 5.2e-5.
+
+    So the rule compares what a detection can come from:
+      1. every CONFIDENT query (best sigmoid score >= `floor` in either run) must match to `tol` —
+         at its own row, or at another row (two near-tied proposals can trade places in the top-K
+         order) — in every output;
+      2. the low-score queries are not judged one by one, but at least `min_match` of ALL queries
+         must match to `tol` at their own row. Near-ties move a minority; an export bug (swapped box
+         coordinates, a shifted logit, a different normalisation inside the graph) moves every query.
+    Anything else raises ConvertError ("Not installed"). `real` marks a run on a real photo (report)."""
     import numpy as np
     import onnxruntime as ort
 
@@ -326,32 +359,64 @@ def detr_parity(onnx_path, feeds, reference, tol, what=""):
     if len(got) < len(reference):
         raise ConvertError(f"parity{what}: ONNX graph returns {len(got)} outputs, reference has {len(reference)}")
     q = reference[0].shape[1]
-    row_err = np.zeros(q)
+    vec_r, vec_g = [], []
     for i, (g, r) in enumerate(zip(got, reference)):
         g, r = np.asarray(g, np.float64), np.asarray(r, np.float64)
         if g.shape != r.shape:
             raise ConvertError(f"parity{what}: output {i} shape {g.shape} != reference {r.shape}")
+        # Non-finite values must agree exactly (as in common.parity) and are then left out: a NaN would
+        # otherwise compare False against the tolerance and pass.
+        fin_g, fin_r = np.isfinite(g), np.isfinite(r)
+        if not np.array_equal(fin_g, fin_r) or not np.array_equal(g[~fin_g], r[~fin_r], equal_nan=True):
+            raise ConvertError(f"parity{what}: output {i} has NaN/inf where the original does not "
+                               f"({int((~fin_g).sum())} non-finite values vs {int((~fin_r).sum())}). Not installed.")
+        g, r = np.where(fin_r, g, 0.0), np.where(fin_r, r, 0.0)
         scale = max(1.0, float(np.abs(r).max()))
-        row_err = np.maximum(row_err, np.abs(g - r).reshape(q, -1).max(-1) / scale)
+        vec_r.append(r.reshape(q, -1) / scale)
+        vec_g.append(g.reshape(q, -1) / scale)
+    vec_r, vec_g = np.concatenate(vec_r, -1), np.concatenate(vec_g, -1)
+    row_err = np.abs(vec_g - vec_r).max(-1)
+
     sig = lambda z: 1.0 / (1.0 + np.exp(-np.asarray(z, np.float64)))  # noqa: E731
     li = 1 if reference[0].shape[-1] == 4 else 0  # logits = the first non-box output
-    score_ref = sig(reference[li][0]).max(-1)
-    score_got = sig(got[li][0]).max(-1)
-    bad = np.nonzero(row_err > tol)[0]
-    boundary = [int(k) for k in bad if score_ref[k] < BOUNDARY_SCORE and score_got[k] < BOUNDARY_SCORE]
-    real = [int(k) for k in bad if k not in boundary]
-    kept = np.setdiff1d(np.arange(q), boundary)
-    worst = float(row_err[kept].max()) if kept.size else 0.0
-    log(f"  parity{what}: {q} queries, max|Δ|/scale = {worst:.2e}"
-        + (f" ({len(boundary)} low-score top-K boundary queries differ, ignored: rows {boundary}, "
-           f"best score {float(max(score_ref[boundary].max(), score_got[boundary].max())):.3f})" if boundary else ""))
-    if real or len(boundary) > max(1, q // 50):
-        raise ConvertError(f"parity{what}: ONNX differs from the original on {len(bad)} of {q} queries "
-                           f"(max|Δ|/scale {float(row_err.max()):.2e} > tolerance {tol:g}"
-                           + (f"; rows {real[:10]} score up to {float(score_ref[real].max()):.2f}" if real else "")
-                           + "). Not installed.")
+    score_ref = sig(reference[li][0]).reshape(q, -1).max(-1)
+    score_got = sig(got[li][0]).reshape(q, -1).max(-1)
+    confident = (score_ref >= floor) | (score_got >= floor)
+
+    # 1. each confident query, at its own row or at the closest row of the other run
+    best = np.where(confident, row_err, 0.0)
+    for k in np.nonzero(confident & (row_err > tol))[0]:
+        e_ref = np.abs(vec_g - vec_r[k]).max(-1).min() if score_ref[k] >= floor else 0.0
+        e_got = np.abs(vec_r - vec_g[k]).max(-1).min() if score_got[k] >= floor else 0.0
+        best[k] = max(e_ref, e_got)
+    bad_conf = [int(k) for k in np.nonzero(confident & (best > tol))[0]]
+    # 2. the share of all queries that match at their own row
+    row_ok = row_err <= tol
+    share = float(row_ok.mean())
+    low_diff = int((~row_ok & ~confident).sum())
+    worst = max(float(best.max()), float(row_err[row_ok].max()) if row_ok.any() else 0.0)
+
+    msg = (f"  parity{what}: max|Δ|/scale {worst:.2e}; {int(confident.sum())} of {q} queries score >= "
+           f"{floor:g}; {int(row_ok.sum())}/{q} match at their own row")
+    if low_diff:
+        low = ~row_ok & ~confident
+        msg += (f"; {low_diff} low-score queries differ (top-K near-ties, best score "
+                f"{float(np.maximum(score_ref, score_got)[low].max()):.3f}), not judged one by one")
+    log(msg)
+    if bad_conf or share < min_match:
+        why = []
+        if bad_conf:
+            why.append(f"{len(bad_conf)} quer{'y' if len(bad_conf) == 1 else 'ies'} with score >= {floor:g} "
+                       f"differ{'s' if len(bad_conf) == 1 else ''} (rows {bad_conf[:10]}, best score "
+                       f"{float(np.maximum(score_ref, score_got)[bad_conf].max()):.2f}, "
+                       f"max|Δ|/scale {float(best[bad_conf].max()):.2e} > tolerance {tol:g})")
+        if share < min_match:
+            why.append(f"only {int(row_ok.sum())} of {q} queries match to tolerance {tol:g} (need "
+                       f"{min_match:.0%}; max|Δ|/scale {float(row_err.max()):.2e})")
+        raise ConvertError(f"parity{what}: ONNX differs from the original: {'; '.join(why)}. Not installed.")
     from ..common import record_parity
-    record_parity(what, worst, tol, ignored_boundary_queries=len(boundary))
+    record_parity(what, worst, tol, confident_queries=int(confident.sum()), row_matched=int(row_ok.sum()),
+                  queries=q, low_score_differ=low_diff, real_input=bool(real))
     return worst
 
 
@@ -419,12 +484,11 @@ def convert(args, workdir: Path):
     ins, outs = onnx_io(onnx_path)
     log(f"rfdetr: ONNX inputs {[(n, s) for n, s, _ in ins]} outputs {[(n, s) for n, s, _ in outs]}")
 
-    # ---- parity: PyTorch (export mode) vs ORT, two different images ----
-    for seed in (0, 1):
-        x = to_nchw(sample_image(R, R, seed=seed), IMAGENET_MEAN, IMAGENET_STD)
+    # ---- parity: PyTorch (export mode) vs ORT, two synthetic images + one real photo ----
+    for label, x, real in parity_inputs(R, getattr(args, "images", None)):
         with torch.no_grad():
             ref = [t.detach().cpu().numpy() for t in exp(torch.from_numpy(x))]
-        detr_parity(onnx_path, {ins[0][0]: x}, ref, args.tolerance, f" rfdetr[seed {seed}]")
+        detr_parity(onnx_path, {ins[0][0]: x}, ref, args.tolerance, f" rfdetr[{label}]", real=real)
 
     notes = [f"rfdetr {src.name} ({VARIANTS[variant]}, variant from {how})",
              f"input {R}x{R} squashed (rfdetr trains with square_resize_div_64 — BUGS_TO_FIX.md #1); "

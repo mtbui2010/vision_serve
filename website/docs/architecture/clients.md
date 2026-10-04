@@ -256,7 +256,13 @@ what the original returned. The converter checks in stages, and any FAIL uninsta
 
 - **Tier A** runs the framework model and the ONNX graph on the same input and compares the
   outputs (numerical parity). It also checks the graph's real tensor shapes against what the
-  VisionServe architecture decodes.
+  VisionServe architecture decodes. A DETR's queries are the top K of the encoder's proposals,
+  and on a noise image many of them score alike: a 1e-6 difference swaps which ones get in. So
+  for a DETR every query scoring ≥ 0.05 must match, and at least half of all queries must match
+  at their own row; the rest (low-score near-ties) are counted in the report, not failed. The
+  official COCO RF-DETR Nano checkpoint has 100 such queries of 300 on one noise image, all scoring
+  below 0.02; an export bug (swapped box coordinates, shifted logits) moves every query. RF-DETR
+  also runs tier A on the first `--images` photo, where 69 to 107 queries score ≥ 0.05.
 - **Tier B1** asks the server for the tensor it would feed the model (`/api/preprocess`) and
   compares it with the reference preprocessing of the same image. This is the check that catches
   the expensive, silent bugs: letterbox instead of squash, wrong normalisation, wrong token
