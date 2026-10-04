@@ -1,0 +1,31 @@
+{
+  "_comment": "Prompt normalisation, one rule in two SDKs: Python visionserve.client.normalize_prompt and JS normalizePrompt must both turn (model, prompt) into `want` (null = no prompt field is sent). The rule: no prompt -> \"object.\" for the GroundingDINO family (grounding-dino, grounded-sam, grasp-gd, gdino-siglip*, NOT rfdetr-gdino*), else nothing; CLIP/SigLIP towers verbatim; otherwise ',' and '|' become '.', and a single phrase gets a trailing '.'. Read by clients/python/tests/test_prompt_sync.py and clients/js/tests/client.test.ts.",
+  "cases": [
+    {"model": "grounding-dino", "prompt": null, "want": "object."},
+    {"model": "grounding-dino", "prompt": "", "want": "object."},
+    {"model": "grounding-dino", "prompt": "   ", "want": "object."},
+    {"model": "grounded-sam", "prompt": null, "want": "object."},
+    {"model": "grasp-gd", "prompt": null, "want": "object."},
+    {"model": "gdino-siglip", "prompt": null, "want": "object."},
+    {"model": "gdino-siglip-sam", "prompt": null, "want": "object."},
+    {"model": "GROUNDING-DINO", "prompt": null, "want": "object."},
+    {"model": "rfdetr-gdino-siglip", "prompt": null, "want": null},
+    {"model": "rfdetr-gdino", "prompt": null, "want": null},
+    {"model": "rf-detr", "prompt": null, "want": null},
+    {"model": "mobile-sam", "prompt": "", "want": null},
+    {"model": "grounding-dino", "prompt": "cat", "want": "cat."},
+    {"model": "grounding-dino", "prompt": "cat. remote.", "want": "cat. remote."},
+    {"model": "grounding-dino", "prompt": "cat, remote", "want": "cat. remote"},
+    {"model": "grounding-dino", "prompt": "cat|dog|bird", "want": "cat.dog.bird"},
+    {"model": "grounding-dino", "prompt": "cat , dog", "want": "cat . dog"},
+    {"model": "rfdetr-gdino", "prompt": "cat, dog", "want": "cat. dog"},
+    {"model": "rfdetr-textalign-dec1", "prompt": "cup", "want": "cup."},
+    {"model": "rfdetr-textalign-dec1-siglip", "prompt": "cup, mug", "want": "cup. mug"},
+    {"model": "gdino-siglip", "prompt": "cat, dog", "want": "cat. dog"},
+    {"model": "siglip-text", "prompt": "red, round fruit", "want": "red, round fruit"},
+    {"model": "clip-text", "prompt": "a photo of a cat", "want": "a photo of a cat"},
+    {"model": "clip", "prompt": "a photo of a cat, sitting", "want": "a photo of a cat, sitting"},
+    {"model": "siglip-image", "prompt": "dog|cat", "want": "dog|cat"},
+    {"model": "mobile-sam", "prompt": "cat", "want": "cat."}
+  ]
+}

@@ -157,14 +157,52 @@ for (const g of graspGd.grasps) console.log(g.cls, g.quality.toFixed(3));
 
 ### Prompt options (`opts`)
 
-| Field | For | Format |
-|-------|-----|--------|
-| `prompt` | open-vocab text | `"cat. remote."` |
-| `box` | SAM box | `[x, y, w, h]` or a list `[[...], [...]]` |
-| `point` | SAM point | `[x, y]` / `[x, y, label]` or a list (label 1=fg, 0=bg) |
+`predict()` takes every option the Python SDK's `predict()` sends. Each is sent as the
+server form field of the same name in snake_case (`boxThreshold` → `box_threshold`); leave
+it out (or `undefined` / `null`) for the server's default. An unknown key (for example
+`min_size` instead of `minSize`) throws a `TypeError` before anything is sent.
+
+| Option | Server field | For | Format |
+|--------|--------------|-----|--------|
+| `prompt` | `prompt` | open-vocab text | `"cat. remote."` (normalised, see below) |
+| `box` | `box` | SAM box | `[x, y, w, h]` or a list `[[...], [...]]` |
+| `point` | `point` | SAM point | `[x, y]` / `[x, y, label]` or a list (label 1=fg, 0=bg) |
+| `boxThreshold`, `textThreshold` | `box_threshold`, `text_threshold` | GroundingDINO family | number in (0, 1) |
+| `minSize`, `maxSize` | `min_size`, `max_size` | every model with boxes/masks | % of the image area, applied by the **server** |
+| `roi` | `roi` | every model | `[x, y, w, h]`, pixels or 0–1 fractions |
+| `dilate` | `dilate` | masks | integer pixels, `> 0` grow, `< 0` shrink |
+| `method` | `method` | `background`, `rfdetr-textalign*` | `"auto"`, `"depth"`, `"sam"`, `"cv"`, `"automask"` / `"exact"`, `"dual"` |
+| `bgMaxArea`, `fgMinArea` | `bg_max_area`, `fg_min_area` | `background` (sam/automask) | % of the image area |
+| `gridSize` | `grid_size` | automask | integer (server max 64) |
+| `depth` (+ `depthDtype`, `depthWidth`, `depthHeight`) | file part `depth` + `depth_dtype`, `depth_width`, `depth_height` | `background` (depth/auto) | `Uint16Array` (sent as `uint16`) or `Float32Array` (`float32`), row-major; raw little-endian bytes need `depthDtype`. Size defaults to the image's |
+| `gripperMin`, `gripperMax` | `gripper_min`, `gripper_max` | grasp models | jaw opening in image pixels |
+| `claimThreshold` | `claim_threshold` | `rfdetr-textalign*`, `method: "dual"` | probability; `>= 1` never claims |
+| `cropTemp` | `crop_temp` | SigLIP crop namers | softmax temperature, lower = more decisive |
+| `templateName` | `template_name` | `instance_detection` models | a set registered with `POST /api/templates` |
 
 Boxes and points are in **original-image** coordinates, matching the server and the
-Python client.
+Python client. Numbers must be finite; `gridSize`, `dilate`, `depthWidth` and `depthHeight`
+must be integers (the server would read `2.5` as 0, the default).
+
+```ts
+const res = await client.predict("grounding-dino", "kitchen.jpg", {
+  prompt: "cup, bowl",          // sent as "cup. bowl"
+  boxThreshold: 0.4,
+  roi: [0, 0.5, 1, 0.5],        // bottom half (fractions)
+  minSize: 0.5,                 // drop boxes under 0.5% of the image
+});
+```
+
+**Prompts** are normalised exactly as in the Python SDK (`normalizePrompt(model, prompt)`
+shows what is sent): `,` and `|` become the `.` phrase separator, a single phrase gets a
+trailing `.`, CLIP / SigLIP towers get the text unchanged, and the GroundingDINO family
+(`grounding-dino`, `grounded-sam`, `grasp-gd`, `gdino-siglip*`) gets `"object."` when no
+prompt is given. Both SDKs run the shared cases in `clients/testdata/normalize_prompt.json`.
+
+**`new Client(host, { base64Arrays: true })`** asks the server for depth maps and
+embeddings as base64 float32 (`encoding=base64`): about half the bytes and much cheaper to
+parse. The SDK decodes them, so `depthMap` and `embeddings` stay plain `number[]` holding
+the exact float32 values.
 
 ### Result schema
 
@@ -176,11 +214,12 @@ class Result {
                                  // "depth" | "classification" | "embedding" | "grasp" | ...
   model: string;
   device: string;                // "cpu" | "gpu:0" | "gpu:0+trt"
+  hint: string;                  // the server's setup recommendation, "" if none
   detections: Detection[];       // { bbox: [x,y,w,h], cls: string, conf: number }
   masks: Mask[];                 // { rle, bbox, conf } — column-major RLE
   classifications: Classification[]; // { cls: string, conf: number } — top-K
   grasps: Grasp[];               // { x, y, theta, width, quality, cls, conf }
-  depthMap: Float32Array;        // flat row-major, length depthWidth×depthHeight
+  depthMap: number[];            // flat row-major, length depthWidth×depthHeight (MODEL resolution)
   depthWidth: number;
   depthHeight: number;
   embeddings: number[][];        // one 512-d vector per image (CLIP)
@@ -302,9 +341,10 @@ for (const [cls, r] of Object.entries(byClass)) {
   console.log(`${cls}: ${r.detections.length} detections`);
 }
 
-// Depth fusion
+// Depth fusion: the depth map is at the model's resolution (e.g. 256×256), the boxes are in
+// image pixels, so pass the image's size and the boxes are scaled onto the map.
 const depth = await client.predict("midas", imageBytes);
-const depths = getDepthAtDetection(depth, result);
+const depths = getDepthAtDetection(depth, result, { imageWidth: 640, imageHeight: 480 });
 result.detections.forEach((det, i) => {
   console.log(`${det.cls}: depth=${depths[i]?.toFixed(2) ?? "N/A"}`);
 });
@@ -318,10 +358,15 @@ result.detections.forEach((det, i) => {
 | `nms` | `(iouThreshold?)` | Greedy NMS on detections |
 | `groupByClass` | `()` | Returns `Record<string, Result>` keyed by class label |
 
-`getDepthAtDetection(depthResult, detResult, mode?)` (exported from the top-level
-`visionserve` package, implemented in `filter.ts`) returns `(number | null)[]` — one
-depth value per detection/mask, or `null` when the box falls outside the depth map.
-`mode` is `"median"` (default) or `"mean"`.
+`getDepthAtDetection(depthResult, detResult, { imageWidth, imageHeight, mode? })` (exported
+from the top-level `visionserve` package, implemented in `filter.ts`) returns
+`(number | null)[]` — one depth value per detection (or per mask when there are no
+detections), or `null` when the box falls outside the depth map. `imageWidth` /
+`imageHeight` are the size of the original image the boxes refer to and are required: the
+boxes are scaled by `depthWidth / imageWidth` and `depthHeight / imageHeight`. `mode` is
+`"median"` (default), `"mean"`, `"min"` or `"max"`. The values are the server's relative
+inverse depth (`[0, 1]`, larger = closer), not metres; `0` counts as a value. Same rule as
+the Python `get_depth_at_detection(..., image_size=(W, H))`.
 
 ## Size filtering
 
@@ -349,10 +394,9 @@ const rel = filterBySize(res, {
 const filtered = client.filterBySize(res, { minSize: 500 });
 ```
 
-`predict()` takes only `prompt`, `box` and `point`; any other key in its options is ignored.
-For the server-side options (`min_size`, `roi`, thresholds, …) send the form yourself — see
-[Clients › JavaScript](https://mtbui2010.github.io/vision_serve/clients/javascript/) on the docs
-site.
+This filters the answer on the client. To have the **server** drop small or large objects
+(before grasp planning, for grasp models), pass `minSize` / `maxSize` (percent of the image
+area) to `predict()` instead.
 
 ## Visualization
 
@@ -392,6 +436,33 @@ await client.load("rf-detr");
 await client.unload("rf-detr");
 ```
 
+## Errors
+
+Every failure is a `VisionServeError`:
+
+- `status`: the HTTP status, or `undefined` when no answer came back (server down, timeout).
+- `retryAfter`: on a `503` (the model's queue is full), the server's `Retry-After` in
+  seconds; wait that long and retry. `undefined` otherwise.
+- a timeout reads `"GET /api/health: timed out after 50 ms waiting for VisionServe at …"`;
+  an unreachable server reads `"failed to reach VisionServe at …"`. The timeout covers the
+  whole request, including reading the answer.
+
+```ts
+import { VisionServeError } from "visionserve";
+
+try {
+  await client.predict("rf-detr", "photo.jpg");
+} catch (e) {
+  if (e instanceof VisionServeError && e.status === 503) {
+    await new Promise((r) => setTimeout(r, (e.retryAfter ?? 1) * 1000));
+    // ...retry
+  } else throw e;
+}
+```
+
+Malformed options (a wrong `box` length, a non-integer `gridSize`, an unknown option key)
+throw a plain `Error` / `TypeError` before anything is sent.
+
 ## Develop
 
 ```bash
@@ -400,3 +471,23 @@ npm run build      # tsc → dist/
 npm test           # node:test with a mocked fetch (no server needed)
 npm run typecheck  # tsc --noEmit
 ```
+
+## Changelog
+
+### 0.1.3
+
+- `predict()` takes every option the Python SDK sends (`boxThreshold`, `textThreshold`,
+  `minSize`, `maxSize`, `roi`, `method`, `dilate`, `bgMaxArea`, `fgMinArea`, `gridSize`,
+  `gripperMin`/`gripperMax`, `claimThreshold`, `cropTemp`, `templateName`, `depth` with
+  `depthDtype`/`depthWidth`/`depthHeight`) and `Client` takes `base64Arrays`. An unknown
+  option key now throws a `TypeError` (it used to be ignored silently).
+- Prompts are normalised like Python's (`"cat, dog"` → `"cat. dog"`), and the
+  GroundingDINO family defaults to `"object."`: `grounding-dino` without a prompt no longer
+  fails with a 400. `normalizePrompt` is exported.
+- `VisionServeError.retryAfter` (seconds, from a 503's `Retry-After`); a timeout says
+  "timed out after N ms" instead of "failed to reach", and also covers reading the body.
+- `Result.hint` keeps the server's setup recommendation.
+- **Breaking:** `getDepthAtDetection(depth, det, { imageWidth, imageHeight, mode? })` takes
+  the image size and scales the boxes onto the model-sized depth map (it used to read the
+  map at image-pixel positions, i.e. the wrong pixels), and counts `0` as a depth value. The
+  old third argument (`mode` as a string) is replaced by the options object.

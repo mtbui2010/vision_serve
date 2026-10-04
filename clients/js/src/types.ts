@@ -178,7 +178,10 @@ export class Result {
   readonly masks: Mask[];
   readonly grasps: Grasp[];
   readonly classifications: Classification[];
-  /** Flat row-major float array for depth maps. */
+  /**
+   * Flat row-major float array for depth maps, at the MODEL's resolution
+   * (`depthWidth` x `depthHeight`), not the image's.
+   */
   readonly depthMap: number[];
   readonly depthWidth: number;
   readonly depthHeight: number;
@@ -187,6 +190,8 @@ export class Result {
   readonly durationMs: number;
   /** Execution device the server ran on, e.g. `"cpu"`, `"gpu:0"`, `"gpu:0+trt"`. */
   readonly device: string;
+  /** The server's setup recommendation, if any (e.g. how to enable TensorRT); `""` otherwise. */
+  readonly hint: string;
 
   constructor(
     task: Task,
@@ -201,6 +206,7 @@ export class Result {
     durationMs: number,
     grasps: Grasp[] = [],
     device = "",
+    hint = "",
   ) {
     this.task = task;
     this.model = model;
@@ -214,6 +220,7 @@ export class Result {
     this.embeddings = embeddings;
     this.durationMs = durationMs;
     this.device = device;
+    this.hint = hint;
   }
 
   static fromJSON(d: Record<string, unknown>): Result {
@@ -221,12 +228,28 @@ export class Result {
     const masks = Array.isArray(d.masks) ? d.masks : [];
     const grasps = Array.isArray(d.grasps) ? d.grasps : [];
     const clsArr = Array.isArray(d.classifications) ? d.classifications : [];
-    const depthMap = Array.isArray(d.depth_map) ? (d.depth_map as unknown[]).map(Number) : [];
-    const embeddings = Array.isArray(d.embeddings)
-      ? (d.embeddings as unknown[]).map((row) =>
-          Array.isArray(row) ? (row as unknown[]).map(Number) : [],
-        )
-      : [];
+    // Both array encodings are accepted: JSON numbers, and `encoding=base64`
+    // (`depth_map_base64` / `embeddings_base64` + `embeddings_shape`), decoded here.
+    const depthMap =
+      typeof d.depth_map_base64 === "string" && d.depth_map_base64
+        ? decodeFloat32Base64(d.depth_map_base64)
+        : Array.isArray(d.depth_map)
+          ? (d.depth_map as unknown[]).map(Number)
+          : [];
+    let embeddings: number[][];
+    if (typeof d.embeddings_base64 === "string" && d.embeddings_base64) {
+      const flat = decodeFloat32Base64(d.embeddings_base64);
+      const shape = Array.isArray(d.embeddings_shape) ? (d.embeddings_shape as unknown[]).map(Number) : [];
+      const dim = shape.length === 2 && shape[1]! > 0 ? shape[1]! : flat.length;
+      embeddings = [];
+      for (let i = 0; i < flat.length; i += dim) embeddings.push(flat.slice(i, i + dim));
+    } else {
+      embeddings = Array.isArray(d.embeddings)
+        ? (d.embeddings as unknown[]).map((row) =>
+            Array.isArray(row) ? (row as unknown[]).map(Number) : [],
+          )
+        : [];
+    }
     return new Result(
       String(d.task ?? ""),
       String(d.model ?? ""),
@@ -240,6 +263,7 @@ export class Result {
       Number(d.duration_ms ?? 0),
       grasps.map((x) => Grasp.fromJSON(x as Record<string, unknown>)),
       String(d.device ?? ""),
+      String(d.hint ?? ""),
     );
   }
 
@@ -258,6 +282,7 @@ export class Result {
       this.durationMs,
       this.grasps,
       this.device,
+      this.hint,
     );
   }
 
@@ -278,6 +303,7 @@ export class Result {
       this.durationMs,
       this.grasps,
       this.device,
+      this.hint,
     );
   }
 
@@ -296,6 +322,7 @@ export class Result {
       this.durationMs,
       this.grasps,
       this.device,
+      this.hint,
     );
   }
 
@@ -342,6 +369,7 @@ export class Result {
       this.durationMs,
       this.grasps,
       this.device,
+      this.hint,
     );
   }
 
@@ -373,6 +401,7 @@ export class Result {
         this.durationMs,
         this.grasps,
         this.device,
+        this.hint,
       );
     }
     return result;
@@ -405,4 +434,21 @@ export class ModelInfo {
   get isLoaded(): boolean {
     return this.state === "loaded";
   }
+}
+
+/**
+ * Decode base64 of little-endian float32 bytes (the server's `encoding=base64` arrays) into
+ * plain numbers: the exact float32 values the server computed.
+ */
+export function decodeFloat32Base64(b64: string): number[] {
+  const bin = atob(b64);
+  if (bin.length % 4 !== 0) {
+    throw new Error(`base64 float32 array has ${bin.length} bytes, not a multiple of 4`);
+  }
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const view = new DataView(bytes.buffer);
+  const out = new Array<number>(bin.length / 4);
+  for (let i = 0; i < out.length; i++) out[i] = view.getFloat32(i * 4, true);
+  return out;
 }

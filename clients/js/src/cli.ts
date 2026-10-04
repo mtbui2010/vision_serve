@@ -405,7 +405,7 @@ async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parsed as { values: Values; positionals: string[] };
 
   if (values.version) {
-    process.stdout.write("visionserve-client 0.1.2\n");
+    process.stdout.write("visionserve-client 0.1.3\n");
     return 0;
   }
   const command = positionals[0];
