@@ -1057,15 +1057,28 @@ does the same). It drives a **running** server; it is not the Go binary. If both
 Global options, before or after the command: `--host URL` (default `http://localhost:11435`),
 `--timeout SEC` (default 120), and `--version`.
 
-`predict` options map one to one to the keyword arguments above: `--prompt`, `--box x,y,w,h`
-and `--point x,y[,label]` (several separated by `;`), `--roi`, `--dilate`, `--method`,
-`--box-threshold`, `--text-threshold`, `--bg-max-area`, `--fg-min-area`, `--grid-size`,
-`--min-size`, `--max-size`, `--gripper-min`, `--gripper-max`, `--max-grasps-per-object`
-(default 3). Output: `--save` writes an annotated PNG named `<stem>.python.<model>.<task>.png`,
-`--save-as PATH` picks the name, `--alpha` sets the mask opacity, `--compact` prints the JSON on
-one line, `--quiet` drops the summary. `claim_threshold`, `crop_temp`, `template_name`, `depth`
-and `base64_arrays` are only available from Python. For grasp results the printed JSON holds only
-the single best grasp (picked with `select_target_grasp`), while `--save` draws all of them.
+`predict` has a flag for every keyword argument above, the name with dashes: `--prompt`,
+`--box x,y,w,h` and `--point x,y[,label]` (several separated by `;`), `--roi`, `--dilate`,
+`--method`, `--box-threshold`, `--text-threshold`, `--bg-max-area`, `--fg-min-area`,
+`--grid-size`, `--min-size`, `--max-size`, `--gripper-min`, `--gripper-max`,
+`--max-grasps-per-object` (default 3), `--claim-threshold`, `--crop-temp`, `--template-name` and
+`--depth PATH`. Only `base64_arrays` has none: the CLI prints JSON numbers. Output: `--save`
+writes an annotated PNG named `<stem>.python.<model>.<task>.png`, `--save-as PATH` picks the
+name, `--alpha` sets the mask opacity, `--compact` prints the JSON on one line, `--quiet` drops
+the summary. For grasp results the printed JSON holds only the single best grasp (picked with
+`select_target_grasp`), while `--save` draws all of them.
+
+`--depth` reads the depth image from a file (numpy needed) and sends it as the
+[`depth`](#depth-an-aligned-depth-image) argument would:
+
+| File | Read as |
+|---|---|
+| `.npy` | the array, with its own type and shape |
+| `.png`, `.tif`, `.tiff` | the image's pixels (Pillow): a 16-bit PNG gives `uint16`, a float TIFF `float32` |
+| anything else | raw little-endian values: `--depth-dtype uint16` (default) or `float32`, `--depth-width W --depth-height H` (default: the photo's size, after its EXIF rotation) |
+
+A raw file whose size does not match is an error before anything is sent, and so are
+`--depth-dtype` / `--depth-width` / `--depth-height` with a `.npy` or image file.
 
 ```bash
 visionserve predict rf-detr dogs.jpg --min-size 1 --compact
@@ -1090,6 +1103,34 @@ exit=1
 
 The `client=` time includes the upload and the network; `server=` is the server's own
 `duration_ms`.
+
+The newer flags, run against a server on the CPU (port 11698, hence `device=cpu` and the
+slower timings). `depth_mm.png` is the made-up floor plane of the [`depth`](#depth-an-aligned-depth-image)
+example saved as a 16-bit PNG (`Image.fromarray(depth_mm).save("depth_mm.png")`) and
+`depth_mm.raw` the same values as raw bytes (`depth_mm.tofile("depth_mm.raw")`); the template
+`dog` was registered first, as in the [`template_name`](#template_name) example.
+
+```bash
+visionserve predict rfdetr-dualhead-dec1 living-room.jpg --prompt "cup. book. remote. lamp." \
+    --method dual --claim-threshold 0.05 --crop-temp 0.005 --compact
+visionserve predict background living-room.jpg --method depth --depth depth_mm.png --compact
+visionserve predict background living-room.jpg --method depth --depth depth_mm.raw --compact
+visionserve predict background living-room.jpg --depth depth_mm.raw --depth-width 320 --depth-height 214; echo "exit=$?"
+visionserve predict owlv2_base_patch16 dogs.jpg --template-name dog --compact
+```
+
+```text
+predict: model=rfdetr-dualhead-dec1 task=open_vocab device=cpu  client=1167.0ms server=1138.5ms  (13 detections)
+{"task":"open_vocab","model":"rfdetr-dualhead-dec1","device":"cpu","detections":[{"bbox":[384.4697868824005,...
+predict: model=background task=segmentation device=cpu  client=87.5ms server=52.6ms  (1 masks)
+{"task":"segmentation","model":"background","device":"cpu","masks":[{"rle":"0 273920","bbox":[0.0,0.0,640.0,428.0],...
+predict: model=background task=segmentation device=cpu  client=104.7ms server=49.0ms  (1 masks)
+{"task":"segmentation","model":"background","device":"cpu","masks":[{"rle":"0 273920","bbox":[0.0,0.0,640.0,428.0],...
+error: --depth depth_mm.raw has 547840 bytes, but 320x214 uint16 needs 136960
+exit=1
+predict: model=owlv2_base_patch16 task=instance_detection device=cpu  client=4442.4ms server=4383.5ms  (10 detections)
+{"task":"instance_detection","model":"owlv2_base_patch16","device":"cpu","detections":[{"bbox":[5.754852294921875,...
+```
 
 ## Recipes
 

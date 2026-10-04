@@ -8,9 +8,12 @@ ends up as the same `POST /api/predict` request, so pick whichever fits your pro
 |---|---|---|---|---|
 | What it is | `pip install visionserve` | `npm install visionserve` | `curl`, or any HTTP library | the Go binary, one shot |
 | Needs a running server | yes | yes | yes | **no**: loads the model itself, answers, exits |
-| Every `predict` option | **yes**, as keyword arguments | only `prompt`, `box`, `point` (the rest [by hand](javascript.md#options-the-sdk-does-not-expose)) | yes, as form fields | many (not the thresholds, grasp bounds, `depth`, `claim_threshold`, `crop_temp`, `template_name`) |
+| Every `predict` option | **yes**, as keyword arguments | **yes**, in camelCase ([table](javascript.md#every-option)) | yes, as form fields | **yes**, as flags; `--depth FILE`, and `--template IMG` instead of `template_name` ([flags](../reference/configuration.md#command-line)) |
+| Command-line client | `visionserve predict`: a flag for every option | `visionserve predict`: `prompt`, `box`, `point`, size filter | `curl` | is one |
+| Prompt normalisation, `"object."` default | yes | yes (same rule) | no: sent as written | no: sent as written |
 | Images you can pass | path, bytes, PIL, numpy | path (Node), bytes, `Blob` | file upload or base64 | path |
-| Decodes masks / base64 arrays | yes (`Mask.to_ndarray`, `FloatArray`) | masks (`Mask.toMask`) | you do it | prints the JSON |
+| Decodes masks / base64 arrays | yes (`Mask.to_ndarray`, `FloatArray`) | yes (`Mask.toMask`, `base64Arrays`) | you do it | prints the JSON |
+| `503` `Retry-After` | `e.retry_after` | `e.retryAfter` | the header | no queue |
 | Drawing | `Result.visualize()` (PNG) | `toSVG()` (SVG overlay) | — | `--save` (PNG) |
 | Page | [Python](python.md) | [JavaScript](javascript.md) | [Plain HTTP](http.md) | [Configuration](../reference/configuration.md) |
 
@@ -77,7 +80,7 @@ Both SDKs talk to `http://…:11435` by default, the server's default port (one 
 loopback address `127.0.0.1` by default. Python's `urllib` tries every address `localhost`
 resolves to, so `localhost` works. Node 18's `fetch` may resolve `localhost` to the IPv6 address
 `::1` first, where nothing is listening, and fail; the JS SDK therefore defaults to `127.0.0.1`
-([`client.ts`](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/client.ts#L54-L57)).
+([`client.ts`](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/client.ts#L148-L152)).
 If you pass your own URL to the JS client, prefer `127.0.0.1` over `localhost` too.
 
 **Another machine.** `visionserve serve` only accepts connections from the same machine unless
