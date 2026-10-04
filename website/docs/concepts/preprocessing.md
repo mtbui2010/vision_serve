@@ -81,4 +81,5 @@ pixels:
     project one such mismatch cost RF-DETR about 2 mAP. That is why each model's preprocessing is
     pinned by tests against the reference implementation, and why the Python converter
     ([Clients and the converter](../architecture/clients.md)) shares the same rules, checked by
-    sync tests that compare Go and Python outputs value by value.
+    sync tests that compare Go and Python outputs value by value. To check your own model, see
+    [Inspect and verify a model](../guides/inspect.md#2-inspect-the-preprocessing).

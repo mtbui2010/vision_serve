@@ -26,6 +26,12 @@ Usage
    --only detection,depth,... (regenerate a subset; figures.json entries of the other figures
    are kept).
 
+3. The `inspect` step (guides/inspect.md) also needs `--inspect-models DIR`, the server's
+   registry. Use a scratch registry holding a copy of models/rf-detr: the step writes two copies
+   of its manifest with one preprocessing mistake each (letterbox, mean/std), runs the
+   converter's tiers B1 / B2 / C against them (Python package clients/python/visionserve/convert,
+   plus onnxruntime, pyyaml and pycocotools), prints the report and removes the copies.
+
 Photos: only COCO val2017 images whose Flickr license is "Attribution License" (CC BY 2.0)
 are used (PHOTOS below); each figure credits its photo. Durations are the server's own
 duration_ms of a warm call (each request is sent once to warm up, then measured).
@@ -852,6 +858,161 @@ class Builder:
                   image=self.source(pid), detections=len(pred.get("detections", [])),
                   explained=shown, **self.run_info(pred))
 
+    # -- 16. inspect: the converter's tiers B1 / B2 / C against deliberately WRONG manifests ------
+
+    # Copies of the rf-detr manifest with one preprocessing mistake each (weights symlinked).
+    INSPECT_WRONG = {
+        "rf-detr-letterbox": [("letterbox: false", "letterbox: true")],
+        "rf-detr-mean05": [("mean: [0.485, 0.456, 0.406]", "mean: [0.5, 0.5, 0.5]"),
+                           ("std:  [0.229, 0.224, 0.225]", "std:  [0.5, 0.5, 0.5]")],
+    }
+
+    def _inspect_registry(self):
+        """Write the wrong copies next to models/rf-detr in the server's registry (the server picks
+        new names up on first use). Returns the directories written, for removal afterwards."""
+        import yaml
+        root = Path(self.args.inspect_models)
+        src = root / "rf-detr"
+        text = (src / "manifest.yaml").read_text()
+        weights = src / yaml.safe_load(text)["model_file"]
+        made = []
+        for name, subs in self.INSPECT_WRONG.items():
+            d = root / name
+            if d.exists():
+                raise SystemExit(f"{d} exists; remove it first (the inspect step writes and removes it)")
+            t = text.replace("name: rf-detr\n", f"name: {name}\n")
+            for a, b in subs:
+                if a not in t:
+                    raise SystemExit(f"{src}/manifest.yaml has no {a!r}; update INSPECT_WRONG")
+                t = t.replace(a, b)
+            d.mkdir()
+            made.append(d)
+            (d / "manifest.yaml").write_text(t)
+            for f in src.iterdir():
+                if f.suffix == ".txt":
+                    (d / f.name).write_bytes(f.read_bytes())
+            os.symlink(weights.resolve(), d / weights.name)
+        return made
+
+    def _inspect_bundle(self, name):
+        """A converter Bundle describing models/<name> as the server reads it."""
+        import yaml
+        from visionserve.convert.common import Bundle
+        root = Path(self.args.inspect_models)
+        m = yaml.safe_load((root / name / "manifest.yaml").read_text())
+        src = root / "rf-detr"
+        labels = (src / m["labels"]).read_text().splitlines()
+        inp = m["input"]
+        return Bundle(name=name, task=m["task"], architecture=m["architecture"], license=m["license"],
+                      width=inp["width"], height=inp["height"], onnx={"model": str(src / m["model_file"])},
+                      letterbox=bool(inp.get("letterbox")), mean=inp["normalize"]["mean"],
+                      std=inp["normalize"]["std"], postprocess=m["postprocess"], labels=labels)
+
+    def inspect(self):
+        if not self.args.inspect_models:
+            print("  skip: pass --inspect-models DIR (the server's registry, with models/rf-detr in it)")
+            self.skipped.append("inspect (no --inspect-models)")
+            return
+        made = self._inspect_registry()
+        try:
+            self._inspect_run()
+        finally:
+            for d in made:
+                for f in d.iterdir():
+                    f.unlink()
+                d.rmdir()
+
+    def _inspect_run(self):
+        import dataclasses
+
+        from visionserve import Client
+        from visionserve.convert.evaluate import load_eval, tier_c
+        from visionserve.convert.reference import (ManifestReference, OnnxForward, UserReference,
+                                                   load_reference_script)
+        from visionserve.convert.report import Report, parse_thresholds
+        from visionserve.convert.verify import Plan, load_images, tier_b1, tier_b2
+
+        client = Client(self.args.server, timeout=600)
+        th = parse_thresholds(None)
+        pid = 177015
+        img, _raw = self.photo(pid)
+        photo = Path(self.args.coco_images) / f"{pid:012d}.jpg"
+        images = load_images([Path(self.args.coco_images) / f"{p:012d}.jpg" for p in PHOTOS])
+        # Tier B1's reference: the training-time preprocessing, as a --reference-script would give it.
+        train = load_reference_script(HERE / "inspect_reference.py")["preprocess"]
+
+        def train_bgr(pil):  # the same transform on a photo read by OpenCV (BGR channel order)
+            return train(Image.fromarray(np.ascontiguousarray(np.asarray(pil.convert("RGB"))[..., ::-1])))
+
+        cases = [("rf-detr", train, "correct manifest"),
+                 ("rf-detr-letterbox", train, "manifest says letterbox: true"),
+                 ("rf-detr-mean05", train, "manifest says mean = std = 0.5"),
+                 ("rf-detr", train_bgr, "training read photos as BGR")]
+        report = Report(models=[c[0] for c in cases])
+        b1, rows = [], []
+        for name, fn, what in cases:
+            b = self._inspect_bundle(name)
+            ref = UserReference(b, "input", fn, None, None, f"inspect_reference.py ({what})")
+            t = tier_b1(Plan(b, "input", ref, None, None, b.onnx["model"]), client, name, images, th)
+            t.title = f"B1 {name}: {what}"
+            report.add(t)
+            b1.append({"model": name, "case": what, "status": t.status, "summary": t.summary,
+                       "diagnosis": t.metrics.get("diagnosis"), "notes": t.notes})
+            if name != "rf-detr" or fn is train_bgr:
+                srv = client.preprocess(name, photo).inputs["input"][0]
+                rows.append((what, fn(img), srv, t, np.array(b.std, np.float32)))
+        # B2 and C: the served answers vs the same ONNX on the CORRECT preprocessing, decoded in
+        # Python like the Go side (an independent check of the Go decode and box mapping).
+        good = self._inspect_bundle("rf-detr")
+        ref = ManifestReference(good, "input", OnnxForward(good.onnx["model"]), "the exported ONNX (CPU)")
+        plan = Plan(good, "input", None, ref, None, good.onnx["model"])
+        ev = load_eval(self.args.coco_annotations, self.args.coco_images, self.args.inspect_eval_max)
+        b2c = []
+        for name in ("rf-detr", "rf-detr-letterbox"):
+            t2 = tier_b2(plan, client, name, images, th)
+            t2.title = f"B2 {name}"
+            tc = tier_c(plan, client, dataclasses.replace(good, name=name), ev, 1.0)
+            tc.title = f"C {name}"
+            report.add(t2)
+            report.add(tc)
+            b2c.append({"model": name, "b2": {"status": t2.status, "summary": t2.summary},
+                        "c": {"status": tc.status, "summary": tc.summary}})
+        print(report.table())
+        self._inspect_figure(rows, pid, b1, b2c, ev.source)
+
+    def _inspect_figure(self, rows, pid, b1, b2c, eval_source):
+        mean, std = (np.array(v, np.float32) for v in NORM["imagenet"])
+
+        def as_seen(t):  # a tensor read back with the TRAINING normalisation: what the model "sees"
+            return Image.fromarray(((t.transpose(1, 2, 0) * std + mean) * 255).clip(0, 255).astype(np.uint8))
+
+        fig, axes = plt.subplots(len(rows), 3, figsize=(8, 2.75 * len(rows)), squeeze=False)
+        for r, (what, ref, srv, t, srv_std) in enumerate(rows):
+            # Gray levels exactly as tier B1 counts them: |Δ tensor| x the served manifest's std x 255.
+            lv = (np.abs(srv - ref) * srv_std[:, None, None] * 255.0).mean(0)
+            codes = ", ".join(t.metrics.get("diagnosis") or {}) or "none"
+            for c, (im, title) in enumerate([(as_seen(ref), "reference (training)"),
+                                             (as_seen(srv), "server (/api/preprocess)")]):
+                axes[r, c].imshow(im)
+                axes[r, c].set_title(title, fontsize=9.5, color=INK, loc="left")
+            h = axes[r, 2].imshow(lv, cmap="magma", vmin=0, vmax=max(1.0, float(np.percentile(lv, 99.5))))
+            axes[r, 2].set_title(f"|Δ| gray levels, mean {lv.mean():.1f}", fontsize=9.5, color=INK, loc="left")
+            cb = fig.colorbar(h, ax=axes[r, 2], fraction=0.046, pad=0.03)
+            cb.ax.tick_params(labelsize=7.5, colors=INK2, length=0)
+            cb.outline.set_visible(False)
+            axes[r, 0].set_ylabel(f"{what}\ndiagnosis: {codes}", fontsize=9, color=INK)
+            for ax in axes[r]:
+                ax.set_xticks([])
+                ax.set_yticks([])
+                for s in ax.spines.values():
+                    s.set_color(GRID)
+        fig.subplots_adjust(left=0.07, right=0.97, top=0.95, bottom=0.02, wspace=0.08, hspace=0.22)
+        self._save_chart(fig, f"inspect-b1-{pid}.jpg",
+                         figure="Tier B1: the server's input tensor vs the training preprocessing, three "
+                                "deliberate mistakes",
+                         model=["rf-detr", *self.INSPECT_WRONG], request={"endpoint": "/api/preprocess"},
+                         image=self.source(pid), b1=b1, b2_c=b2c, eval_set=str(eval_source))
+
     # -- write ----------------------------------------------------------------------------------
 
     def write_index(self, keep):
@@ -892,7 +1053,7 @@ class Builder:
 
 STEPS = ["detection", "segmentation", "automask", "open_vocab", "grounded_sam", "depth", "faces",
          "ocr", "classification", "zero_shot", "grasp", "background", "preprocessing", "box_mapping",
-         "explain"]
+         "explain", "inspect"]
 
 
 def main():
@@ -903,6 +1064,12 @@ def main():
     ap.add_argument("--out", default=str(HERE.parent / "docs" / "assets" / "img"))
     ap.add_argument("--host-note", default="", help="free text recorded in figures.json, e.g. the GPU model")
     ap.add_argument("--only", default="", help="comma-separated subset of: " + ",".join(STEPS))
+    ap.add_argument("--inspect-models", default="", metavar="DIR",
+                    help="inspect step: the server's --models dir (a SCRATCH registry with models/rf-detr); "
+                         "the step writes two deliberately wrong copies of rf-detr there and removes them after")
+    ap.add_argument("--inspect-eval-max", type=int, default=200, metavar="N",
+                    help="inspect step: COCO val images for tier C (default 200; 50 was too noisy: the "
+                         "correct manifest measured -1.45 mAP there, +0.34 on 200)")
     args = ap.parse_args()
     steps = [s for s in args.only.split(",") if s] or STEPS
     b = Builder(args)

@@ -264,6 +264,9 @@ what the original returned. The converter checks in stages, and any FAIL uninsta
   the served model; by default more than 1 point lost is a FAIL and more than 0.5 a WARN
   (`--max-map-drop`).
 
+[Inspect and verify a model](../guides/inspect.md) shows each tier on real runs, including B1
+naming three deliberate preprocessing mistakes.
+
 Installation is not re-implemented in Python. The converter writes a folder and hands it to the
 Go binary, so the registry's own validation has the last word:
 

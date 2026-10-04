@@ -6,7 +6,7 @@ licensed by their Flickr authors under the Creative Commons Attribution 2.0 lice
 VisionServe and overlaid with its results (boxes, masks, grasps, depth).
 
 - Photo: COCO val2017 #177015, Flickr http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg, CC BY 2.0  
-  used in: `bbox-mapping-177015.jpg`, `explain-rfdetr-177015.jpg`, `openvocab-gdino-177015.jpg`, `preprocess-modes-177015.jpg`, `segment-sam-box-177015.jpg`
+  used in: `bbox-mapping-177015.jpg`, `explain-rfdetr-177015.jpg`, `inspect-b1-177015.jpg`, `openvocab-gdino-177015.jpg`, `preprocess-modes-177015.jpg`, `segment-sam-box-177015.jpg`
 - Photo: COCO val2017 #389381, Flickr http://farm3.staticflickr.com/2544/4007091102_031486bd66_z.jpg, CC BY 2.0  
   used in: `automask-sam-389381.jpg`, `grasp-rfdetr-389381.jpg`, `openvocab-gdino-389381.jpg`
 - Photo: COCO val2017 #372819, Flickr http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg, CC BY 2.0  

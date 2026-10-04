@@ -79,6 +79,8 @@ See the [model gallery](gallery.md) for real outputs on real photos.
   and how a photo becomes numbers a model can read.
 - :material-cogs: **[How it works](architecture/index.md)** — the parts of the program and how one
   request flows through them, with links into the code.
+- :material-magnify-scan: **[Inspect and verify a model](guides/inspect.md)** — check a model's
+  input size, preprocessing and postprocessing when it serves worse than it trained.
 - :material-language-go: **[Go for this project](go/index.md)** — a short Go tutorial that uses this
   repository's own code as the examples.
 - :material-api: **[Reference](reference/api.md)** — HTTP API, configuration, manifest format.
