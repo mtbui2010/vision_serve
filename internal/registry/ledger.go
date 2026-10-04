@@ -199,6 +199,46 @@ var LicenseLedger = []LedgerEntry{
 			"c6e405cb7c670d56636a9402c81023a55bc6c3c53d89cf02b92f5c5005bfe920", // text/tokenizer.json
 		},
 	},
+	// One repo, two licences: the rfdetr-textalign-* folders are Apache-2.0, the clip-text/ folder
+	// is MIT. Catalog entries point their source_url at their folder (catalog Entry.HFSubdir), and
+	// the longest prefix wins, so clip-text/ is audited by its own record below.
+	{SourcePrefix: "https://huggingface.co/mtbui2010/rfdetr-textalign-ONNX/", License: "Apache-2.0",
+		LicenseURL: "https://github.com/roboflow/rf-detr/blob/main/LICENSE", AuditedBy: "tmbui", AuditedDate: "2026-10-04",
+		Note: "FIRST-PARTY fine-tunes of Roboflow RF-DETR Small (Apache-2.0) on 22 tabletop classes (data captured by " +
+			"the authors, Apache-2.0), plus projections (proj.bin) trained by the authors and head.onnx exported from " +
+			"them. The text towers they borrow are separate catalog models with their own records (siglip-text " +
+			"Apache-2.0 above, clip-text MIT below).",
+		WeightSHA256: []string{
+			"cd4cb2166978635de3ab2323ed0d7198cc1ae5b77dc6e21c4c90845877579125", // dec1/ and dec1-siglip-prod/ detector.onnx
+			"ab6db90d0e921931be6303d06c2691ee777ce56fd9a7750e7741f9a8d667b3ab", // dec1/head.onnx
+			"1d81d692de4c7cd3b3345cfe317afd78f752be0347181798847709cc3a2aff2b", // dec1/proj.bin
+			"7de8ca150390b8e5d64d4541695a6b167c76793fdc0887e60c7e1481572c5a09", // dec1-siglip/detector.onnx
+			"ec724f1a1c338795e1db37dcb9892d27b8ffb6d1f69f2c47c0c2558f281cce5e", // dec1-siglip/head.onnx
+			"302640c92684e78b64e7c0fd89b4f1c2761184408c7735dbb74ab43257372c85", // dec1-siglip/proj.bin
+			"321bf1eb6803aa638016b48b7597f4fd56e73df11c36ebcf52dacbea65daa787", // dec1-siglip/labels.txt
+			"3f19241baa19cafb2f673a101f639aba55f445a944d055516745ab966e7fb804", // dec1-siglip-prod/head.onnx
+			"57ceaa1539bca398f3e495353f1761422594c11b8c683064a650a4fc6dcea91c", // dec1-siglip-prod/proj.bin
+			"efcf3af08d5e0512095946b69866425645fca81dc5e05aaea775eff9abc11b4c", // etri/detector-noattn.onnx
+			"5d87e22067458c9af1f679a8eeb85588569a84881a060ac0f1d8f8f252379818", // etri/detector-qf.onnx
+			"5484c2cdd32deb74776b9b8d7b9621354a330ac417eee2ba4cf0b497333f3c38", // etri/head.onnx
+			"314302bf7549d85ef2467375fa2d415dca2eb1dbfee6bf6e3f8efddafd89392b", // etri/proj.bin
+			"fdd0d4e9dc1965b37e46959d1fd2f3964fb407e5b176ea84a357dbeb921d183e", // */labels.txt (22 + N/A), vocab-all22.txt
+			"dd37dd428e8c0700e26b86a6c7701a9e50a26a9c32b932febdbcb9ebb45c663c", // */templates.txt
+		},
+	},
+	{SourcePrefix: "https://huggingface.co/mtbui2010/rfdetr-textalign-ONNX/tree/main/clip-text/", License: "MIT",
+		LicenseURL: "https://github.com/openai/CLIP/blob/main/LICENSE", AuditedBy: "tmbui", AuditedDate: "2026-10-04",
+		LicenseFileSHA256: "987e63b32f6c89ff5160e429458a872ff048e6860b590a3912e938f9da8f14db",
+		Note: "FIRST-PARTY ONNX export of the text tower of openai/clip-vit-base-patch32 (OpenAI CLIP, MIT; " +
+			"CLIPTextModelWithProjection, weights unchanged); vocab.json/merges.txt copied unchanged from that repo. " +
+			"The MIT notice ships as clip-text/LICENSE.",
+		WeightSHA256: []string{
+			"a104b96e1a9ce466e24dac4e32f406ffc412eb1a459049b4040eab97b196b580", // clip-text/model.onnx
+			"5047b556ce86ccaf6aa22b3ffccfc52d391ea4accdab9c2f2407da5b742d4363", // clip-text/vocab.json
+			"f526393189112391ce6f9795d4695f704121ce452c3aad1f5335cc41337eba85", // clip-text/merges.txt
+			"987e63b32f6c89ff5160e429458a872ff048e6860b590a3912e938f9da8f14db", // clip-text/LICENSE
+		},
+	},
 }
 
 // ledgerEnforced toggles the maintainer-audited cross-check. Off by default (local-first,

@@ -431,7 +431,7 @@ func (c *digestCache) sha256(path string) (string, error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/verify.go#L478-L510)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/verify.go#L527-L559)
 
 ### Preprocess without inference
 

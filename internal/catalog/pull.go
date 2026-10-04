@@ -104,8 +104,16 @@ func pull(name string, opts PullOptions, visiting map[string]bool) error {
 	}
 
 	source := "huggingface.co/" + entry.HFRepo
+	if entry.HFSubdir != "" {
+		source += "/" + strings.Trim(entry.HFSubdir, "/")
+	}
 	if len(entry.Dependencies) > 0 {
-		source = "local (" + strings.Join(entry.Dependencies, " + ") + ")"
+		deps := "local (" + strings.Join(entry.Dependencies, " + ") + ")"
+		if entry.composed() {
+			source = deps
+		} else {
+			source += " + " + deps
+		}
 	} else if entry.HFRepo == "" {
 		source = "external sources (Google Drive / direct URL)"
 	}

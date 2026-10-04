@@ -101,10 +101,11 @@ end to end); served whole-request median went from ~134 to ~121 ms on CPU, and o
 from ~62–73 to ~25–41 ms over two runs (`docs/refactor-proposal.md` §6). `folded`,
 `gated` and `dual` are unchanged and still read `proj.bin` in Go.
 
-`head.onnx` is **not committed** (`*.onnx` is gitignored) and is **not on the HF catalog** — none
-of the `rfdetr-textalign-*` models has an entry in `internal/catalog/catalog.go`, so
-`visionserve pull` never writes one of these directories. Generate it once per checkout, from the
-repo root, with any Python that has `numpy`, `onnx` and `onnxruntime`:
+`head.onnx` is **not committed** (`*.onnx` is gitignored). `visionserve pull rfdetr-textalign-*`
+downloads it, with the detector and `proj.bin`, from
+[`mtbui2010/rfdetr-textalign-ONNX`](https://huggingface.co/mtbui2010/rfdetr-textalign-ONNX) into a
+fresh model directory. In a checkout, generate it once, from the repo root, with any Python that
+has `numpy`, `onnx` and `onnxruntime`:
 
 ```sh
 python3 models/rfdetr-textalign-dec1-siglip/export_head_onnx.py                  # this directory

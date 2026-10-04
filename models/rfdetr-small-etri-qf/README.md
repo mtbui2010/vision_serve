@@ -49,7 +49,11 @@ silently taken for the logits — no error, just wrong results. Preserve the ord
 
 ## Publishing so `visionserve pull` can fetch it
 
-The weights are **not committed** (114 MB). To make this model pullable:
+The weights are **not committed** (114 MB). These exact bytes (same `sha256`) are published as
+`etri/detector-qf.onnx` in
+[`mtbui2010/rfdetr-textalign-ONNX`](https://huggingface.co/mtbui2010/rfdetr-textalign-ONNX), where
+`visionserve pull rfdetr-textalign-etri` fetches them as its `explain` graph. This detector has no
+catalog entry of its own yet. To make it pullable on its own:
 
 1. Upload `model.onnx` + `labels.txt` to a public HuggingFace repo.
 2. Add `source_url` to `manifest.yaml` (the `sha256` is already filled in and pins these

@@ -39,9 +39,10 @@ Usage (from the repo root, with any Python that has numpy + onnx + onnxruntime):
 
 Then enable it in that directory's manifest.yaml:   files:  head: head.onnx
                                        together with  runtime:  threads: {head: 1}
-The shipped rfdetr-textalign-* manifests already do; head.onnx itself is not committed and not on
-the HF catalog, so this script is how a checkout gets it. The export is deterministic (same proj.bin
-and same onnx package -> byte-identical head.onnx).
+The shipped rfdetr-textalign-* manifests already do; head.onnx itself is not committed, so this
+script is how a checkout gets it (`visionserve pull rfdetr-textalign-*` downloads the same bytes from
+huggingface.co/mtbui2010/rfdetr-textalign-ONNX). The export is deterministic (same proj.bin and same
+onnx package -> byte-identical head.onnx; checked with onnx 1.21.0 against all four published heads).
 """
 import argparse
 import importlib.util

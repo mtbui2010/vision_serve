@@ -437,7 +437,7 @@ shared vision library; see [vision.md](vision.md).
 | `groundingdino` | `grounding-dino` | Pipeline | open_vocab | Text-prompted detection, one graph, pure-Go BERT tokenizer. Exclusive. |
 | `groundedsam` | `grounded-sam` | Pipeline | open_vocab | GroundingDINO boxes, then one MobileSAM mask per box. See [pipelines.md](pipelines.md). |
 | `hybrid` | `rfdetr-gdino`, `gdino-siglip` | Pipeline | open_vocab | Router: RF-DETR for known class names, GroundingDINO for the rest, optional SigLIP rescoring and masks. |
-| `textalign` | `rfdetr-textalign` | Pipeline | open_vocab | A small trained head that maps frozen RF-DETR query features into CLIP text space, so the vocabulary can change without re-export. |
+| `textalign` | `rfdetr-textalign` | Pipeline | open_vocab | A small trained head that maps frozen RF-DETR query features into CLIP or SigLIP text space, so the vocabulary can change without re-export. Pull `rfdetr-textalign-dec1`, `-dec1-siglip`, `-dec1-siglip-prod` or `-etri` (tabletop fine-tunes). |
 | `owlvit` | `owlvit` | Pipeline | instance_detection | OWLv2 image-conditioned one-shot detection against registered template images. Uses NMS. |
 | `scrfd` | `scrfd` | Model | detection | SCRFD face detector (InsightFace, MIT). Anchor-based, so it uses NMS. |
 | `paddleocr` | `paddle-ocr` | Pipeline | detection | PP-OCRv4: DBNet text detection, then SVTR recognition per region; text goes in `class`. |

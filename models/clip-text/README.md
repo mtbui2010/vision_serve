@@ -127,41 +127,21 @@ One known deviation: HuggingFace applies Unicode **NFC** normalisation first and
 not (it would add a `golang.org/x/text` dependency). Already-NFC input — which all ASCII
 is — is unaffected; decomposed input (`"e"` + U+0301 rather than `"é"`) can differ.
 
-## Publishing so `visionserve pull` can fetch it
+## Pulling it
 
-`model.onnx` is **not committed** (244 MB). To make this model pullable:
+`model.onnx` is **not committed** (244 MB). It is published, with `vocab.json`, `merges.txt` and
+OpenAI's MIT `LICENSE`, in the `clip-text/` folder of
+[`mtbui2010/rfdetr-textalign-ONNX`](https://huggingface.co/mtbui2010/rfdetr-textalign-ONNX), next to
+the text-aligned detectors that use it:
 
-1. Upload `model.onnx`, `vocab.json` and `merges.txt` to a public HuggingFace repo (or
-   point at `openai/clip-vit-base-patch32` for the two tokenizer files, which are already
-   there — the ONNX itself is not).
-2. Point `source_url` in `manifest.yaml` at the uploaded ONNX (`sha256.model` already pins
-   these exact bytes).
-3. Add an entry to [`internal/catalog/catalog.go`](../../internal/catalog/catalog.go):
-
-```go
-{
-    Name:         "clip-text",
-    Task:         "embed",
-    License:      "MIT",
-    Architecture: "clip-text",
-    Description:  "CLIP ViT-B/32 text tower — 512-d text embeddings in the clip image-tower space",
-    HFRepo:       "<your-org>/clip-vit-base-patch32-text-onnx",
-    Files: []File{
-        {Role: "model", HFFilename: "model.onnx", LocalFilename: "model.onnx"},
-        {Role: "vocab", HFFilename: "vocab.json", LocalFilename: "vocab.json"},
-        {Role: "merges", HFFilename: "merges.txt", LocalFilename: "merges.txt"},
-    },
-    InputWidth: 77, InputHeight: 1, InputLayout: "NCHW",
-    PostprocessType:   "embed",
-    RuntimePrefer:     []string{"cuda", "cpu"},
-    IdleUnloadSeconds: 300,
-    Verified:          true,
-},
+```bash
+visionserve pull clip-text                 # this tower alone
+visionserve pull rfdetr-textalign-dec1     # pulls clip-text as a dependency
 ```
 
-As with `rfdetr-small-etri-qf`, the catalog entry is deliberately **not** added yet:
-`visionserve list` would advertise the model as pullable and every `pull` would fail
-until the repo exists.
+The catalog entry (`internal/catalog/catalog.go`) pins the same `sha256` as `manifest.yaml`
+here. Its `source_url` is the folder, not the repo root, because the rest of that repo is
+Apache-2.0 and the provenance ledger audits `clip-text/` as MIT on its own.
 
 ## Reproduce
 
