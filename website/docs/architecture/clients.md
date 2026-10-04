@@ -179,21 +179,26 @@ default) is not listening.
   constructor(host = "http://127.0.0.1:11435", opts: ClientOptions = {}) {
     this.host = host.replace(/\/+$/, "");
     this.timeoutMs = opts.timeoutMs ?? 120_000;
+    this.base64Arrays = Boolean(opts.base64Arrays);
   }
   // ...
   async predict(model: string, image: ImageInput, opts: PredictOptions = {}): Promise<Result> {
+    const form = buildPredictForm(model, opts, this.base64Arrays);
     const { blob, filename } = await toBlob(image);
-
-    const form = new FormData();
-    form.append("model", model);
-    // ...
     form.append("image", blob, filename);
+    const depth = depthBlob(opts);
+    if (depth) form.append("depth", depth, "depth.bin");
+
+    const data = await this.request("POST", "/api/predict", form);
+    return Result.fromJSON((data ?? {}) as Record<string, unknown>);
+  }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/client.ts#L54-L109)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/client.ts#L148-L202)
 
-The JS `predict` takes `prompt`, `box` and `point`; the many per-model options of the Python
-SDK (thresholds, `roi`, grasp bounds, `encoding`) are not exposed there yet.
+The JS `predict` takes the same options as the Python one, in camelCase (`boxThreshold` is sent
+as `box_threshold`), and normalises prompts with the same rule; both SDKs run the shared cases in
+`clients/testdata/normalize_prompt.json`.
 
 ### The converter: `visionserve convert`
 
