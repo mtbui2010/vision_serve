@@ -8,8 +8,12 @@ VisionServe works with no configuration. Everything below is optional.
 visionserve serve   [--addr 127.0.0.1:11435] [--models DIR] [--preload a,b]
                     [--idle-unload-seconds N] [--tensorrt]
 visionserve run     MODEL IMAGE [--prompt "cat. dog."] [--box x,y,w,h] [--point x,y[,label]]
-                    [--roi x,y,w,h] [--min-size %] [--max-size %] [--save | --save-as out.png]
-                    [--tensorrt]
+                    [--box-threshold T] [--text-threshold T] [--roi x,y,w,h] [--dilate N]
+                    [--min-size %] [--max-size %] [--method NAME] [--bg-max-area %]
+                    [--fg-min-area %] [--grid-size N] [--gripper-min PX] [--gripper-max PX]
+                    [--claim-threshold P] [--crop-temp T] [--template IMG ...]
+                    [--depth FILE [--depth-dtype uint16|float32] [--depth-width W --depth-height H]]
+                    [--save | --save-as out.png] [--tensorrt]
 visionserve list    [--models DIR]             # installed + pullable models
 visionserve pull    MODEL [--models DIR] [--force]
 visionserve ps      [--addr ...]               # models loaded in a running server
@@ -25,6 +29,13 @@ visionserve version
 | `--preload` | Load these models at start-up instead of on first use. |
 | `--idle-unload-seconds` | Override every model's idle timeout. `0` = never unload, `-1` = each manifest's own value (300 s by default). |
 | `--tensorrt` | Try TensorRT before CUDA for every model whose chain uses CUDA. See [Model files and ONNX Runtime](../concepts/onnx.md#cpu-or-gpu-execution-providers). |
+
+`run` takes the options of `POST /api/predict` as flags named after the form fields
+(`box_threshold` → `--box-threshold`; meanings in the [option table](../clients/python.md#every-option-at-a-glance)).
+Two stand in for uploads: `--depth FILE` is a raw little-endian depth map (`uint16` unless
+`--depth-dtype float32`; the image's size unless `--depth-width`/`--depth-height`), and
+`--template IMG` (repeat it for several images) gives an `instance_detection` model its example
+images directly, since there is no server to register a `template_name` with.
 
 The source of truth for flags is `visionserve help` and
 [`internal/cli`](https://github.com/mtbui2010/vision_serve/tree/main/internal/cli).
