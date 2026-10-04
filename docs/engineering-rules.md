@@ -74,6 +74,8 @@ CLAUDE.md carries the one-line version; this file is the "why" and "where".
 - Docs change in the **same** commit as the behaviour. Numbers in docs say where they were
   measured. Stale claims (TensorRT-first, "Run locks a mutex") cost more than missing ones.
 - Every client package builds in CI (`tsc`, `pytest`), not only the Go server.
+- Every ```mermaid diagram is parsed in CI (`website/tools/check_mermaid.mjs`): a `;` inside a
+  sequence-diagram message silently broke the README's diagram on GitHub.
 - Shell helpers: `pgrep -f PATTERN` matches its own command line — never loop on it.
 
 ## Before you merge
