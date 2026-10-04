@@ -79,6 +79,10 @@ CLAUDE.md carries the one-line version; this file is the "why" and "where".
 - Every ```mermaid diagram is parsed in CI (`website/tools/check_mermaid.mjs`): a `;` inside a
   sequence-diagram message silently broke the README's diagram on GitHub.
 - Shell helpers: `pgrep -f PATTERN` matches its own command line — never loop on it.
+- A helper that picks a runtime library picks one that **loads on this host**, not the first or
+  newest it finds: `scripts/gpu-env.sh` picked an ORT 1.30 built for CUDA 13 on a CUDA 12.8
+  driver, and every `make serve` ran on the CPU. It now checks the CUDA runtime major against
+  the driver and that every dependency resolves, and prints its choice.
 
 ## Before you merge
 
