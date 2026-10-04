@@ -7,6 +7,15 @@ embeddings, grasping. No account, no cloud, no telemetry. Apache-2.0.
 📖 **Documentation: <https://mtbui2010.github.io/vision_serve/>**: concepts, how it works,
 model gallery, HTTP API, and a Go tutorial built on this code base.
 
+| I want to… | Read |
+|---|---|
+| Install it (Docker or from source, GPU setup) | [Getting started](https://mtbui2010.github.io/vision_serve/getting-started/) |
+| Choose a model and run it | [Models and performance](https://mtbui2010.github.io/vision_serve/reference/models/) · [What the models do](https://mtbui2010.github.io/vision_serve/concepts/tasks/) · [Run your first request](https://mtbui2010.github.io/vision_serve/getting-started/#4-make-a-request) |
+| Inspect a model: input sizes, preprocessing, postprocessing | [Inspect and verify a model](https://mtbui2010.github.io/vision_serve/guides/inspect/) |
+| Call it from Python / JavaScript, with every parameter explained | [Clients](https://mtbui2010.github.io/vision_serve/clients/) · [Python](https://mtbui2010.github.io/vision_serve/clients/python/) |
+| Call the HTTP API directly | [HTTP API](https://mtbui2010.github.io/vision_serve/reference/api/) |
+| Understand or change the code | [How it works](https://mtbui2010.github.io/vision_serve/architecture/) · [Go for this project](https://mtbui2010.github.io/vision_serve/go/) |
+
 ![Grounded-SAM: "dog. person. bench."](website/docs/assets/img/grounded-sam-372819.jpg)
 
 ## Quick start
