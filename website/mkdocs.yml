@@ -67,6 +67,11 @@ extra_css:
 nav:
   - Home: index.md
   - Getting started: getting-started.md
+  - Clients:
+      - clients/index.md
+      - Python: clients/python.md
+      - JavaScript / TypeScript: clients/javascript.md
+      - Plain HTTP: clients/http.md
   - Concepts:
       - concepts/index.md
       - What the models do: concepts/tasks.md

@@ -57,6 +57,8 @@ export function filterBySize(result: Result, opts: SizeFilterOptions): Result {
     result.depthHeight,
     result.embeddings,
     result.durationMs,
+    result.grasps,
+    result.device,
   );
 }
 

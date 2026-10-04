@@ -75,6 +75,8 @@ See the [model gallery](gallery.md) for real outputs on real photos.
 
 - :material-rocket-launch: **[Getting started](getting-started.md)** — install, download a model,
   make your first request (curl, Python, Docker).
+- :material-language-python: **[Clients](clients/index.md)** — the Python and JavaScript SDKs in
+  detail: every `predict` option, what it changes, which models read it, with real outputs.
 - :material-school: **[Concepts](concepts/index.md)** — what detection, segmentation, depth… mean,
   and how a photo becomes numbers a model can read.
 - :material-cogs: **[How it works](architecture/index.md)** — the parts of the program and how one

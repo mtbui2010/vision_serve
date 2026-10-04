@@ -112,13 +112,20 @@ visionserve run rf-detr photo.jpg              # prints the JSON answer
 
 === "JavaScript"
 
-    ```ts
-    import { VisionServe } from "visionserve";
+    ```bash
+    npm install visionserve
+    ```
 
-    const vs = new VisionServe();                    // http://127.0.0.1:11435
-    const res = await vs.predict("rf-detr", "photo.jpg");
+    ```ts
+    import { Client } from "visionserve";
+
+    const client = new Client();                     // http://127.0.0.1:11435
+    const res = await client.predict("rf-detr", "photo.jpg");
     console.log(res.detections);
     ```
+
+Every option of `predict` (prompts, thresholds, size filters, `roi`, grasp bounds, …), what it
+means and which models read it is in [Clients](clients/index.md).
 
 ## 5. Read the answer
 

@@ -191,7 +191,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--roi",
         metavar="x,y,w,h",
-        help="region of interest in ORIGINAL pixels: process only this crop, map results back",
+        help="region of interest in ORIGINAL pixels (or 0..1 fractions when w,h <= 1): "
+        "process only this crop, map results back",
     )
     p.add_argument(
         "--method",

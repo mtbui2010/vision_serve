@@ -1018,10 +1018,12 @@ class Builder:
     def write_index(self, keep):
         path = self.out / "figures.json"
         old = []
-        if keep and path.exists():
-            # Keep the other figures' entries, minus any whose file is gone (renamed/removed).
+        if path.exists():
+            # Keep the other figures' entries (with --only), and always those another script wrote
+            # (they carry "generated_by", e.g. clients_figures.py), minus any whose file is gone.
             old = [e for e in json.loads(path.read_text())["figures"]
-                   if e["file"] not in {n["file"] for n in self.entries}
+                   if (keep or e.get("generated_by"))
+                   and e["file"] not in {n["file"] for n in self.entries}
                    and (self.out / e["file"]).exists()]
         doc = {"generated_by": "website/tools/figures.py",
                "server": "VisionServe (see each entry's device)",
@@ -1047,7 +1049,8 @@ class Builder:
             if pid in used:
                 lines.append(f"- {self.credit(pid)}  \n  used in: " + ", ".join(f"`{f}`" for f in used[pid]))
         lines += ["", "The OCR receipt is a synthetic image rendered by `website/tools/figures.py`.",
-                  "Figures are regenerated with `website/tools/figures.py` (usage at the top of the file).", ""]
+                  "Figures are regenerated with `website/tools/figures.py`, and the `clients-*` ones with",
+                  "`website/tools/clients_figures.py` (usage at the top of each file).", ""]
         (self.out / "CREDITS.md").write_text("\n".join(lines))
 
 

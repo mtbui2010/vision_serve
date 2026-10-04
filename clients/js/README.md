@@ -114,7 +114,7 @@ console.log(gs.detections.map((d) => d.cls), "→", gs.masks.length, "masks");
 
 ```ts
 const dep = await client.predict("depth-anything-v2", "photo.jpg");
-// dep.depthMap is a Float32Array, length = dep.depthWidth × dep.depthHeight
+// dep.depthMap is a number[], row-major, length = dep.depthWidth × dep.depthHeight
 const depth2d: number[][] = [];
 for (let y = 0; y < dep.depthHeight; y++) {
   depth2d.push(Array.from(dep.depthMap.slice(y * dep.depthWidth, (y + 1) * dep.depthWidth)));
@@ -347,10 +347,12 @@ const rel = filterBySize(res, {
 
 // Via Client method:
 const filtered = client.filterBySize(res, { minSize: 500 });
-// Note: pass min_size/max_size to predict() for server-side filtering (% of image area)
-const serverFiltered = await client.predict("rf-detr", "image.jpg",
-  { minSize: 0.5, maxSize: 80 });   // 0.5%–80% of image area
 ```
+
+`predict()` takes only `prompt`, `box` and `point`; any other key in its options is ignored.
+For the server-side options (`min_size`, `roi`, thresholds, …) send the form yourself — see
+[Clients › JavaScript](https://mtbui2010.github.io/vision_serve/clients/javascript/) on the docs
+site.
 
 ## Visualization
 
