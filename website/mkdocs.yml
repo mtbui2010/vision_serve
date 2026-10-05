@@ -88,9 +88,17 @@ nav:
       - Catalog and installing models: architecture/catalog.md
       - Clients and the converter: architecture/clients.md
   - Guides:
-      - Inspect and verify a model: guides/inspect.md
-      - Reduced precision (FP16, INT8): guides/precision.md
-      - Fast and small for Jetson (bench, optimize): guides/edge.md
+      - guides/index.md
+      - Use a model you trained: guides/use-your-model.md
+      - See what a model takes and returns: guides/see-a-model.md
+      - Check it behaves like training: guides/check-training.md
+      - Make it smaller and faster for Jetson: guides/jetson.md
+      - Measure speed: guides/measure-speed.md
+      - My served model is worse than in training: guides/worse-than-training.md
+      - Deep dives:
+          - Inspect and verify a model (tiers A, B1, B2, C): guides/inspect.md
+          - Reduced precision (FP16, INT8, INT4, mixed): guides/precision.md
+          - Jetson details (bench, sensitivity, optimize): guides/edge.md
   - Model gallery: gallery.md
   - Go for this project:
       - go/index.md

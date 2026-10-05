@@ -1,4 +1,12 @@
-# Inspect and verify a model
+# Inspect and verify a model: deep dive
+
+!!! info "This is a deep dive"
+    The short versions, one command each:
+    [See what a model takes and returns](see-a-model.md) (`visionserve inspect`),
+    [Check it behaves like training](check-training.md) (`visionserve check`) and
+    [My served model is worse than in training](worse-than-training.md) (the checklist). This page
+    explains what those commands check, shows how to do the same by hand, and keeps the
+    measurements behind the defaults.
 
 A served model can be worse than the same model in your training notebook and never say so. It
 loads, it answers, the boxes look plausible. The cause is almost always one of three things: the
