@@ -198,6 +198,11 @@ What this says, in plain terms:
   (−5.9 mAP) and weight-only INT4 (−11.4 mAP) were over budget.
 - Latency on a shared machine is noisy; when p95 exceeds 1.5 × p50 the verdict is WARN. None of
   these latencies is the Jetson's: bench the chosen file there.
+- These runs used the `rf-detr-nano` manifest from before its preprocessing fix, which
+  letterboxed (RF-DETR is trained squashed, BUGS_TO_FIX.md #1). Every row shares that
+  preprocessing, so the Δ vs FP32 columns compare precisions fairly; the absolute mAP is lower than
+  the fixed manifest gives. A variant made by `optimize --install` copies its source's
+  preprocessing, so one made before the fix letterboxes too: set `input.letterbox: false` in it.
 
 Installing a variant anyway and benching it, as you would on the device:
 
