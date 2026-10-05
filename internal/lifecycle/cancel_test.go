@@ -55,8 +55,8 @@ func request(m *Manager, ctx context.Context, name string) <-chan error {
 			errc <- err
 			return
 		}
-		defer release()
 		_, err = m.PredictPrompt(ctx, name, image.NewRGBA(image.Rect(0, 0, 2, 2)), models.Prompt{})
+		release() // before reporting: a test that checks the admission count right after must see it released
 		errc <- err
 	}()
 	return errc
