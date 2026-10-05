@@ -275,13 +275,14 @@ plumbing):
 | **B1** | `/api/preprocess` vs the reference preprocessing, same photos | mean \|Δ\| ≤ 2 gray levels (WARN up to 8, FAIL above) |
 | **B2** | `/api/predict` vs the original framework pipeline, same photos (`--images`) | detection: ≥ 95 % of boxes matched (same class, IoU ≥ 0.5), mean \|Δconf\| ≤ 0.03, mean box error ≤ 1 % of the image diagonal; classification: the same top-1 on every photo |
 | **C** | Accuracy (mAP or top-1) of the reference and of the served model on **your** labelled data (`--eval`) | the served model loses ≤ 0.5 point (WARN up to 1, FAIL above, `--max-map-drop`) |
+| **P** | Only with `--precision`: the FP16 / INT8 model vs the FP32 ONNX on the calibration images ([Reduced precision](precision.md)) | output distance ≤ 0.05 (WARN up to 0.25, FAIL above). A reduced model without `--eval` also gets a WARN: its accuracy was not measured |
 
 The B1 reference is, strongest first: your own transform (`--reference-script FILE.py`, or
 `preprocess=` in the Python API), the framework's official pipeline (rfdetr's `predict`, a
 HuggingFace image processor), or the manifest's preprocessing re-implemented in numpy. Only the
 first two check that the manifest matches **training**; the third only checks the Go code. The
 thresholds are in
-[`convert/report.py`](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/convert/report.py#L24-L49)
+[`convert/report.py`](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/convert/report.py#L24-L54)
 and can be changed with `--threshold key=value`.
 
 ### A real run

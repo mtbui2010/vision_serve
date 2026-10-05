@@ -18,6 +18,7 @@ const defaultConvertImage = "mtbui2010/visionserve-convert:latest"
 var convertPathFlags = map[string]bool{
 	"--labels": true, "--script": true, "--weights": true,
 	"--images": true, "--eval": true, "--eval-images": true, "--reference-script": true,
+	"--calib": true,
 }
 
 // runConvert: visionserve convert <format> <source> [flags...]
