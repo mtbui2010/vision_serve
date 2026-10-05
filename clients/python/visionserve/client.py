@@ -66,12 +66,14 @@ class Client:
             an image larger than the model can use to the server's hint for that model
             (``GET /api/models``, fetched once and cached): a 12 MP photo becomes ~1.7 MP for
             RF-DETR, while masks, OCR, grasping and template models (no hint) always get the full
-            image. ``"off"``: send every image exactly as given. An int ``N``: shrink to a longer
+            image. When ``host`` is this machine (``localhost``, 127.0.0.0/8, ``::1``) a photo is
+            shrunk only when that at least halves its sides (the loopback rule; see
+            :attr:`Result.client_resize`). ``"off"``: send every image exactly as given. An int ``N``: shrink to a longer
             side of ``N`` pixels for every model, whatever its hint. Results are always mapped
             back to ORIGINAL image pixels; :attr:`Result.client_resize` says what was done.
-        jpeg: encode a shrunk image — and a non-JPEG image the client processes for a model with a
-            hint — as JPEG (default ``True``) instead of lossless PNG. A JPEG that needs no
-            shrinking is always sent untouched.
+        jpeg: send a shrunk image as JPEG (default ``True``) instead of lossless PNG. An image that
+            is not shrunk is always sent exactly as given (a path / bytes verbatim, PIL / numpy as
+            lossless PNG).
         jpeg_quality: JPEG quality 1..100 (default 90).
 
     Client-side resizing needs Pillow (``pip install 'visionserve[images]'``); without it every
@@ -170,8 +172,8 @@ class Client:
                   uint8); grayscale ``(H, W)`` is promoted to RGB. Encoded client-side.
                   How it is sent depends on the client's ``resize`` / ``jpeg`` (see
                   :class:`Client`): by default, an image larger than the model can use is shrunk
-                  and sent as JPEG; with no hint (or ``resize="off"``) paths and bytes go out
-                  verbatim and PIL / ndarray images as lossless PNG.
+                  and sent as JPEG; anything not shrunk goes out as before: paths and bytes
+                  verbatim, PIL / ndarray images as lossless PNG.
             prompt: free-text open-vocab prompt, e.g. ``"cat. remote."``.
                     For ``grounding-dino``, ``grounded-sam``, and ``grasp-gd`` models,
                     defaults to ``"object"`` when not provided.
@@ -394,16 +396,20 @@ class Client:
         mode = _resize.check_resize(self.resize if resize is None else resize)
         use_jpeg = bool(self.jpeg if jpeg is None else jpeg)
         quality = _resize.check_quality(self.jpeg_quality if jpeg_quality is None else jpeg_quality)
-        max_side = max_short = None
+        max_side = max_short = max_scale = None
+        reason = "hint"
         if not full_res and mode != _resize.RESIZE_OFF:
             if mode == _resize.RESIZE_AUTO:
                 max_side, max_short = self.useful_side(model)
+                if _is_loopback(self.host):
+                    max_scale = _LOOPBACK_MAX_SCALE
             else:
-                max_side = int(mode)
+                max_side, reason = int(mode), "resize=%d" % int(mode)
         roi_box = _single_box(roi) if roi is not None else None
         return _resize.prepare_upload(
             image, max_side=max_side, max_short_side=max_short, jpeg=use_jpeg, quality=quality,
             roi=roi_box, encode_plain=_encode_image, ndarray_to_pil=_ndarray_to_pil,
+            reason=reason, max_scale=max_scale,
         )
 
     # ------------------------------------------------------------------ #
@@ -469,6 +475,31 @@ class Client:
 
 # How long an unknown model name waits before it triggers another GET /api/models (seconds).
 _HINT_REFRESH_S = 5.0
+
+# The loopback rule of resize="auto": with the server on this machine the upload costs nothing,
+# so a photo is shrunk only when that at least halves its sides; a milder shrink (GroundingDINO's
+# 1600 px hint on a 4000 x 3000 photo: scale 0.53) measured slower than sending it whole, because
+# the client must decode the full photo. Remote servers keep shrinking to the hint.
+_LOOPBACK_MAX_SCALE = 0.5
+
+
+def _is_loopback(host: str) -> bool:
+    """True when ``host`` (the client's base URL) names this machine: ``localhost``, 127.0.0.0/8
+    or ``::1``. Only literal addresses and the name ``localhost`` count (no DNS lookup)."""
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    try:
+        name = urlsplit(host if "://" in host else "http://" + host).hostname or ""
+    except ValueError:
+        return False
+    name = name.lower().rstrip(".")
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
 
 
 def _single_box(roi: Any) -> List[float]:

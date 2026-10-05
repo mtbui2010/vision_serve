@@ -71,7 +71,7 @@ that unlock array and PIL inputs, mask decoding and drawing.
         self._hints_lock = threading.Lock()
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L81-L102)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L83-L104)
 
 `Client.predict(model, image, ...)` accepts a file path, encoded bytes, a `PIL.Image` or a
 `numpy` array. Prompts and options become multipart form fields: boxes as `"x,y,w,h"` joined by
@@ -86,10 +86,11 @@ Both SDKs shrink a photo larger than the model can use before uploading it
 (`lifecycle.UsefulSide`, `models.RegisterUsefulSide`) or set by the manifest's
 `runtime.max_useful_side`. A model without a hint (masks, OCR, grasping, templates, crop
 namers) gets every photo exactly as before. The SDK fetches the list once, decodes and shrinks
-the photo (EXIF rotation first, JPEG 4:4:4 at quality 90), scales `box` / `point` / `roi` into
-the sent photo and maps every returned box, mask and grasp back, so callers still see original
-pixels; `Result.client_resize` records what was done. A JPEG that needs no shrinking is sent
-byte for byte. The JS SDK has no image decoder of its own: it uses the browser's
+the photo (JPEG draft decode, EXIF rotation, Lanczos, JPEG 4:4:4 at quality 90), scales `box` /
+`point` / `roi` into the sent photo and maps every returned box, mask and grasp back, so callers
+still see original pixels; `Result.client_resize` records what was done and why. Only a shrunk
+photo is re-encoded. With the server on this machine, only a shrink to half the sides or less
+is done (the loopback rule). The JS SDK has no image decoder of its own: it uses the browser's
 (`createImageBitmap` + `OffscreenCanvas`) or `sharp` when the application has it, else sends
 photos as they are. The measured effect (bytes, latency, mAP) is in
 [Clients › Python](../clients/python.md#client-side-resizing-on-by-default).
@@ -124,7 +125,7 @@ and answer 503 without receiving megabytes for nothing (see [HTTP server](server
         _write_file("image", image_bytes, filename)
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L714-L734)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L745-L765)
 
 Other calls mirror the HTTP routes: `health()`, `list_models()`, `load()`, `unload()`, `ps()`,
 and `preprocess()` / `tokenize()`, which return the exact tensors the server would feed the
@@ -229,7 +230,7 @@ default) is not listening.
     return cr.clientResize ? mapResult(result, cr.clientResize) : result;
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/client.ts#L200-L296)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/client.ts#L224-L320)
 
 The JS `predict` takes the same options as the Python one, in camelCase (`boxThreshold` is sent
 as `box_threshold`), and normalises prompts with the same rule; both SDKs run the shared cases in

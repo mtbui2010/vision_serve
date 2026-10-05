@@ -5,7 +5,7 @@
  * README and `clients/js/README.md` for usage.
  */
 
-export { Client, VisionServeError, normalizePrompt } from "./client.js";
+export { Client, VisionServeError, normalizePrompt, isLoopback } from "./client.js";
 export type { ImageInput, BoxInput, PointInput, DepthInput, PredictOptions, ClientOptions } from "./client.js";
 export { Result, Detection, Mask, Grasp, ModelInfo, Classification } from "./types.js";
 export type { Task, ModelState } from "./types.js";

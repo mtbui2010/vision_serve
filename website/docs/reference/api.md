@@ -56,7 +56,8 @@ region of interest (`roi`) the bound applies to the region. A manifest overrides
 [`runtime.max_useful_side`](manifest.md) (`0` = never shrink). Both keys are always present;
 a server that predates them sends neither, which clients read as "no hint". The
 [Python and JavaScript SDKs](../clients/python.md#client-side-resizing-on-by-default) apply the
-hint by default and map every result back to the original photo's pixels.
+hint by default (on a server on the same machine only when it at least halves the photo's
+sides) and map every result back to the original photo's pixels.
 
 ## `POST /api/predict`
 

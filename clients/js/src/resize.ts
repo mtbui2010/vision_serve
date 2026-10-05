@@ -27,15 +27,29 @@ export class ClientResize {
   /** The image actually uploaded. */
   readonly sentWidth: number;
   readonly sentHeight: number;
-  /** JPEG quality it was encoded at, or `null` when it was sent as PNG (`jpeg: false`). */
+  /** JPEG quality it was encoded at, or `null` when it was sent as PNG (`jpeg: false`) or not re-encoded. */
   readonly jpegQuality: number | null;
+  /**
+   * Why: `"hint"` (shrunk to the server's hint), `"resize=N"` (an explicit longest side), or
+   * `"loopback: scale 0.53 > 0.5, sent as is"` (larger than the hint, but the server is on this
+   * machine and the shrink too mild to pay for the decode; sent untouched, `resized` false).
+   */
+  readonly reason: string;
 
-  constructor(originalWidth: number, originalHeight: number, sentWidth: number, sentHeight: number, jpegQuality: number | null) {
+  constructor(
+    originalWidth: number,
+    originalHeight: number,
+    sentWidth: number,
+    sentHeight: number,
+    jpegQuality: number | null,
+    reason = "hint",
+  ) {
     this.originalWidth = originalWidth;
     this.originalHeight = originalHeight;
     this.sentWidth = sentWidth;
     this.sentHeight = sentHeight;
     this.jpegQuality = jpegQuality;
+    this.reason = reason;
   }
 
   /** True when the uploaded image is smaller than the original (else it was only re-encoded). */
@@ -125,6 +139,8 @@ export interface ImageProbe {
   height: number;
   /** True for a JPEG — the only format whose EXIF orientation the server applies. */
   isJpeg: boolean;
+  /** A JPEG's EXIF orientation (1..8), when the codec read it. */
+  orientation?: number;
 }
 
 /** Size + format from a JPEG or PNG header (EXIF orientation applied for JPEG), or `null`. */
@@ -157,7 +173,7 @@ export function probeHeader(b: Uint8Array): ImageProbe | null {
       const h = v.getUint16(i + 5);
       const w = v.getUint16(i + 7);
       const swap = orientation >= 5 && orientation <= 8;
-      return { width: swap ? h : w, height: swap ? w : h, isJpeg: true };
+      return { width: swap ? h : w, height: swap ? w : h, isJpeg: true, orientation };
     }
     if (marker === 0xda) return null; // start of scan before any frame header
     i += 2 + len;
@@ -235,7 +251,13 @@ export function browserCodec(): ImageCodec | null {
       }
     },
     async transcode(bytes, width, height, opts) {
-      const bmp = await g.createImageBitmap!(toBlob(bytes), { imageOrientation: "from-image" });
+      // Decode straight at the target size when the browser can (resizeWidth/Height: no full-size
+      // bitmap of a 12 MP photo). Only for an un-rotated image: whether a browser resizes before
+      // or after applying EXIF orientation is not something to rely on.
+      const o = probeHeader(bytes)?.orientation ?? 1;
+      const options: ImageBitmapOptions = { imageOrientation: "from-image" };
+      if (o === 1) Object.assign(options, { resizeWidth: width, resizeHeight: height, resizeQuality: "high" });
+      const bmp = await g.createImageBitmap!(toBlob(bytes), options);
       try {
         const canvas = new g.OffscreenCanvas!(width, height);
         const ctx = canvas.getContext("2d");
@@ -287,7 +309,9 @@ export function sharpCodec(sharp: SharpLike): ImageCodec {
     async transcode(bytes, width, height, opts) {
       let p = sharp(bytes);
       if (probeHeader(bytes)?.isJpeg) p = p.rotate(); // EXIF orientation: the server applies it to JPEG only
-      p = p.removeAlpha().resize(width, height, { fit: "fill" }); // sharp's default kernel: Lanczos-3
+      // sharp's default kernel is Lanczos-3, and it shrinks a JPEG on load (libjpeg DCT scaling, like
+      // Pillow's draft mode) when the target is at least 2x smaller.
+      p = p.removeAlpha().resize(width, height, { fit: "fill" });
       // 4:4:4 chroma: at ~2x the model's input, 4:2:0 would halve the colour to the model's own
       // resolution (measured with the Python SDK on CLIP: mean cosine 0.976 vs 0.995).
       p = opts.jpeg ? p.jpeg({ quality: opts.quality, chromaSubsampling: "4:4:4" }) : p.png({ compressionLevel: 1 });
@@ -333,8 +357,8 @@ export interface PreparedUpload {
 /**
  * The bytes to upload for an encoded image under a hint (the Python SDK's `prepare_upload`):
  * no hint or no codec -> the input untouched; larger than the hint (measured on the ROI region
- * when one is given) -> shrunk and sent as JPEG (PNG with `jpeg: false`); within it -> a JPEG
- * untouched, anything else re-encoded as JPEG when `jpeg` is on, else untouched.
+ * when one is given) -> shrunk and sent as JPEG (PNG with `jpeg: false`), unless `maxScale` (the
+ * loopback rule) keeps a mild shrink whole; anything not shrunk -> untouched.
  */
 export async function prepareUpload(
   bytes: Uint8Array,
@@ -345,6 +369,10 @@ export async function prepareUpload(
     quality: number;
     roi?: number[] | null;
     codec: ImageCodec | null;
+    /** Recorded on a shrink: "hint" or "resize=N". */
+    reason?: string;
+    /** The loopback rule: shrink only when the scale (sent / original side) is at most this. */
+    maxScale?: number | null;
   },
 ): Promise<PreparedUpload> {
   const untouched = { bytes, clientResize: null };
@@ -357,10 +385,15 @@ export async function prepareUpload(
     maxShortSide: opts.maxShortSide,
     region: opts.roi ? roiRegion(opts.roi, w, h) : null,
   });
-  const resized = tw !== w || th !== h;
-  if (!resized && (info.isJpeg || !opts.jpeg)) return untouched;
+  // Only a shrunk photo is re-encoded; anything else goes out exactly as given.
+  if (tw === w && th === h) return untouched;
+  const scale = Math.max(tw / w, th / h);
+  if (opts.maxScale != null && scale > opts.maxScale) {
+    const why = `loopback: scale ${scale.toFixed(2)} > ${opts.maxScale}, sent as is`;
+    return { bytes, clientResize: new ClientResize(w, h, w, h, null, why) };
+  }
   const out = await opts.codec.transcode(bytes, tw, th, { jpeg: opts.jpeg, quality: opts.quality });
-  return { bytes: out, clientResize: new ClientResize(w, h, tw, th, opts.jpeg ? opts.quality : null) };
+  return { bytes: out, clientResize: new ClientResize(w, h, tw, th, opts.jpeg ? opts.quality : null, opts.reason ?? "hint") };
 }
 
 /** Boxes `[x, y, w, h]` from ORIGINAL to sent pixels (a malformed entry is left for the serializer to refuse). */

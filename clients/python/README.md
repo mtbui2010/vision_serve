@@ -253,10 +253,9 @@ res = c.predict("rf-detr", raw)
 ```
 
 Grayscale `(H, W)` ndarrays are automatically promoted to RGB. Float arrays in `[0, 1]`
-are scaled to `uint8`. How the image is uploaded depends on client-side resizing (next
-section): by default, for a model with a size hint, a large image is shrunk and a non-JPEG one
-sent as JPEG; with `resize="off"` (or a model without a hint) paths and bytes go out verbatim
-and PIL images / arrays as lossless PNG. Boxes, points and numeric options may also be numpy
+are scaled to `uint8`. Paths and bytes go out verbatim and PIL images / arrays as lossless PNG,
+except a photo larger than the model can use, which is shrunk and sent as JPEG by default
+(next section). Boxes, points and numeric options may also be numpy
 arrays / scalars.
 
 ### Client-side resizing (on by default)
@@ -268,21 +267,24 @@ changing what the model sees (`max_useful_side` bounds the longer side, `max_use
 the shorter, 2 × the model's input; `None` = never). By default the client fetches it once,
 shrinks a larger photo to it, sends JPEG (quality 90, 4:4:4 colour), scales `box` / `point` /
 `roi` into the sent photo and maps every box, mask and grasp back, so results are in your
-photo's pixels as before. `res.client_resize` records what was sent (`None` = your bytes,
-untouched).
+photo's pixels as before. Only a shrunk photo is re-encoded. `res.client_resize` records what
+was sent and why (`reason`; `None` = your bytes, untouched). With the server on this machine
+(`localhost`, 127.0.0.0/8, `::1`) a photo is shrunk only when that at least halves its sides:
+on localhost the upload is free, and a milder shrink costs the client more to decode than the
+server saves (the loopback rule).
 
 ```python
 c = Client()                                   # resize="auto", jpeg=True, jpeg_quality=90
 res = c.predict("rf-detr", "photo_4000x3000.jpg")
-print(res.client_resize)    # ClientResize(original_width=4000, ..., sent_width=1493, sent_height=1120, jpeg_quality=90)
+print(res.client_resize)    # ClientResize(original_width=4000, ..., sent_width=1493, sent_height=1120, jpeg_quality=90, reason='hint')
 
 Client(resize="off")                           # send every photo as given (the 0.1.x behaviour)
 c.predict("rf-detr", "photo.jpg", resize=1280, jpeg=False)   # per call: longer side 1280, PNG
 ```
 
 Never resized: models without a hint (SAM family and every model returning masks, OCR,
-grasping, `background`, templates, crop-naming pipelines, `depth-anything-v2`), a JPEG already
-within the hint (sent byte for byte), and requests with `depth`, `dilate`, `gripper_min` /
+grasping, `background`, templates, crop-naming pipelines, `depth-anything-v2`), a photo already
+within the hint (sent exactly as given), and requests with `depth`, `dilate`, `gripper_min` /
 `gripper_max` or `template_name`. Needs Pillow; without it photos are sent as given.
 `preprocess()` sends the photo as given unless you pass `resize="auto"`. Measured cost and gain
 (bytes, latency, COCO mAP): [Clients › Python](https://mtbui2010.github.io/vision_serve/clients/python/#client-side-resizing-on-by-default).
@@ -884,8 +886,10 @@ python clients/python/tests/test_client.py
   `Client(resize="auto", jpeg=True, jpeg_quality=90)` shrinks a photo larger than the model can
   use to the server's per-model hint (`GET /api/models`: `max_useful_side` /
   `max_useful_short_side`), sends JPEG (4:4:4), and maps boxes, masks and grasps back to the
-  original pixels; `Result.client_resize` records it, and `Mask.to_ndarray(original_w,
-  original_h)` keeps working. `resize="off"` restores the 0.1.x uploads exactly. Also per call
+  original pixels; `Result.client_resize` records it with a `reason`. Only shrunk photos are
+  re-encoded (JPEGs decoded at a reduced scale, Pillow's draft mode); with a loopback `host`
+  only a shrink to half the sides or less is done. `Mask.to_ndarray(original_w, original_h)`
+  keeps working on a shrunk photo's masks. `resize="off"` restores the 0.1.x uploads exactly. Also per call
   (`predict(..., resize=, jpeg=, jpeg_quality=)`, `preprocess(..., resize="auto")`) and in the
   CLI (`--resize auto|off|N`, `--no-jpeg`, `--jpeg-quality Q`).
 - `ModelInfo.max_useful_side` / `max_useful_short_side`; `Client.useful_side(model)`;

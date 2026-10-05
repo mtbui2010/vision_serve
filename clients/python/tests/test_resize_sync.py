@@ -1,4 +1,4 @@
-"""The client-resize math is implemented twice (this SDK and the JS one): both run the shared
+"""The client-resize rules are implemented twice (this SDK and the JS one): both run the shared
 cases in clients/testdata/client_resize.json (the JS side in clients/js/tests/resize.test.ts),
 so they send the same size and see the same ROI region for an image."""
 import json
@@ -25,3 +25,10 @@ def test_roi_region_shared_cases():
     for c in FIXTURES["roi_region"]:
         got = roi_region(c["roi"], c["width"], c["height"])
         assert (list(got) if got is not None else None) == c["want"], c
+
+
+def test_is_loopback_shared_cases():
+    from visionserve.client import _is_loopback
+
+    for c in FIXTURES["is_loopback"]:
+        assert _is_loopback(c["host"]) is c["want"], c

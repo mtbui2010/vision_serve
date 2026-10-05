@@ -99,7 +99,9 @@ class _Stub:
 
 
 @pytest.fixture
-def stub():
+def stub(monkeypatch):
+    """A stub server the client treats as REMOTE (the loopback rule has its own tests)."""
+    monkeypatch.setattr("visionserve.client._is_loopback", lambda host: False)
     s = _Stub()
     yield s
     s.close()
@@ -206,10 +208,13 @@ def test_jpeg_false_sends_png_and_leaves_small_inputs_alone():
     assert sent.format == "PNG" and sent.size == (1000, 667) and cr.jpeg_quality is None
 
 
-def test_small_png_is_reencoded_as_jpeg_when_jpeg_is_on():
-    data, _, cr = _prep(_photo(300, 200, "PNG"), max_side=1000, quality=80)
-    assert Image.open(io.BytesIO(data)).format == "JPEG"
-    assert cr == ClientResize(300, 200, 300, 200, 80) and not cr.resized
+def test_what_is_not_shrunk_goes_out_as_before():
+    small_png = _photo(300, 200, "PNG")
+    assert _prep(small_png, max_side=1000) == (small_png, "image.png", None)  # not re-encoded
+    arr = np.zeros((40, 60, 3), np.uint8)
+    assert _prep(arr, max_side=1000) == (*_encode_image(arr), None)  # lossless PNG, as before
+    pil = Image.fromarray(arr)
+    assert _prep(pil, max_side=1000) == (*_encode_image(pil), None)
 
 
 def test_exif_rotation_is_applied_before_resizing():
@@ -273,6 +278,37 @@ def test_unreadable_bytes_go_out_untouched():
 # --------------------------------------------------------------------------------------------
 # prompts and results
 # --------------------------------------------------------------------------------------------
+def test_max_scale_keeps_a_mild_shrink_whole():
+    raw = _photo(3000, 2000)
+    # 1120 / 2000 = 0.56 > 0.5: sent as given, and the record says why
+    data, name, cr = _prep(raw, max_short_side=1120, max_scale=0.5)
+    assert data == raw and not cr.resized and cr.jpeg_quality is None
+    assert (cr.original_width, cr.sent_width) == (3000, 3000)
+    assert cr.reason == "loopback: scale 0.56 > 0.5, sent as is"
+    # 900 / 2000 = 0.45: shrunk
+    data, _, cr = _prep(raw, max_short_side=900, max_scale=0.5)
+    assert cr.resized and cr.sent_height == 900 and cr.reason == "hint"
+    arr = np.zeros((2000, 3000, 3), np.uint8)
+    data, _, cr = _prep(arr, max_short_side=1120, max_scale=0.5)
+    assert (data, "image.png") == _encode_image(arr) and cr.reason.startswith("loopback")
+
+
+def test_loopback_rule_through_the_client():
+    s = _Stub()
+    try:
+        c = Client(s.url)  # 127.0.0.1: the loopback rule applies
+        big = _photo(3000, 2000)
+        res = c.predict("rf-detr", big)  # hint 1120 short: scale 0.56 > 0.5
+        assert s.fields["image"] == big and not res.client_resize.resized
+        assert res.client_resize.reason.startswith("loopback")
+        res = c.predict("rf-detr", _photo(4000, 2400))  # 1120 / 2400 = 0.47: shrunk
+        assert s.image().size == (1867, 1120) and res.client_resize.reason == "hint"
+        res = c.predict("rf-detr", big, resize=1500)  # an explicit size ignores the rule
+        assert s.image().size == (1500, 1000) and res.client_resize.reason == "resize=1500"
+    finally:
+        s.close()
+
+
 def test_points_keep_their_label():
     cr = ClientResize(1000, 500, 500, 250, 90)
     assert scale_points([[100, 50, 0], [10, 20]], cr) == [[50, 25, 0], [5, 10]]

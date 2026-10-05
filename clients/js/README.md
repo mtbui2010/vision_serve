@@ -81,9 +81,11 @@ shrinks a photo larger than the model can use to the size the server advertises 
 (`GET /api/models`: `max_useful_side` / `max_useful_short_side`, 2 × the model's input; fetched
 once and cached), uploads it as JPEG (`jpeg: true`, `jpegQuality: 90`), and maps every box,
 mask and grasp back to the **original** photo's pixels. `res.clientResize` says what was sent
-(`null` = the bytes you passed, untouched). Models whose output needs the full photo (masks,
-OCR, grasping, templates) have no hint and always get it; so does a JPEG that is already small
-enough.
+and why (`reason`; `null` = the bytes you passed, untouched). Only a shrunk photo is
+re-encoded. Models whose output needs the full photo (masks, OCR, grasping, templates) have no
+hint and always get it. With the server on this machine (`localhost`, 127.0.0.0/8, `::1`) a
+photo is shrunk only when that at least halves its sides (the loopback rule: on localhost a
+mild shrink costs more to decode than it saves).
 
 ```ts
 new Client(host, { resize: "off" });                 // send every photo as given
@@ -93,8 +95,8 @@ await client.predict("rf-detr", "photo.jpg", { resize: "off" });   // per call
 
 Decoding needs a codec, and the SDK ships none: in a **browser** it uses `createImageBitmap` +
 `OffscreenCanvas`; in **Node** it uses [`sharp`](https://www.npmjs.com/package/sharp) if your
-application has installed it (`npm install sharp`; it is never installed by this package), and
-otherwise sends photos exactly as given (no error, no warning: results are the same, the upload
+application has installed it (`npm install sharp`; it is never installed by this package; it
+shrinks JPEGs on load), and otherwise sends photos exactly as given (no error, no warning: results are the same, the upload
 is larger). Pass `codec: null` to disable resizing, or your own `ImageCodec`. The browser's JPEG
 encoder subsamples colour (4:2:0); the Python SDK and `sharp` use 4:4:4. The measured effect on
 bytes, latency and accuracy is in the
@@ -511,11 +513,12 @@ npm run typecheck  # tsc --noEmit
   `resize: "auto"` the client shrinks a photo larger than the model can use to the server's
   hint (`GET /api/models`: `max_useful_side` / `max_useful_short_side`), sends it as JPEG
   (`jpeg: true`, `jpegQuality: 90`) and maps boxes, masks and grasps back to original pixels;
-  `Result.clientResize` records it. `resize: "off"` restores the old uploads exactly; also
+  `Result.clientResize` records it, with a `reason`. Only shrunk photos are re-encoded. With
+  a loopback `host`, only a shrink to half the sides or less is done (`isLoopback`). `resize: "off"` restores the old uploads exactly; also
   per call (`predict(..., { resize, jpeg, jpegQuality })`) and in the CLI (`--resize`,
   `--no-jpeg`, `--jpeg-quality`). It needs a codec: the browser's, or `sharp` in Node when
   installed (optional; otherwise photos are sent as given). New exports: `ClientResize`,
-  `ImageCodec`, `browserCodec`, `sharpCodec`, `probeHeader`, `targetSize`.
+  `ImageCodec`, `browserCodec`, `sharpCodec`, `probeHeader`, `targetSize`, `isLoopback`.
 - `ModelInfo.maxUsefulSide` / `maxUsefulShortSide`; `Mask.rleSize`.
 
 ### 0.1.3

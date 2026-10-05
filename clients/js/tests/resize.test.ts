@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { Client, ClientResize, Grasp, Mask, Result, ModelInfo, probeHeader, targetSize, type ImageCodec } from "../src/index.js";
+import { Client, ClientResize, Grasp, Mask, Result, ModelInfo, isLoopback, probeHeader, targetSize, type ImageCodec } from "../src/index.js";
 import { mapResult, roiRegion } from "../src/resize.js";
 
 const fixtures = JSON.parse(
@@ -10,6 +10,7 @@ const fixtures = JSON.parse(
 ) as {
   target_size: Array<{ width: number; height: number; max_side?: number; max_short_side?: number; region?: [number, number]; want: [number, number] }>;
   roi_region: Array<{ roi: number[]; width: number; height: number; want: [number, number] | null }>;
+  is_loopback: Array<{ host: string; want: boolean }>;
 };
 
 test("targetSize matches the shared cases (Python runs the same file)", () => {
@@ -60,10 +61,10 @@ function pngHeader(w: number, h: number): Uint8Array {
 }
 
 test("probeHeader reads JPEG / PNG sizes and applies the JPEG's EXIF rotation", () => {
-  assert.deepEqual(probeHeader(jpegHeader(3000, 2000)), { width: 3000, height: 2000, isJpeg: true });
-  assert.deepEqual(probeHeader(jpegHeader(3000, 2000, 6)), { width: 2000, height: 3000, isJpeg: true });
-  assert.deepEqual(probeHeader(jpegHeader(3000, 2000, 8, true)), { width: 2000, height: 3000, isJpeg: true });
-  assert.deepEqual(probeHeader(jpegHeader(3000, 2000, 3)), { width: 3000, height: 2000, isJpeg: true });
+  assert.deepEqual(probeHeader(jpegHeader(3000, 2000)), { width: 3000, height: 2000, isJpeg: true, orientation: 1 });
+  assert.deepEqual(probeHeader(jpegHeader(3000, 2000, 6)), { width: 2000, height: 3000, isJpeg: true, orientation: 6 });
+  assert.deepEqual(probeHeader(jpegHeader(3000, 2000, 8, true)), { width: 2000, height: 3000, isJpeg: true, orientation: 8 });
+  assert.deepEqual(probeHeader(jpegHeader(3000, 2000, 3)), { width: 3000, height: 2000, isJpeg: true, orientation: 3 });
   assert.deepEqual(probeHeader(pngHeader(640, 480)), { width: 640, height: 480, isJpeg: false });
   assert.equal(probeHeader(new Uint8Array([1, 2, 3])), null);
   // a real JPEG from the repository
@@ -170,18 +171,45 @@ test("a JPEG within the hint, or a model without one, is sent untouched", async 
   }
 });
 
-test("a small PNG is re-encoded as JPEG only when jpeg is on", async () => {
+test("only a shrunk photo is re-encoded; jpeg picks its format", async () => {
   const srv = fakeServer();
   const { codec, calls } = fakeCodec();
   try {
     const png = pngHeader(300, 200);
     const res = await new Client("http://x", { codec, jpegQuality: 80 }).predict("rf-detr", png);
-    assert.deepEqual(calls, [{ width: 300, height: 200, jpeg: true, quality: 80 }]);
-    assert.equal(res.clientResize?.resized, false);
-    await new Client("http://x", { codec, jpeg: false }).predict("rf-detr", png);
-    assert.deepEqual(await srv.imageBytes(), png);
+    assert.deepEqual(await srv.imageBytes(), png); // not shrunk: sent as given, even with jpeg on
+    assert.equal(res.clientResize, null);
+    assert.equal(calls.length, 0);
+    await new Client("http://x", { codec, jpegQuality: 80 }).predict("rf-detr", pngHeader(3000, 2000));
+    assert.equal(await srv.image(), "sent 1680x1120 jpeg");
     await new Client("http://x", { codec }).predict("rf-detr", pngHeader(3000, 2000), { jpeg: false });
     assert.equal(await srv.image(), "sent 1680x1120 png");
+  } finally {
+    srv.restore();
+  }
+});
+
+test("isLoopback matches the shared cases (Python runs the same file)", () => {
+  for (const c of fixtures.is_loopback) assert.equal(isLoopback(c.host), c.want, c.host);
+});
+
+test("the loopback rule keeps a mild shrink whole and says so", async () => {
+  const srv = fakeServer();
+  const { codec, calls } = fakeCodec();
+  try {
+    const c = new Client("http://127.0.0.1:11435", { codec });
+    const big = jpegHeader(3000, 2000); // rf-detr: 1120 / 2000 = 0.56 > 0.5
+    let res = await c.predict("rf-detr", big);
+    assert.deepEqual(await srv.imageBytes(), big);
+    assert.equal(res.clientResize?.resized, false);
+    assert.equal(res.clientResize?.reason, "loopback: scale 0.56 > 0.5, sent as is");
+    res = await c.predict("rf-detr", jpegHeader(4000, 2400)); // 1120 / 2400 = 0.47: shrunk
+    assert.equal(await srv.image(), "sent 1867x1120 jpeg");
+    assert.equal(res.clientResize?.reason, "hint");
+    res = await c.predict("rf-detr", big, { resize: 1500 }); // explicit: no loopback rule
+    assert.equal(await srv.image(), "sent 1500x1000 jpeg");
+    assert.equal(res.clientResize?.reason, "resize=1500");
+    assert.equal(calls.length, 2);
   } finally {
     srv.restore();
   }

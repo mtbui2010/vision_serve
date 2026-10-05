@@ -13,12 +13,16 @@ The rules, in order (see :func:`prepare_upload`):
 * no hint for the model (masks, OCR, depth-aligned grasping, templates, ...) or ``resize="off"``:
   the image is sent exactly as before this feature: a path / bytes verbatim, a PIL image or
   ndarray as lossless PNG;
-* the image (or the ``roi`` region, when one is given) is larger than the hint: it is decoded,
+* the image (or the ``roi`` region, when one is given) is larger than the hint: it is decoded
+  (JPEG at a reduced DCT scale, Pillow's draft mode),
   EXIF-rotated the way the server would rotate it (JPEG only), alpha dropped (the server's
   tensor ignores alpha too), shrunk with a Lanczos filter, and sent as JPEG (``jpeg_quality``,
   4:4:4 chroma) — or PNG with ``jpeg=False``;
-* the image is within the hint: a JPEG file / bytes is sent untouched (no re-encode); anything
-  else is sent as JPEG when ``jpeg`` is on, else as before.
+* anything that is not shrunk goes out exactly as before (no re-encode);
+* the loopback rule: when the server is on this machine (127.0.0.0/8, ::1, localhost) and
+  ``resize="auto"``, a photo is shrunk only when that halves its sides or more (scale <= 0.5):
+  on localhost the upload is free, and a milder shrink costs the client more to decode than the
+  server saves. ``Result.client_resize.reason`` says when this rule kept a photo whole.
 
 Needs Pillow; without it every image is sent as before (no warning — the result is correct, only
 the upload is larger).
@@ -75,7 +79,12 @@ class ClientResize:
             EXIF rotation): the frame every returned coordinate is in.
         sent_width, sent_height: the image actually uploaded.
         jpeg_quality: the JPEG quality it was encoded at, or ``None`` when it was sent as PNG
-            (``jpeg=False``).
+            (``jpeg=False``) or not re-encoded.
+        reason: why: ``"hint"`` (shrunk to the server's hint for the model), ``"resize=N"``
+            (shrunk to an explicit longest side), or ``"loopback: scale 0.53 > 0.5, sent as is"``
+            (larger than the hint, but the server is on this machine and shrinking would remove
+            too little to pay for the client's decode; the photo went out exactly as given,
+            ``resized`` is False).
     """
 
     original_width: int
@@ -83,6 +92,7 @@ class ClientResize:
     sent_width: int
     sent_height: int
     jpeg_quality: Optional[int]
+    reason: str = "hint"
 
     @property
     def resized(self) -> bool:
@@ -247,12 +257,19 @@ def prepare_upload(
     roi: Any = None,
     encode_plain,
     ndarray_to_pil,
+    reason: str = "hint",
+    max_scale: Optional[float] = None,
 ) -> Tuple[bytes, str, Optional[ClientResize]]:
     """The bytes to upload for ``image`` under a hint, with what was done to it.
 
     ``max_side`` / ``max_short_side`` is the hint (both ``None``: send as before via
-    ``encode_plain``). Returns ``(bytes, filename, ClientResize or None)``; ``None`` means the
-    original bytes went out untouched (or the input was encoded exactly as before).
+    ``encode_plain``). Only a photo that is SHRUNK is re-encoded; anything else goes out exactly
+    as before this feature. ``max_scale`` (the loopback rule): shrink only when the scale
+    (sent / original side) is at most this, else send as before and say why in the returned
+    record. ``reason`` is recorded on a shrink ("hint" or "resize=N").
+
+    Returns ``(bytes, filename, ClientResize or None)``; ``None`` means the input went out
+    exactly as before (no hint, small enough, or not decodable here).
     """
     if not max_side and not max_short_side:
         data, name = encode_plain(image)
@@ -285,14 +302,22 @@ def prepare_upload(
     tw, th = target_size(w, h, max_side=max_side, max_short_side=max_short_side,
                          region=roi_region(roi, w, h) if roi is not None else None)
     resized = (tw, th) != (w, h)
-    if not resized and (src.is_jpeg or not jpeg):
-        # Small enough: a JPEG goes out untouched, and without jpeg everything goes out as before.
+    skipped = None
+    if resized and max_scale is not None:
+        scale = max(tw / float(w), th / float(h))
+        if scale > max_scale:
+            resized = False
+            skipped = ClientResize(w, h, w, h, None, "loopback: scale %.2f > %g, sent as is" % (scale, max_scale))
+    if not resized:
+        # Not shrunk: the input goes out exactly as before this feature (a path / bytes verbatim,
+        # a PIL image / array as lossless PNG). Re-encoding a photo the model reads at its own
+        # size gains little and changes results (RF-DETR on arrays sent as JPEG: -0.17 mAP).
         if src.raw is not None:
-            return src.raw, _plain_name(src.name), None
+            return src.raw, _plain_name(src.name), skipped
         data, name = encode_plain(image)
-        return data, name, None
+        return data, name, skipped
 
-    if src.raw is not None and src.is_jpeg and resized:
+    if src.raw is not None and src.is_jpeg:
         # Let libjpeg decode at 1/2, 1/4 or 1/8 scale (never below the target): a 12 MP photo
         # decodes about 3x faster. The size is in the STORED orientation.
         img.draft("RGB", (th, tw) if src.orientation in _SWAPPING_ORIENTATIONS else (tw, th))
@@ -307,7 +332,7 @@ def prepare_upload(
         # Lanczos -0.02 (CPU cost: ~40 ms more per 12 MP photo, after the JPEG draft decode).
         img = img.resize((tw, th), Image.LANCZOS)
     data, name = _encode(img, jpeg, quality)
-    return data, name, ClientResize(w, h, tw, th, quality if jpeg else None)
+    return data, name, ClientResize(w, h, tw, th, quality if jpeg else None, reason)
 
 
 def _plain_name(name: str) -> str:

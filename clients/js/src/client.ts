@@ -144,13 +144,15 @@ export interface ClientOptions {
    * Client-side resizing of `predict()` uploads — ON by default. `"auto"`: shrink an image larger
    * than the model can use to the server's hint for that model (`GET /api/models`, fetched once
    * and cached), e.g. a 12 MP photo to ~1.7 MP for RF-DETR; masks, OCR, grasping and template
-   * models (no hint) always get the full image. `"off"`: send every image exactly as given. A
+   * models (no hint) always get the full image. When `host` is this machine (`localhost`,
+   * 127.0.0.0/8, `::1`) a photo is shrunk only when that at least halves its sides (the loopback
+   * rule; `Result.clientResize.reason` says when it kept a photo whole). `"off"`: send every image exactly as given. A
    * number `N`: shrink to a longer side of `N` pixels for any model. Results are always mapped
    * back to ORIGINAL pixels; `Result.clientResize` says what was done. Needs a codec (see
    * `codec`): without one, images are sent as given.
    */
   resize?: ResizeOption;
-  /** Encode a shrunk or re-encoded image as JPEG (default `true`) instead of PNG; a JPEG that needs no shrinking is always sent untouched. */
+  /** Send a shrunk image as JPEG (default `true`) instead of PNG; an image that is not shrunk is always sent untouched. */
   jpeg?: boolean;
   /** JPEG quality 1..100 (default 90). */
   jpegQuality?: number;
@@ -182,6 +184,28 @@ export class VisionServeError extends Error {
 
 /** How long an unknown model name waits before it triggers another `GET /api/models` (ms). */
 const HINT_REFRESH_MS = 5_000;
+
+/**
+ * The loopback rule of `resize: "auto"` (as in the Python SDK): with the server on this machine
+ * the upload is free, so a photo is shrunk only when that at least halves its sides; a milder
+ * shrink measured slower than sending the photo whole. Remote servers keep the hint.
+ */
+const LOOPBACK_MAX_SCALE = 0.5;
+
+/** True when `host` names this machine: `localhost`, 127.0.0.0/8 or `::1` (no DNS lookup). */
+export function isLoopback(host: string): boolean {
+  let name: string;
+  try {
+    name = new URL(host.includes("://") ? host : `http://${host}`).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  name = name.replace(/\.$/, "").replace(/^\[|\]$/g, "");
+  if (name === "localhost" || name.endsWith(".localhost")) return true;
+  if (name === "::1" || name === "0:0:0:0:0:0:0:1") return true;
+  const m = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(name);
+  return m != null && Number(m[1]) === 127 && m.slice(2).every((x) => Number(x) <= 255);
+}
 
 export class Client {
   readonly host: string;
@@ -313,9 +337,16 @@ export class Client {
     if (!codec) return { bytes, clientResize: null };
     let maxSide: number | null = null;
     let maxShortSide: number | null = null;
-    if (mode === "auto") [maxSide, maxShortSide] = await this.usefulSide(model);
-    else maxSide = mode;
-    return prepareUpload(bytes, { maxSide, maxShortSide, jpeg, quality, roi: opts.roi ?? null, codec });
+    let maxScale: number | null = null;
+    let reason = "hint";
+    if (mode === "auto") {
+      [maxSide, maxShortSide] = await this.usefulSide(model);
+      if (isLoopback(this.host)) maxScale = LOOPBACK_MAX_SCALE;
+    } else {
+      maxSide = mode;
+      reason = `resize=${mode}`;
+    }
+    return prepareUpload(bytes, { maxSide, maxShortSide, jpeg, quality, roi: opts.roi ?? null, codec, reason, maxScale });
   }
 
   /** Filter detections/masks by bounding-box size. */

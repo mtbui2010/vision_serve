@@ -541,15 +541,16 @@ def _resize_arg(value: str):
 
 
 def _upload_note(res: Result) -> str:
-    """'  sent 1493x1120 of 4000x3000 as JPEG q90' when the client processed the image."""
+    """'  sent 1493x1120 of 4000x3000 as JPEG q90' when the client shrank the image, or why it
+    did not although it was larger than the hint (the loopback rule)."""
     cr = res.client_resize
     if cr is None:
         return ""
+    if not cr.resized:
+        return "  sent as is (%s)" % cr.reason
     fmt = "JPEG q%d" % cr.jpeg_quality if cr.jpeg_quality is not None else "PNG"
-    if cr.resized:
-        return "  sent %dx%d of %dx%d as %s" % (cr.sent_width, cr.sent_height, cr.original_width,
-                                               cr.original_height, fmt)
-    return "  sent as %s" % fmt
+    return "  sent %dx%d of %dx%d as %s" % (cr.sent_width, cr.sent_height, cr.original_width,
+                                           cr.original_height, fmt)
 
 
 def _summary_counts(res: Result) -> str:
