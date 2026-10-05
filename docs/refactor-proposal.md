@@ -377,3 +377,13 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   sang 0.9 là thay đổi output (ví dụ docs: 10 → 5 box), chưa có protocol đo cho template nên chưa
   đổi. Template lỏng (nhiều nền, hoặc hẹp nên bị pad đen) khớp nền khắp ảnh ở score ≈ 1.0 ở cả
   HF lẫn VisionServe; không ngưỡng nào cứu được, docs đã ghi.
+- Converter RF-DETR, nhận variant (2026-10-05): **đã sửa**. Trước đây metadata của checkpoint
+  thắng shape của state_dict, nên `rf-detr-base.pth` chính thức (`args.pretrain_weights=
+  'lwdetr_dinov2_small_o365_checkpoint.pth'`, tên checkpoint pretrain) bị nhận là small và build
+  lỗi patch_size 14 vs 16; phải truyền `--variant base`. Nay: `--variant` > shape (patch, dim,
+  số layer decoder) > `model_name`/args > tên file. Metadata chỉ chọn giữa các variant mà shape
+  cho phép (medium và large chỉ khác lưới PE); shape không khớp variant nào thì từ chối. Tier A
+  (CPU, `--dry-run --no-server`, không `--variant`): nano, small, base, fine-tune tabletop đều
+  PASS. Còn mở: medium PASS trên ảnh tabletop nhưng FAIL ổn định trên `test/testdata/sample.jpg`:
+  2 query điểm ≈ 0.06 (vừa trên ngưỡng 0.05 của `detr_parity`) lệch 1.15e-2, có vẻ là near-tie
+  top-K ngay trên ngưỡng chứ không phải lỗi export (290/300 query khớp đúng hàng); chưa đổi luật.

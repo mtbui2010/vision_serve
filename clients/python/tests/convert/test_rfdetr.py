@@ -26,6 +26,7 @@ from visionserve.convert.families import rfdetr as fam  # noqa: E402
 
 REAL_CKPT = Path("/mnt/nas/huggingface/trung_w6/ovd-adapt-weights/ckpt/final/checkpoint_best_total.pth")
 ETRI = Path("/home/trung/trung_workdir/etri_simple")
+OFFICIAL = Path.home() / ".roboflow" / "models"
 
 
 @pytest.fixture(autouse=True)
@@ -90,10 +91,16 @@ def test_variant_from_shapes(variant):
 
 def test_variant_precedence_and_refusals():
     sd = fake_sd(*fam._SIGNATURES["small"])
-    assert fam.detect_variant(sd, {}, "RFDETRMedium", "c.pth")[0] == "medium"      # model_name beats shapes
+    # metadata that contradicts the shapes loses: those weights can only be built as small
+    v, how = fam.detect_variant(sd, {}, "RFDETRMedium", "c.pth")
+    assert v == "small" and "overrides checkpoint model_name='RFDETRMedium'" in how
     assert fam.detect_variant(sd, {}, "RFDETRMedium", "c.pth", forced="nano")[0] == "nano"
-    assert fam.detect_variant(sd, {"pretrain_weights": "rf-detr-base.pth"}, None, "c.pth")[0] == "base"
+    assert fam.detect_variant(sd, {"pretrain_weights": "rf-detr-base.pth"}, None, "c.pth")[0] == "small"
+    # metadata that agrees with the shapes is what the log names
+    assert fam.detect_variant(sd, {}, "RFDETRSmall", "c.pth") == ("small", "checkpoint model_name='RFDETRSmall'")
+    # no readable shapes: metadata, then the file name
     assert fam.detect_variant({"class_embed.bias": 0}, {}, None, "rf-detr-nano.pth")[0] == "nano"
+    assert fam.detect_variant({"class_embed.bias": 0}, {}, "RFDETRBase", "rf-detr-nano.pth")[0] == "base"
     # custom resolution changes only the PE grid
     assert fam.detect_variant(fake_sd(16, 384, 40, 2), {}, None, "c.pth")[0] == "nano"
     with pytest.raises(ConvertError, match="Platform Model License"):
@@ -102,6 +109,72 @@ def test_variant_precedence_and_refusals():
         fam.detect_variant(sd, {}, "RFDETRSegSmall", "c.pth")
     with pytest.raises(ConvertError, match="--variant"):
         fam.detect_variant({"class_embed.bias": 0}, {}, None, "checkpoint.pth")
+
+
+def test_official_base_checkpoint_is_base_despite_its_small_pretrain_hint():
+    """rfdetr's own rf-detr-base.pth: args.pretrain_weights names the PRETRAINING checkpoint
+    ('lwdetr_dinov2_small_o365_checkpoint.pth', reads as "small"), no model_name, and a patch-14
+    DINOv2 backbone (37x37 PE grid, 3 decoder layers) — Base. Following the hint failed the build
+    with a patch_size 14 vs 16 mismatch."""
+    sd = fake_sd(14, 384, 37, 3)
+    args = {"pretrain_weights": "lwdetr_dinov2_small_o365_checkpoint.pth", "encoder": "dinov2_windowed_small",
+            "resolution": 560, "dec_layers": 3}
+    v, how = fam.detect_variant(sd, args, None, "rf-detr-base.pth")
+    assert v == "base"
+    assert "state_dict shapes" in how and "lwdetr_dinov2_small_o365_checkpoint.pth" in how
+    # the same shapes under a different file name: still base (the shapes decide, not the name)
+    assert fam.detect_variant(sd, args, None, "checkpoint.pth")[0] == "base"
+
+
+def test_ambiguous_shapes_metadata_decides():
+    """Medium and Large have the same weights except the PE grid (which follows the training
+    resolution), so on shapes that fit both, model_name / args / file name pick."""
+    medium_at_704 = fake_sd(16, 384, 44, 4)  # PE grid = Large's default
+    assert fam.detect_variant(medium_at_704, {}, None, "c.pth")[0] == "large"  # exact PE grid, nothing else
+    assert fam.detect_variant(medium_at_704, {}, "RFDETRMedium", "c.pth")[0] == "medium"
+    assert fam.detect_variant(medium_at_704, {"pretrain_weights": "rf-detr-medium.pth"}, None, "c.pth")[0] == "medium"
+    large_at_576 = fake_sd(16, 384, 36, 4)  # PE grid = Medium's default
+    v, how = fam.detect_variant(large_at_576, {}, "RFDETRLarge", "c.pth")
+    assert v == "large" and "medium or large" in how
+    # a hint the shapes rule out is skipped; the next one that fits decides
+    assert fam.detect_variant(large_at_576, {"pretrain_weights": "rf-detr-large.pth"}, "RFDETRNano", "c.pth")[0] \
+        == "large"
+    odd = fake_sd(16, 384, 40, 4)  # neither default grid
+    assert fam.detect_variant(odd, {}, None, "rf-detr-large-ft.pth")[0] == "large"
+    assert fam.detect_variant(odd, {"pretrain_weights": "rf-detr-medium.pth"}, None, "c.pth")[0] == "medium"
+    with pytest.raises(ConvertError, match="--variant medium or --variant large"):
+        fam.detect_variant(odd, {}, None, "c.pth")
+    with pytest.raises(ConvertError, match="--variant medium or --variant large"):
+        fam.detect_variant(odd, {}, "RFDETRSmall", "c.pth")  # the only hint is ruled out
+
+
+def test_explicit_variant_beats_shapes_and_metadata():
+    sd = fake_sd(14, 384, 37, 3)  # base shapes
+    args = {"pretrain_weights": "lwdetr_dinov2_small_o365_checkpoint.pth"}
+    assert fam.detect_variant(sd, args, "RFDETRSmall", "rf-detr-small.pth", forced="medium") == ("medium", "--variant")
+    # even on shapes that fit nothing (the strict load then reports the mismatch)
+    assert fam.detect_variant(fake_sd(16, 512, 32, 6), {}, None, "c.pth", forced="nano")[0] == "nano"
+
+
+@pytest.mark.parametrize("variant", ["nano", "small", "medium", "base"])
+def test_official_checkpoints_detected_without_variant(variant):
+    """rfdetr's own COCO checkpoints (downloaded to ~/.roboflow/models by rfdetr) carry no model_name;
+    each must be detected as its own size. Skipped where rfdetr has not downloaded them."""
+    p = OFFICIAL / f"rf-detr-{variant}.pth"
+    if not p.is_file():
+        pytest.skip(f"{p} not downloaded")
+    sd, args, name = fam._split_checkpoint(fam._load_checkpoint(p))
+    assert fam.detect_variant(sd, args, name, p.name)[0] == variant
+
+
+@pytest.mark.parametrize("sig", [(16, 512, 32, 3), (8, 384, 32, 3), (16, 384, 32, 6), (14, 768, 37, 6)])
+def test_unknown_shapes_refused(sig):
+    with pytest.raises(ConvertError, match="fit no RF-DETR variant") as e:
+        fam.detect_variant(fake_sd(*sig), {}, None, "rf-detr-small.pth")
+    assert str(sig) in str(e.value)
+    # metadata naming a known variant does not rescue them: those weights would not load
+    with pytest.raises(ConvertError, match="its metadata says small"):
+        fam.detect_variant(fake_sd(*sig), {}, "RFDETRSmall", "c.pth")
 
 
 # --------------------------------------------------------------------------------------------

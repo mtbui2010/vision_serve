@@ -6,8 +6,9 @@ and, since rfdetr 1.7, `model_name` (e.g. "RFDETRSmall").
 
 What this module does, in order:
   1. refuse Ultralytics pickles; load the checkpoint with `weights_only=True` (no code execution);
-  2. pick the variant (nano/small/medium/base/large): --variant > `model_name` > args/filename >
-     state_dict shapes (patch size, decoder depth, positional-embedding grid);
+  2. pick the variant (nano/small/medium/base/large): --variant > state_dict shapes (patch size,
+     embed dim, decoder depth) > `model_name` / args > file name. Metadata only picks among the
+     variants the shapes allow; when it contradicts them, the shapes win (detect_variant);
   3. rebuild that variant with the installed `rfdetr`, load the weights STRICTLY (every tensor must
      land — rfdetr's own loader is lenient and would silently keep random weights);
   4. export with rfdetr's own ONNX exporter (legacy TorchScript path, `dynamo=False`, what rfdetr
@@ -71,8 +72,9 @@ def help_for(fmt: str) -> str:
 
 def add_arguments(p: argparse.ArgumentParser, fmt: str) -> None:
     p.add_argument("--variant", choices=sorted(VARIANTS),
-                   help="RF-DETR size; default: detected from the checkpoint (model_name, args, or the "
-                        "state_dict's patch size / decoder depth / positional-embedding grid)")
+                   help="RF-DETR size; default: detected from the checkpoint — the state_dict's patch size / "
+                        "embed dim / decoder depth, then model_name or args where those shapes fit "
+                        "more than one size (medium vs large)")
     p.add_argument("--resolution", type=int,
                    help="square input side in pixels; default: the checkpoint's args.resolution, else the "
                         "variant's training default (nano 384, small 512, medium 576, base 560, large 704). "
@@ -151,15 +153,23 @@ def _signature(sd):
     return patch, int(pe.shape[2]), grid, (max(layers) + 1 if layers else 0)
 
 
-def _variant_from_signature(sig):
+def _shape_candidates(sig):
+    """The variants whose weights have these shapes. The PE grid is left out: it follows the training
+    resolution (a custom-resolution fine-tune changes it, and _build keeps the checkpoint's grid), so
+    it is not a structural difference. Medium and Large differ ONLY in it: both are candidates."""
     if sig is None:
-        return None
-    for v, s in _SIGNATURES.items():
-        if s == sig:
-            return v
-    # A custom-resolution fine-tune changes only the PE grid: match on the rest.
-    near = [v for v, s in _SIGNATURES.items() if (s[0], s[1], s[3]) == (sig[0], sig[1], sig[3])]
-    return near[0] if len(near) == 1 else None
+        return []
+    return [v for v, s in _SIGNATURES.items() if (s[0], s[1], s[3]) == (sig[0], sig[1], sig[3])]
+
+
+def _variant_from_signature(sig):
+    """The variant the shapes alone point to: the only candidate, else the one whose default PE grid
+    matches exactly; None when the shapes fit no variant or cannot tell the candidates apart."""
+    cands = _shape_candidates(sig)
+    if len(cands) == 1:
+        return cands[0]
+    exact = [v for v in cands if _SIGNATURES[v] == sig]
+    return exact[0] if len(exact) == 1 else None
 
 
 def _variant_from_name(text: str):
@@ -180,29 +190,67 @@ def _variant_from_name(text: str):
     return None
 
 
-def detect_variant(sd, args: dict, model_name, filename: str, forced=None):
-    """Return (variant, how) — `how` is a human-readable reason for the log."""
-    sig = _signature(sd)
-    from_shapes = _variant_from_signature(sig)
-    if forced:
-        return forced, "--variant"
+def _checkpoint_hints(args: dict, model_name):
+    """[(variant, source)] named by the checkpoint's metadata, strongest first. Raises for an XLarge
+    or segmentation name (license / unsupported head), whatever the shapes say."""
+    hints = []
     if model_name:
         v = _variant_from_name(model_name)
         if v:
-            return v, f"checkpoint model_name={model_name!r}"
+            hints.append((v, f"checkpoint model_name={model_name!r}"))
     for key in ("model_name", "pretrain_weights", "encoder_name"):
         val = args.get(key)
         if isinstance(val, str) and val.strip().lower() not in ("", "none", "null"):
             v = _variant_from_name(val)
             if v:
-                return v, f"checkpoint args.{key}={val!r}"
-    if from_shapes:
-        return from_shapes, f"state_dict shapes (patch, dim, pe grid, decoder layers) = {sig}"
-    v = _variant_from_name(filename)
-    if v:
-        return v, f"file name {filename!r}"
-    raise ConvertError(f"cannot tell which RF-DETR variant this is (state_dict signature {sig}); "
-                       f"pass --variant ({', '.join(sorted(VARIANTS))})")
+                hints.append((v, f"checkpoint args.{key}={val!r}"))
+    return hints
+
+
+def detect_variant(sd, args: dict, model_name, filename: str, forced=None):
+    """Return (variant, how) — `how` is a human-readable reason for the log.
+
+    Precedence: --variant > the state_dict's tensor shapes > the checkpoint's metadata (model_name,
+    args) > the file name. The shapes are what the weights ARE: a metadata hint that contradicts them
+    can only fail the strict load — e.g. the official rf-detr-base.pth names its PRETRAINING weights
+    in args.pretrain_weights ('lwdetr_dinov2_small_o365_checkpoint.pth'), which reads as "small", but
+    its patch-14 backbone is Base. Metadata decides only among the variants the shapes allow (Medium
+    and Large share every shape but the PE grid) and when the shapes cannot be read. Shapes that fit
+    no variant are refused."""
+    if forced:
+        return forced, "--variant"
+    sig = _signature(sd)
+    hints = _checkpoint_hints(args, model_name)
+    shape_desc = f"state_dict shapes (patch, dim, pe grid, decoder layers) = {sig}"
+    choices = ", ".join(sorted(VARIANTS))
+    if sig is None:  # no backbone tensors to read: metadata, then the file name
+        if hints:
+            return hints[0]
+        v = _variant_from_name(filename)
+        if v:
+            return v, f"file name {filename!r}"
+        raise ConvertError(f"cannot tell which RF-DETR variant this is (no readable backbone shapes in the "
+                           f"state_dict, no variant in its metadata or file name); pass --variant ({choices})")
+    cands = _shape_candidates(sig)
+    if not cands:
+        known = "; ".join(f"{v} {s}" for v, s in _SIGNATURES.items())
+        named = f" (its metadata says {hints[0][0]}: {hints[0][1]})" if hints else ""
+        raise ConvertError(f"the {shape_desc} fit no RF-DETR variant this converter builds{named}. Known "
+                           f"signatures: {known}. Not an RF-DETR detector checkpoint of a supported size.")
+    for v, how in hints:
+        if v in cands:  # metadata agrees with the shapes, or picks among the variants they allow
+            return v, how + ("" if len(cands) == 1 else f" (the shapes fit {' or '.join(cands)})")
+    v = _variant_from_signature(sig)
+    if v is None and len(cands) > 1:
+        fv = _variant_from_name(filename)
+        if fv in cands:
+            return fv, f"file name {filename!r} (the shapes fit {' or '.join(cands)})"
+        raise ConvertError(f"the {shape_desc} fit {' and '.join(cands)} alike, and nothing in the checkpoint "
+                           f"says which; pass --variant {' or --variant '.join(cands)}")
+    if hints:
+        return v, (f"{shape_desc}; overrides {hints[0][1]}, which names {hints[0][0]} — weights of a "
+                   f"different shape")
+    return v, shape_desc
 
 
 # --------------------------------------------------------------------------------------------
