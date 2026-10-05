@@ -89,6 +89,7 @@ nav:
       - Clients and the converter: architecture/clients.md
   - Guides:
       - Inspect and verify a model: guides/inspect.md
+      - Reduced precision (FP16, INT8): guides/precision.md
   - Model gallery: gallery.md
   - Go for this project:
       - go/index.md

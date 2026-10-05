@@ -13,6 +13,16 @@
 #     -v ~/.visionserve_models:/root/.models -v $PWD:/in:ro \
 #     mtbui2010/visionserve-convert rfdetr /in/ckpt.pth --name my-det
 #
+# Reduced precision (opt-in; see website/docs/guides/precision.md): --precision fp16|int8|int4|mixed,
+# --sensitivity, --formats, --max-output-err, --calib DIR. It runs on the image's CPU onnxruntime and needs
+# nothing beyond requirements.txt (INT4/INT8/FP16 builders live in the onnxruntime wheel, FP8/FP4 simulation
+# uses ml_dtypes which onnx pulls in, --int4-algo hqq uses torch). The TensorFlow venv (onnxruntime 1.18)
+# lacks some of that and refuses such options up front. The image has no GPU: tiers B/C verify on CPU.
+#
+#   docker run --rm --user $(id -u):$(id -g) -e HOME=/tmp -v ~/.visionserve_models:/root/.models \
+#     -v $PWD:/in:ro mtbui2010/visionserve-convert rfdetr /in/ckpt.pth --name my-det \
+#     --precision mixed --formats int4,int8,fp16 --calib /in/photos --max-output-err 0.05 --eval /in/val.json
+#
 # Two venvs, because TensorFlow/tf2onnx and PyTorch cannot share one (tf2onnx pins protobuf ~=3.20
 # and numpy<2; torch/transformers need numpy 2): /opt/torchenv (rfdetr, hf, torchscript, pytorch)
 # and /opt/tfenv (tensorflow, keras, tflite). vsconvert-entrypoint.sh routes by format.

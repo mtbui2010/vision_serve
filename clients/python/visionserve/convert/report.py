@@ -45,6 +45,11 @@ DEFAULT_THRESHOLDS: Dict[str, float] = {
     # Detection matching: IoU for "same object", and the band above conf_threshold in which a
     # detection present on only one side is a threshold-boundary flip, not a disagreement.
     "b2_iou": 0.5,
+    # P (--precision): distance between the reduced model and the FP32 ONNX on the calibration images
+    # (precision.output_error: 1 - matched IoU of the detections as a set; relative L2 for other heads).
+    # PROVISIONAL: set from RF-DETR-base on 5 images (fp16 0.018, int8 all layers 0.36).
+    "p_err_warn": 0.05,
+    "p_err_fail": 0.25,
     "b2_boundary": 0.05,
 }
 

@@ -44,7 +44,7 @@ TEXENV ?= texpdf
 ORT_DYLIB_PATH ?= $(shell find $(HOME) /usr/local/lib /usr/lib -xdev -name 'libonnxruntime.so*' 2>/dev/null | grep -v node_modules | grep -E 'onnxruntime/capi.*\.so\.[0-9]' | head -1)
 
 .PHONY: all build install run serve list ps rm pull demo terminate test fmt vet tidy lint clean \
-        build-linux-arm64 docker docker-convert push-docker-convert docker-edge pypi pypi-next-version help pdf paper-clean clear-image \
+        build-linux-arm64 docker docker-convert push-docker-convert release-docker-convert docker-edge pypi pypi-next-version help pdf paper-clean clear-image \
         push-docker push-docker-arm push-docker-next-version push-docker-readme
 
 all: build ## Default target: build
@@ -167,11 +167,18 @@ docker-convert: ## Build the checkpoint-converter image (Python + PyTorch + Tens
 		-t visionserve-convert:$(PUSH_VERSION) \
 		-t visionserve-convert:latest .
 
-push-docker-convert: ## Tag and push the converter image to Docker Hub
+push-docker-convert: ## Tag and push the already-built converter image to Docker Hub (PUSH_VERSION, DOCKER_HUB_USER)
+	@docker image inspect visionserve-convert:$(PUSH_VERSION) >/dev/null 2>&1 || { \
+		echo "push-docker-convert: no local image visionserve-convert:$(PUSH_VERSION)."; \
+		echo "  build it first: make docker-convert PUSH_VERSION=$(PUSH_VERSION)   (or use: make release-docker-convert)"; \
+		exit 1; }
 	docker tag visionserve-convert:$(PUSH_VERSION) $(DOCKER_HUB_USER)/visionserve-convert:$(PUSH_VERSION)
 	docker tag visionserve-convert:$(PUSH_VERSION) $(DOCKER_HUB_USER)/visionserve-convert:latest
 	docker push $(DOCKER_HUB_USER)/visionserve-convert:$(PUSH_VERSION)
 	docker push $(DOCKER_HUB_USER)/visionserve-convert:latest
+	@echo "=== Pushed: $(DOCKER_HUB_USER)/visionserve-convert:$(PUSH_VERSION) and :latest ==="
+
+release-docker-convert: docker-convert push-docker-convert ## Build the converter image, then push it to Docker Hub (run `docker login` first)
 
 docker-arm: ## Build the Jetson/arm64 image (ORT_SOURCE=jetson for CUDA+TRT EP)
 	cp deploy/.dockerignore .dockerignore

@@ -26,6 +26,7 @@ from pathlib import Path
 
 from .common import MODELS_DIR, ConvertError, install, log
 from .constants import parse_wxh  # noqa: F401 — also re-exported for callers of cli.parse_wxh
+from .precision import add_precision_arguments, validate_precision_args
 
 # format name -> module (imported lazily: each pulls in a heavy framework)
 FORMATS = {
@@ -114,6 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--opset", type=int, default=17, help="ONNX opset (17 is what VisionServe's ORT builds run)")
         p.add_argument("--models", default=str(MODELS_DIR), help="registry directory (default $VISIONSERVE_MODELS)")
         add_verify_arguments(p)
+        add_precision_arguments(p)
         try:
             _family(modname).add_arguments(p, fmt)
         except ImportError as e:
@@ -250,6 +252,7 @@ def _validate_inputs(args):
             load_reference_script(args.reference_script)
     except Exception as e:  # noqa: BLE001 — user input / user code
         raise ConvertError(f"{type(e).__name__}: {e}")
+    validate_precision_args(args)
     for flag in ("images", "eval"):
         v = getattr(args, flag, None)
         if v and not Path(v).exists():
@@ -267,7 +270,7 @@ def run(args):
     raise: the report says so (report.ok is False) and the model has been uninstalled — and a
     version it replaced (--force) restored — unless --keep-on-fail."""
     import shutil
-    from . import common, serverctl
+    from . import common, precision, serverctl
     from .report import FAIL, Report, TierResult, annotate_manifest
     from .verify import run_verification, tier_a_results
 
@@ -278,8 +281,11 @@ def run(args):
         work = Path(tmp)
         common.PARITY_RECORDS.clear()
         bundles = fam.convert(args, work)
+        prec = precision.apply(bundles, args, work)   # no-op unless --precision / --sensitivity
         names = [common.validate_name(b.name) for b in bundles]
         report = Report(models=names, task=bundles[0].task, architecture=bundles[0].architecture)
+        for t in prec.rows:
+            report.add(t)
         if args.dry_run:
             install(bundles, work / "out", models_dir, args.force, args.dry_run)
             keep = models_dir / ".convert-dry-run"
@@ -287,6 +293,8 @@ def run(args):
                 shutil.rmtree(keep)
             shutil.copytree(work / "out", keep)
             log(f"dry run: bundles copied to {keep} for inspection")
+            if prec.sensitivity:
+                log(f"dry run: sensitivity -> {precision.save_sensitivity(prec.sensitivity, keep / names[0])}")
             for t in tier_a_results(list(common.PARITY_RECORDS), names):
                 report.add(t)
             run_verification(bundles, args, report, models_dir, work)
@@ -319,6 +327,8 @@ def run(args):
         report.restored = txn.rollback()
         report.uninstalled = True
         report.save(models_dir / ".convert-failed" / names[0] / "convert-report.json")
+        if prec.sensitivity:
+            precision.save_sensitivity(prec.sensitivity, models_dir / ".convert-failed" / names[0])
         log(report.table())
         log(f"FAILED: {', '.join(names)} uninstalled from {models_dir}"
             + (f"; the previous {', '.join(report.restored)} restored" if report.restored else "")
@@ -333,6 +343,8 @@ def run(args):
         d = models_dir / n
         if d.is_dir():
             report.save(d / "convert-report.json")
+            if prec.sensitivity:
+                precision.save_sensitivity(prec.sensitivity, d)
             annotate_manifest(d / "manifest.yaml", report.manifest_comment_lines(n))
     log(report.table())
     return report

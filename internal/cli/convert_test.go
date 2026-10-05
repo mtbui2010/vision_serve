@@ -143,3 +143,21 @@ func TestBindMountQuotesCSVFields(t *testing.T) {
 		t.Fatalf("bindMount = %s, want %s", got, want)
 	}
 }
+
+// --calib DIR (INT8 calibration images) is a host path: it must be mounted like --images.
+func TestBuildConvertDockerArgsCalibMounted(t *testing.T) {
+	root := t.TempDir()
+	calib := filepath.Join(root, "calib")
+	if err := os.MkdirAll(calib, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	args, err := buildConvertDockerArgs([]string{"hf", "org/model", "--name", "m", "--precision", "int8",
+		"--calib", calib}, "img", "/m", "/c", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(args, " ")
+	if !strings.Contains(got, "type=bind,src="+root+",dst=/in/1,readonly") || !strings.Contains(got, "--calib /in/1/calib") {
+		t.Fatalf("--calib must be mounted read-only and rewritten to the container path:\n%s", got)
+	}
+}
