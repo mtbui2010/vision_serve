@@ -99,6 +99,7 @@ nav:
           - Inspect and verify a model (tiers A, B1, B2, C): guides/inspect.md
           - Reduced precision (FP16, INT8, INT4, mixed): guides/precision.md
           - Jetson details (bench, sensitivity, optimize): guides/edge.md
+  - Hands-on: hands-on.md
   - Model gallery: gallery.md
   - Go for this project:
       - go/index.md
