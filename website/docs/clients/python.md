@@ -108,7 +108,7 @@ this table also documents the [plain HTTP](http.md) fields. The three exceptions
 | [`prompt`](#prompt-text) | `str` | no prompt; `"object."` for the GroundingDINO family | GroundingDINO family, `rfdetr-textalign*`, `rfdetr-gdino*`, `clip-text`, `siglip-text` | Words to look for: phrases separated by `.` |
 | [`box`](#box-boxes) | `[x, y, w, h]` or a list of them | none | SAM family (`mobile-sam`, `efficient-sam`, `sam2`, `nano-sam`), `grasp` | Cut out the object in each box: one mask per box |
 | [`point`](#point-points) | `[x, y]`, `[x, y, label]` or a list | none | SAM family | Points on (`label=1`) or off (`0`) one object: one mask |
-| [`box_threshold`](#box_threshold) | `float` in (0, 1) | manifest `conf_threshold`, else 0.3 | GroundingDINO family (also its pass in `gdino-siglip*`, `rfdetr-gdino*`), `owlv2_base_patch16` | Minimum score to keep a box |
+| [`box_threshold`](#box_threshold) | `float` in (0, 1) | manifest `conf_threshold`, else 0.3; `owlv2_base_patch16`: 0.9 | GroundingDINO family (also its pass in `gdino-siglip*`, `rfdetr-gdino*`), `owlv2_base_patch16` | Minimum score to keep a box |
 | [`text_threshold`](#text_threshold) | `float` in (0, 1) | manifest `text_threshold`, else 0.25 | same as `box_threshold` | A second minimum on the same score |
 | [`min_size`, `max_size`](#min_size-and-max_size) | `float`, % of the photo's area | no limit | every model that returns boxes or masks | Drop objects whose box is smaller / larger |
 | [`roi`](#roi-region-of-interest) | `[x, y, w, h]`, pixels or 0–1 fractions | whole photo | every model | Run the model on this crop only; results come back in photo pixels |
@@ -325,8 +325,8 @@ their answers with [`Result.filter_by_conf`](#helpers) instead.
 
 Keep a box only when its score is above this value. Default: the manifest's `conf_threshold`
 (0.3 on the shipped GroundingDINO models), else 0.3. Lower finds more, including wrong boxes;
-higher keeps only confident ones. The template-prompted `owlv2_base_patch16` reads it too (see
-[`template_name`](#template_name)).
+higher keeps only confident ones. The template-prompted `owlv2_base_patch16` reads it too, with
+its own default, 0.9 (the manifest's `instance.sim_threshold`; see [`template_name`](#template_name)).
 
 #### `text_threshold`
 
@@ -697,40 +697,37 @@ from visionserve import Client
 
 c = Client()
 # Register one example crop under a name (the SDK has no method for this endpoint).
-Image.open("dogs.jpg").crop((216, 227, 274, 320)).save("dog-crop.png")
+Image.open("dogs.jpg").crop((215, 230, 272, 319)).save("dog-crop.png")
 with open("dog-crop.png", "rb") as f:
     r = requests.post(c.host + "/api/templates", data={"name": "dog"}, files={"images": f})
 print(r.json(), requests.get(c.host + "/api/templates").json())
 
 res = c.predict("owlv2_base_patch16", "dogs.jpg", template_name="dog")
-print(res.task, len(res.detections), "detections")
+print(res.task, len(res.detections), [round(d.conf, 3) for d in res.detections])
+low = c.predict("owlv2_base_patch16", "dogs.jpg", template_name="dog", box_threshold=0.1)
+print(len(low.detections), [round(d.conf, 3) for d in low.detections])
 requests.delete(c.host + "/api/templates/dog")
 ```
 
 ```text
 {'count': 1, 'name': 'dog'} {'templates': ['dog']}
-instance_detection 10 detections
+instance_detection 4 [1.0, 1.0, 1.0, 1.0]
+10 [1.0, 1.0, 1.0, 1.0, 0.898, 0.877, 0.561, 0.552, 0.424, 0.389]
 ```
 
-Ten boxes, because the manifest keeps every box scoring above 0.1, the value OWLv2 uses for
-**text** queries. Scores of an image query are a raw sigmoid, not a calibrated probability:
-here the four dogs score 1.0, the two people 0.90 and 0.88, strips of grass 0.30 to 0.58. The
-Hugging Face reference (`Owlv2ForObjectDetection.image_guided_detection`) gives the same boxes
-and scores and uses `threshold=0.9` in its image-guided example, so pass `box_threshold`:
+The four boxes are the four dogs. By default a box must score above 0.9 (the manifest's
+`instance.sim_threshold`), the threshold of the Hugging Face image-guided example
+(`Owlv2ForObjectDetection.image_guided_detection`), which returns the same four boxes and scores
+for this photo and crop. Scores of an image query are a raw sigmoid, not a calibrated
+probability. At `box_threshold=0.1`, the value OWLv2 uses for **text** queries, the two people
+come back at 0.90 and 0.88 and background patches at 0.39 to 0.56, cut at the manifest's
+`max_detections` of 10.
 
-```python
-res = c.predict("owlv2_base_patch16", "dogs.jpg", template_name="dog", box_threshold=0.9)
-print(len(res.detections), [round(d.conf, 3) for d in res.detections])
-```
-
-```text
-5 [1.0, 1.0, 1.0, 1.0, 0.901]
-```
-
-The model embeds the **whole** template image, not an object found inside it. Use a tight crop
-that the object fills: a crop with much background, or a thin one (padded to a square with
-black), matches background everywhere at scores near 1.0, and no threshold separates those
-boxes from the object.
+The model does not look for the template image as a whole. It detects boxes in the template,
+picks one of those that cover most of it, and looks for that box, so a few pixels of crop can
+change what it looks for: the crop `(216, 227, 274, 320)` of the same dog returns ten large
+boxes over the grass at scores near 1.0, in Hugging Face too, and no threshold separates those
+from the dogs. If that happens, crop again, tightly around the object.
 
 An unknown name is a 400 (`template "nope" not found`), and so is calling an
 `instance_detection` model without one. Templates live in the server's memory: they are gone
@@ -1132,7 +1129,8 @@ The newer flags, run against a server on the CPU (port 11698, hence `device=cpu`
 slower timings). `depth_mm.png` is the made-up floor plane of the [`depth`](#depth-an-aligned-depth-image)
 example saved as a 16-bit PNG (`Image.fromarray(depth_mm).save("depth_mm.png")`) and
 `depth_mm.raw` the same values as raw bytes (`depth_mm.tofile("depth_mm.raw")`); the template
-`dog` was registered first, as in the [`template_name`](#template_name) example.
+`dog` was registered first, as in the [`template_name`](#template_name) example. The last line
+was rerun later on another CPU server (port 11700, a busier machine, hence its time).
 
 ```bash
 visionserve predict rfdetr-dualhead-dec1 living-room.jpg --prompt "cup. book. remote. lamp." \
@@ -1152,8 +1150,8 @@ predict: model=background task=segmentation device=cpu  client=104.7ms server=49
 {"task":"segmentation","model":"background","device":"cpu","masks":[{"rle":"0 273920","bbox":[0.0,0.0,640.0,428.0],...
 error: --depth depth_mm.raw has 547840 bytes, but 320x214 uint16 needs 136960
 exit=1
-predict: model=owlv2_base_patch16 task=instance_detection device=cpu  client=4442.4ms server=4383.5ms  (10 detections)
-{"task":"instance_detection","model":"owlv2_base_patch16","device":"cpu","detections":[{"bbox":[5.754852294921875,...
+predict: model=owlv2_base_patch16 task=instance_detection device=cpu  client=8235.6ms server=8196.4ms  (4 detections)
+{"task":"instance_detection","model":"owlv2_base_patch16","device":"cpu","detections":[{"bbox":[214.99103546142578,...
 ```
 
 ## Recipes

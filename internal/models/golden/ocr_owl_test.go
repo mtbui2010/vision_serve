@@ -145,8 +145,14 @@ func TestGoldenOWLv2(t *testing.T) {
 		name string
 		cfg  models.Config
 	}{
+		// The shipped manifest: template threshold 0.9 (instance.sim_threshold; owlvit refuses a
+		// postprocess.conf_threshold), max_templates lowered to 2 to exercise the cap.
 		{"manifest", models.Config{Name: "owlv2_base_patch16", Width: 960, Height: 960, Mean: cm, Std: cs,
-			ConfThresh: 0.1, MaxDet: 10, InstanceSimThreshold: 0.1, InstanceMaxTemplates: 2, InstancePatchSize: 16,
+			MaxDet: 10, InstanceSimThreshold: 0.9, InstanceMaxTemplates: 2, InstancePatchSize: 16,
+			Files: map[string]string{"model": "m.onnx"}}},
+		// The manifest before the 0.9 default (threshold 0.1): pins the decode at a low threshold.
+		{"sim0.1", models.Config{Name: "owlv2_base_patch16", Width: 960, Height: 960, Mean: cm, Std: cs,
+			MaxDet: 10, InstanceSimThreshold: 0.1, InstanceMaxTemplates: 2, InstancePatchSize: 16,
 			Files: map[string]string{"model": "m.onnx"}}},
 		{"defaults-max100", models.Config{Name: "owl", Width: 960, Height: 960,
 			Files: map[string]string{"model": "m.onnx"}}},

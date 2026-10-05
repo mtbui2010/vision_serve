@@ -255,7 +255,7 @@ runtime:
 | `runtime.prefer` | The execution-provider chain to try, e.g. `[cuda, cpu]`. CPU is always appended last. Every shipped manifest uses `[cuda, cpu]`; TensorRT is opt-in (see [engine.md](engine.md)). |
 | `runtime.idle_unload_seconds` | Unload after this many idle seconds (`0` = never). |
 | `runtime.threads` | Optional map role → ONNX Runtime intra-op threads for that role. |
-| `explain`, `instance`, `detector`/`segmenter`, `grasp` | Optional blocks for heatmaps, one-shot template detection and the grasp pipeline. |
+| `explain`, `instance`, `detector`/`segmenter`, `grasp` | Optional blocks for heatmaps, one-shot template detection and the grasp pipeline. `instance.sim_threshold` is the template requests' score threshold (owlvit: 0.9 when absent; `conf_threshold` is refused there). |
 
 `runtime.threads` exists for a small session that runs between a big one's calls. The fast-path
 router pins its tiny distilled head to one thread:

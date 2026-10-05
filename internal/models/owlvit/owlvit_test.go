@@ -22,9 +22,11 @@ const (
 	realPatches = 3600
 )
 
+// newTestModel builds the model with a low template threshold (0.1), so the decode tests below
+// see every planted patch; the shipped default (0.9) is tested in TestInfer_ThresholdSelection.
 func newTestModel(t *testing.T, maxDet int) *owlVIT {
 	t.Helper()
-	m, err := New(models.Config{Width: realInput, Height: realInput, ConfThresh: 0.1, MaxDet: maxDet, InstancePatchSize: 16})
+	m, err := New(models.Config{Width: realInput, Height: realInput, InstanceSimThreshold: 0.1, MaxDet: maxDet, InstancePatchSize: 16})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -216,10 +218,11 @@ func (f *fakeRunner) InputNames(string) []string {
 }
 func (f *fakeRunner) OutputNames(string) []string { return []string{"logits", "pred_boxes"} }
 
-// box_threshold is honoured per request (it used to be silently ignored): with three far-apart
-// patches scoring 0.95, 0.6 and 0.2, the manifest's 0.1 keeps all three, box_threshold=0.5 two,
-// and 0.9 (HF's image-guided example threshold) one.
-func TestInfer_BoxThresholdOverrides(t *testing.T) {
+// The score threshold of a (template-prompted) request: the request's box_threshold when it
+// sets one, else the manifest's instance.sim_threshold, else 0.9 (HF's image-guided example,
+// post_process_image_guided_detection(threshold=0.9)). Three far-apart patches score 0.95, 0.6
+// and 0.2, so the threshold in force is read off the number of detections.
+func TestInfer_ThresholdSelection(t *testing.T) {
 	boxes := realBoxes()
 	logits := make([]float32, realPatches)
 	for i := range logits {
@@ -230,25 +233,58 @@ func TestInfer_BoxThresholdOverrides(t *testing.T) {
 	}
 	logit := func(p float64) float32 { return float32(math.Log(p / (1 - p))) }
 	logits[100], logits[2000], logits[3500] = logit(0.95), logit(0.6), logit(0.2)
-
-	m := newTestModel(t, 10)
 	tImg := image.NewNRGBA(image.Rect(0, 0, 30, 40))
+
 	for _, c := range []struct {
-		boxThresh float64
+		name      string
+		manifest  float64 // instance.sim_threshold (0 = absent)
+		boxThresh float64 // request box_threshold (0 = absent)
 		want      int
-	}{{0, 3}, {0.5, 2}, {0.9, 1}} {
+	}{
+		{"default 0.9", 0, 0, 1},
+		{"default, request 0.5", 0, 0.5, 2},
+		{"default, request 0.1", 0, 0.1, 3},
+		{"manifest 0.5", 0.5, 0, 2},
+		{"manifest 0.5, request 0.9", 0.5, 0.9, 1},
+		{"manifest 0.5, request 0.1", 0.5, 0.1, 3},
+	} {
+		base, err := New(models.Config{Width: realInput, Height: realInput, MaxDet: 10, InstanceSimThreshold: c.manifest})
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		m := base.(*owlVIT)
 		r := &fakeRunner{logits: [][]float32{logits}, boxes: boxes}
 		p := models.Prompt{TemplateImages: []image.Image{tImg}, BoxThresh: c.boxThresh}
 		res, err := m.Infer(image.NewNRGBA(image.Rect(0, 0, 400, 400)), p, r)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("%s: %v", c.name, err)
 		}
 		if len(res.Detections) != c.want {
-			t.Errorf("box_threshold=%v: %d detections, want %d: %+v", c.boxThresh, len(res.Detections), c.want, res.Detections)
+			t.Errorf("%s: %d detections, want %d: %+v", c.name, len(res.Detections), c.want, res.Detections)
+		}
+		wantModel := c.manifest
+		if wantModel == 0 {
+			wantModel = 0.9
+		}
+		if m.simThreshold != wantModel {
+			t.Errorf("%s: model threshold %v after the request, want %v", c.name, m.simThreshold, wantModel)
 		}
 	}
-	if m.simThreshold != 0.1 {
-		t.Errorf("a request changed the model's own threshold: %v", m.simThreshold)
+}
+
+// postprocess.conf_threshold used to override the template threshold (the shipped manifest's
+// 0.1 applied to every request). The graph has no text-query path, so the value could only be
+// ignored: a load error instead. An instance.sim_threshold outside [0, 1) is refused too.
+func TestNew_RefusesConfThresholdAndBadSimThreshold(t *testing.T) {
+	for _, cfg := range []models.Config{
+		{Width: realInput, Height: realInput, ConfThresh: 0.1},
+		{Width: realInput, Height: realInput, ConfThresh: 0.1, InstanceSimThreshold: 0.9},
+		{Width: realInput, Height: realInput, InstanceSimThreshold: 1},
+		{Width: realInput, Height: realInput, InstanceSimThreshold: math.NaN()},
+	} {
+		if _, err := New(cfg); err == nil {
+			t.Errorf("New(conf %v, sim %v) = nil error, want a load error", cfg.ConfThresh, cfg.InstanceSimThreshold)
+		}
 	}
 }
 

@@ -48,9 +48,17 @@ var (
 )
 
 // Default inference constants when the manifest leaves them zero.
+//
+// defaultTemplateThreshold is the minimum score of an image-guided (template) match: 0.9, the
+// threshold of HF's image-guided example (Owlv2ForObjectDetection.image_guided_detection
+// docstring: post_process_image_guided_detection(threshold=0.9, nms_threshold=0.3)). It is not
+// OWLv2's text-query value 0.1: an image query's score is a raw sigmoid, not calibrated, and
+// with 0.1 a good template returns the matching objects plus weaker matches (on the docs photo,
+// COCO #372819 with a crop of one dog: the four dogs at ~1.0, two people at 0.88-0.90 and
+// background patches at 0.35-0.56).
 const (
-	defaultSimThreshold = 0.1
-	defaultPatchSize    = 16
+	defaultTemplateThreshold = 0.9
+	defaultPatchSize         = 16
 )
 
 const roleModel = "model"
@@ -58,7 +66,7 @@ const roleModel = "model"
 type owlVIT struct {
 	cfg models.Config
 
-	simThreshold float64 // minimum sigmoid(logit) to emit a detection
+	simThreshold float64 // template-mode default: minimum sigmoid(logit) to emit a detection
 	maxTemplates int     // cap on template count per call (0 = no limit)
 	patchSize    int     // ViT patch size (determines num_patches from input H/W)
 
@@ -77,15 +85,24 @@ func New(cfg models.Config) (models.Base, error) {
 		maxTemplates: cfg.InstanceMaxTemplates,
 		patchSize:    cfg.InstancePatchSize,
 	}
+	// The template threshold is instance.sim_threshold, else 0.9. postprocess.conf_threshold is
+	// refused: it used to override sim_threshold, and the shipped manifest set it to 0.1 (a
+	// text-query value), which then applied to every template request. The exported graph has no
+	// text-query path (its inputs are two images), so every request is template-prompted and a
+	// conf_threshold could only be ignored, which a manifest setting must never be.
+	if cfg.ConfThresh != 0 {
+		return nil, fmt.Errorf("owlvit: postprocess.conf_threshold (%v) is not read: this model "+
+			"serves only template (image-guided) requests; set instance.sim_threshold instead "+
+			"(default %v)", cfg.ConfThresh, defaultTemplateThreshold)
+	}
 	if m.simThreshold <= 0 {
-		m.simThreshold = defaultSimThreshold
+		m.simThreshold = defaultTemplateThreshold
+	}
+	if !(m.simThreshold < 1) { // the registry checks this too; also rejects NaN
+		return nil, fmt.Errorf("owlvit: instance.sim_threshold must be in [0, 1), got %v", m.simThreshold)
 	}
 	if m.patchSize <= 0 {
 		m.patchSize = defaultPatchSize
-	}
-	// Conf threshold from postprocess block takes precedence over instance block.
-	if cfg.ConfThresh > 0 {
-		m.simThreshold = cfg.ConfThresh
 	}
 
 	// Resolve normalization: manifest → CLIP defaults.
@@ -177,11 +194,10 @@ func (m *owlVIT) Infer(img image.Image, prompt models.Prompt, r models.Runner) (
 	return m.postprocess(patchScores, boxesData, numPatches, meta, m.threshold(prompt))
 }
 
-// threshold is the score a patch must beat for this request: the request's box_threshold when it
-// sets one, else the manifest's (conf_threshold / sim_threshold, default 0.1). Image-guided
-// scores are a raw sigmoid and not calibrated: HF's image-guided example keeps boxes above 0.9
-// (Owlv2ForObjectDetection.image_guided_detection docstring: threshold=0.9, nms_threshold=0.3),
-// against 0.1 for text queries, so a caller that gets background boxes raises this.
+// threshold is the score a patch must beat for this (template-prompted) request: the request's
+// box_threshold when it sets one, else the manifest's instance.sim_threshold, else 0.9
+// (defaultTemplateThreshold, HF's image-guided example). A caller that wants weaker matches
+// lowers it per request.
 func (m *owlVIT) threshold(prompt models.Prompt) float64 {
 	if prompt.BoxThresh > 0 {
 		return prompt.BoxThresh

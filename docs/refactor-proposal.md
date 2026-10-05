@@ -373,7 +373,34 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   image query là sigmoid thô, không hiệu chỉnh; ví dụ image-guided của HF dùng `threshold=0.9`,
   còn manifest `owlvit-base` (và `defaultSimThreshold`) dùng 0.1, giá trị của text query, nên ví
   dụ trong docs trả 10 box (4 con chó ≈ 1.0, người 0.90/0.88, dải cỏ 0.30–0.58). Đã sửa:
-  `box_threshold` theo request nay có tác dụng với owlvit (trước bị bỏ qua). Còn mở: đổi mặc định
-  sang 0.9 là thay đổi output (ví dụ docs: 10 → 5 box), chưa có protocol đo cho template nên chưa
-  đổi. Template lỏng (nhiều nền, hoặc hẹp nên bị pad đen) khớp nền khắp ảnh ở score ≈ 1.0 ở cả
-  HF lẫn VisionServe; không ngưỡng nào cứu được, docs đã ghi.
+  `box_threshold` theo request nay có tác dụng với owlvit (trước bị bỏ qua). Đổi mặc định sang
+  0.9: **xong**, xem mục kế tiếp. Template lỏng khớp nền khắp ảnh ở score ≈ 1.0 ở cả HF lẫn
+  VisionServe; không ngưỡng nào cứu được, docs đã ghi. (Nguyên nhân không hẳn là crop hẹp bị pad
+  đen: HF chọn một box mà detector tìm thấy trong template, trong các box phủ gần hết template,
+  nên lệch crop vài pixel có thể đổi box được chọn; `(216,227,274,320)` và `(215,230,272,319)`
+  hẹp như nhau mà một cái khớp nền, một cái khớp đúng 4 con chó.)
+- Mặc định ngưỡng template của OWLv2: **xong** (2026-10-05, người dùng quyết định đổi 0.1 → 0.9).
+  Graph owlvit chỉ nhận hai ảnh (`query_pixel_values`, `query_image_features`), không có đường
+  text query, nên mọi request đều là template. Ngưỡng của template là `instance.sim_threshold`
+  (thiếu thì 0.9, giá trị trong ví dụ image-guided của HF; `box_threshold` của request vẫn ghi
+  đè); registry kiểm `sim_threshold` trong [0, 1), `max_templates`/`patch_size` >= 0.
+  `postprocess.conf_threshold` trước ghi đè `sim_threshold` (manifest để 0.1); giờ owlvit từ
+  chối nó lúc load, vì không có gì để áp dụng nó. Đo trên GPU, ảnh COCO #372819, so với HF
+  transformers 5.9 (`image_guided_detection` + `post_process_image_guided_detection(threshold=0.9,
+  nms_threshold=0.3)`, target size là cạnh hình vuông đã pad): hai crop chặt của con chó phía
+  trước, `(215,230,272,319)` và `(217,228,273,300)`, trước đây trả 10 box (4 con chó ≈ 1.0, người
+  0.90/0.88, nền 0.35–0.56), nay trả 4 box, trùng HF (4 box, lệch box ≤ 0.03 px, score ≤ 2.2e-6).
+  Ví dụ của HF (ảnh #39769, template là cả ảnh #1675): 2 box ở cả hai; lệch box 9.7 px với file
+  JPEG, 0.54 px khi đưa cùng ảnh đã giải mã bằng PIL (PNG), nên phần lệch là bộ giải mã JPEG của
+  Go so với libjpeg, không phải hậu xử lý. Phần còn lại của `post_process_image_guided_detection`
+  không cần chép: NMS IoU 0.3 của HF áp trước ngưỡng, nhưng NMS tham lam theo thứ tự score nên
+  kết quả trên 0.9 không phụ thuộc thứ tự; score HF trả về là "alpha" chia lại theo box tốt nhất
+  (để vẽ), không phải sigmoid; HF không giới hạn số box và không cắt box theo ảnh. Với template
+  tốt, ở 0.9 hai bên trùng nhau. Chỉ với template lỏng (crop `(216,227,274,320)` cũ trong docs,
+  nền ≈ 1.0 khắp ảnh) mới khác: HF giữ 216 box, VisionServe 10 (NMS IoU 0.5 + containment,
+  `max_detections` 10); áp đúng luật của VisionServe lên tensor của HF cho lại 10 box đó (lệch
+  ≤ 1.9 px). Crop cũ trong docs không tái tạo được kết quả đã ghi (4 con chó + người): ở cả HF
+  lẫn VisionServe nó cho 10 box nền ở ≈ 1.0, nên docs đổi sang crop `(215,230,272,319)`. Golden
+  Go `owlvit.json` sinh lại: case `manifest`/`defaults-max100` mới bằng đúng case cũ lọc
+  score > 0.9; case `sim0.1` bằng từng byte case `manifest` cũ. Chưa có protocol đo độ chính xác
+  cho template (một bộ ảnh + template có nhãn); ngưỡng 0.9 là theo HF, chưa đo trên dữ liệu thật.
