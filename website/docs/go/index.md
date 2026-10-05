@@ -157,7 +157,7 @@ sequenceDiagram
 | Step | Function | File |
 |---|---|---|
 | 1. Route | `routes()` maps `POST /api/predict` to `handlePredict` | [server/server.go#L75-L92](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L75-L92) |
-| 2. Parse | `handlePredict` / `predict`: admit, decode the image, build the prompt | [server/handlers.go#L134-L166](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L134-L166) |
+| 2. Parse | `handlePredict` / `predict`: admit, decode the image, build the prompt | [server/handlers.go#L136-L168](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L136-L168) |
 | 3. Wrap | `Predict`: region-of-interest crop, client-gone check, size filter | [server/predict.go#L24-L43](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L24-L43) |
 | 4. Load | `Manager.PredictPrompt`: load once, lease the session | [lifecycle/manager.go#L106-L116](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L106-L116) |
 | 5. Run | `Session.predictSimple`: pre → infer → post | [lifecycle/session.go#L213-L223](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L213-L223) |

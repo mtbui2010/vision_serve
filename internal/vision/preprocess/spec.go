@@ -27,15 +27,16 @@ type Mode string
 
 const (
 	// Squash resizes to exactly Width×Height; the aspect ratio is not kept (RF-DETR, MiDaS,
-	// EfficientNet, SAM2, …). Default resample: bilinear.
+	// RT-DETR, SAM2, …). Default resample: bilinear.
 	Squash Mode = "squash"
 	// Letterbox fits the image inside Width×Height keeping its aspect ratio (scale =
 	// min(W/w, H/h), sides rounded half up), centres it and pads with the pixel PadValue
 	// before normalisation. Default resample: bilinear.
 	Letterbox Mode = "letterbox"
 	// CenterCrop resizes the SHORT side to its target (long side truncated) and keeps the
-	// centred Width×Height window, offset floored: HuggingFace CLIPImageProcessor. Default
-	// resample: bicubic.
+	// centred Width×Height window, offset floored: HuggingFace CLIPImageProcessor. With CropPct p
+	// the target is floor(Width/p)×floor(Height/p) before the crop — timm's crop_pct and
+	// torchvision's Resize(256) + CenterCrop(224) (p = 0.875). Default resample: bicubic.
 	CenterCrop Mode = "center_crop"
 	// KeepAspect is HuggingFace DPTImageProcessor's keep_aspect_ratio rule (DPTKeepAspectSize,
 	// sides rounded to MultipleOf): no crop, no pad, the tensor size varies per image. Default
@@ -117,6 +118,9 @@ type Spec struct {
 	MultipleOf int
 	// NoUpscale: LongSide/LongSidePad never enlarge (the scale is capped at 1) — PaddleOCR's det.
 	NoUpscale bool
+	// CropPct: CenterCrop keeps this fraction of the resized short side (timm crop_pct, in
+	// (0, 1]); 0 = 1, the whole short side (CLIP). See CenterCropSize.
+	CropPct float32
 	// Resample: "" = the mode's default (see Mode).
 	Resample Resample
 	// Mean, Std: per-channel normalisation, RGB order (see the formula above).
@@ -213,11 +217,11 @@ func (s Spec) Validate() error {
 	}
 	// A NaN or Inf anywhere in the normalisation only ever yields NaN (or zeroed) tensor values,
 	// legacy spec or not.
-	for _, vals := range [][]float32{s.Mean, s.Std, {s.PadValue}} {
+	for _, vals := range [][]float32{s.Mean, s.Std, {s.PadValue, s.CropPct}} {
 		for _, v := range vals {
 			if math.IsNaN(float64(v)) || math.IsInf(float64(v), 0) {
-				return fmt.Errorf("preprocess: mean, std and pad must be finite numbers (got mean %v, std %v, pad %v)",
-					s.Mean, s.Std, s.PadValue)
+				return fmt.Errorf("preprocess: mean, std, pad and crop_pct must be finite numbers (got mean %v, std %v, pad %v, crop_pct %v)",
+					s.Mean, s.Std, s.PadValue, s.CropPct)
 			}
 		}
 	}
@@ -226,6 +230,12 @@ func (s Spec) Validate() error {
 	}
 	if s.MultipleOf > 0 && s.Resize != KeepAspect && s.Resize != LongSidePad {
 		return fmt.Errorf("preprocess: multiple_of applies to keep_aspect and long_side_pad, not %s", s.Resize)
+	}
+	if s.CropPct != 0 && s.Resize != CenterCrop {
+		return fmt.Errorf("preprocess: crop_pct applies to center_crop, not %s", s.Resize)
+	}
+	if s.CropPct < 0 || s.CropPct > 1 {
+		return fmt.Errorf("preprocess: crop_pct must be in (0, 1] (the kept fraction of the resized short side), got %g", s.CropPct)
 	}
 	if s.NoUpscale && s.Resize != LongSide && s.Resize != LongSidePad {
 		return fmt.Errorf("preprocess: no_upscale applies to long_side and long_side_pad, not %s", s.Resize)

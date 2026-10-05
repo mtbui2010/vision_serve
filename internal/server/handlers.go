@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	// register decoders for common image formats
 	_ "image/jpeg"
@@ -32,6 +33,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/models — list models + state (available / loaded).
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	s.reg.Refresh(time.Second) // list models installed since the last scan (at most one rescan a second)
 	infos := make([]api.ModelInfo, 0)
 	for _, e := range s.reg.List() {
 		state := "not_downloaded"
@@ -41,12 +43,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		if s.mgr.IsLoaded(e.Manifest.Name) {
 			state = "loaded"
 		}
-		infos = append(infos, api.ModelInfo{
+		infos = append(infos, withUsefulSide(api.ModelInfo{
 			Name:    e.Manifest.Name,
 			Task:    api.Task(e.Manifest.Task),
 			License: e.Manifest.License,
 			State:   state,
-		})
+		}, e.Manifest))
 	}
 	writeJSON(w, http.StatusOK, infos)
 }

@@ -5,10 +5,12 @@
  * README and `clients/js/README.md` for usage.
  */
 
-export { Client, VisionServeError, normalizePrompt } from "./client.js";
+export { Client, VisionServeError, normalizePrompt, isLoopback } from "./client.js";
 export type { ImageInput, BoxInput, PointInput, DepthInput, PredictOptions, ClientOptions } from "./client.js";
 export { Result, Detection, Mask, Grasp, ModelInfo, Classification } from "./types.js";
 export type { Task, ModelState } from "./types.js";
 export { filterBySize, getDepthAtDetection } from "./filter.js";
 export type { SizeFilterOptions, DepthAtDetectionOptions, DepthMode } from "./filter.js";
 export { toSVG } from "./visualize.js";
+export { ClientResize, browserCodec, sharpCodec, probeHeader, targetSize } from "./resize.js";
+export type { ImageCodec, ImageProbe, ResizeOption } from "./resize.js";

@@ -88,6 +88,17 @@ type ModelInfo struct {
 	Task    Task   `json:"task"`
 	License string `json:"license"`
 	State   string `json:"state"` // "not_downloaded" | "available" | "loaded"
+
+	// Client-resize hint: how far an SDK may shrink an image before uploading it without changing
+	// what the model can see (the model resizes to its own fixed input anyway). At most one is
+	// set; both null = send the image at full resolution (masks, OCR, depth-aligned grasping,
+	// templates, keep_aspect, …). MaxUsefulSide bounds the image's LONGER side (models that fit
+	// the image inside their input: letterbox, long_side); MaxUsefulShortSide bounds its SHORTER
+	// side (models that fill their input on both axes: squash, center_crop). Each is 2 × the
+	// model's larger input side, or the manifest's runtime.max_useful_side (longer side). A
+	// region of interest is bounded the same way, measured on the region.
+	MaxUsefulSide      *int `json:"max_useful_side"`
+	MaxUsefulShortSide *int `json:"max_useful_short_side"`
 }
 
 // PredictJSONRequest is the option list of /api/predict (and /api/preprocess). It is the JSON

@@ -42,7 +42,8 @@ photo you sent, whatever size the model works at internally.
 ## The client: `Client(...)`
 
 ```python
-Client(host="http://localhost:11435", timeout=120, *, base64_arrays=False)
+Client(host="http://localhost:11435", timeout=120, *, base64_arrays=False,
+       resize="auto", jpeg=True, jpeg_quality=90)
 ```
 
 | Argument | Type | Default | Meaning | When to change it |
@@ -50,10 +51,14 @@ Client(host="http://localhost:11435", timeout=120, *, base64_arrays=False)
 | `host` | `str` | `"http://localhost:11435"` | Base URL of the server. A trailing `/` is removed. | The server runs on another machine or port (`"http://10.0.0.5:11435"`). |
 | `timeout` | `float`, seconds | `120` | Longest wait for one request: upload, a model load if needed, inference, answer. When it passes, `VisionServeError` is raised with `status=None`. | Lower it to fail fast in a live loop (load the models at startup first); raise it for a slow CPU and a big pipeline. |
 | `base64_arrays` | `bool`, keyword only | `False` | Ask for depth maps and embeddings as base64 float32 instead of JSON numbers (the request field `encoding=base64`). They then arrive as read-only `FloatArray` objects. | Large depth maps or many embeddings: smaller and faster to parse. See [Output encoding](#output-encoding-base64_arrays). |
+| `resize` | `"auto"`, `"off"` or `int`, keyword only | `"auto"` | Shrink a photo larger than the model can use before uploading it, to the size the server advertises for that model; results are mapped back to your photo's pixels. With the server on this machine (`localhost`, 127.0.0.0/8, `::1`) only a shrink that at least halves the sides is done. `"off"` sends every photo as given; an `int` is a longest side in pixels for every model. See [Client-side resizing](#client-side-resizing-on-by-default). | `"off"` to compare pixel-exact results. |
+| `jpeg` | `bool`, keyword only | `True` | Send a shrunk photo as JPEG instead of lossless PNG. A photo that is not shrunk is always sent as before. | `False` to keep a shrunk photo lossless, at the cost of size. |
+| `jpeg_quality` | `int` 1–100, keyword only | `90` | Quality of that JPEG (4:4:4 colour). | Lower on a slow link. |
 
-The client keeps no connection or state between calls (each request is one `urllib` call), so
-one `Client` can be shared by every thread of your program. Its attributes `host`, `timeout` and
-`base64_arrays` can be read and changed after construction.
+The client keeps no connection between calls (each request is one `urllib` call); its only state
+is the per-model size hints of `GET /api/models`, fetched once and shared under a lock, so one
+`Client` can be shared by every thread of your program. Its attributes `host`, `timeout`,
+`base64_arrays`, `resize`, `jpeg` and `jpeg_quality` can be read and changed after construction.
 
 ## `predict(model, image, **options)`
 
@@ -88,10 +93,13 @@ keyword-only:
         claim_threshold: Optional[float] = None,
         crop_temp: Optional[float] = None,
         template_name: Optional[str] = None,
+        resize: Optional[ResizeOption] = None,
+        jpeg: Optional[bool] = None,
+        jpeg_quality: Optional[int] = None,
     ) -> Result:
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L99-L124)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L134-L162)
 
 An option left at `None` is not sent at all, and the server then uses the model's own default
 (from its `manifest.yaml`, or a built-in value). An option a model does not read is ignored
@@ -123,10 +131,11 @@ this table also documents the [plain HTTP](http.md) fields. The three exceptions
 | [`crop_temp`](#crop_temp) | `float` > 0 | 0.02 (textalign), 0.05 (`gdino-siglip*`) | models that name boxes from a crop with SigLIP | How decisive the crop naming is |
 | [`template_name`](#template_name) | `str` | none | `instance_detection` models (`owlv2_base_patch16`) | Which registered example images to look for |
 | [`Client(base64_arrays=True)`](#output-encoding-base64_arrays) ³ | `bool` | `False` | depth and embedding models | Large float arrays as base64 |
+| [`resize`, `jpeg`, `jpeg_quality`](#client-side-resizing-on-by-default) ² | `"auto"` / `"off"` / `int`, `bool`, `int` | the `Client`'s (`"auto"`, `True`, `90`) | models with a size hint in `GET /api/models` | Shrink the photo before uploading it, for this call |
 
 ¹ Sent as a binary file part `depth` plus the fields `depth_dtype`, `depth_width`,
-`depth_height` (JSON clients use `depth_base64`). ² Never sent: the SDK filters the answer.
-³ A `Client` argument, sent as the field `encoding=base64`.
+`depth_height` (JSON clients use `depth_base64`). ² Never sent: the SDK filters the answer, or
+prepares the upload. ³ A `Client` argument, sent as the field `encoding=base64`.
 
 Numbers, boxes and points may be Python numbers or numpy arrays / scalars. `grid_size` and
 `dilate` must be whole numbers (`2.0` is accepted, `2.5` raises `ValueError`), because the server
@@ -143,9 +152,10 @@ reads them as integers.
 | `PIL.Image.Image` | lossless PNG | Modes other than RGB / RGBA / L are converted to RGB first. |
 | `numpy.ndarray` | lossless PNG | `(H, W, 3)` is read as **RGB**. `uint8` as is; floats are taken as 0–1 and scaled; other integer types are clipped to 0–255; `(H, W)` and `(H, W, 1)` become grey RGB; `(H, W, 4)` keeps its alpha. |
 
-PIL images and arrays are encoded to PNG so the server sees exactly your pixels. That costs a
-little CPU per call; if bandwidth or speed matter more than exactness (a video loop), encode a
-JPEG yourself and pass the bytes. The server accepts JPEG, PNG, WebP, BMP, GIF and TIFF, up to
+The one exception is a photo larger than the model can use: by default the SDK shrinks it and
+sends the smaller photo as JPEG ([Client-side resizing](#client-side-resizing-on-by-default),
+below). Anything it does not shrink goes out as in this table, so PIL images and arrays are
+encoded to PNG and the server sees exactly your pixels. The server accepts JPEG, PNG, WebP, BMP, GIF and TIFF, up to
 32 MiB and 40 megapixels per image.
 
 ```python
@@ -192,10 +202,206 @@ exif_transpose 7
 !!! warning "EXIF orientation"
     The server applies the EXIF orientation tag of a JPEG you send as a path or bytes, so phone
     photos are processed upright and every box refers to the upright photo. `PIL.Image.open`
-    does **not** apply it, and the PNG the SDK makes from a PIL image carries no tag: above, the
-    sideways pixels found 3 objects instead of 7. Call `ImageOps.exif_transpose(img)` before
+    does **not** apply it, and the image the SDK encodes from a PIL image carries no tag: above,
+    the sideways pixels found 3 objects instead of 7. Call `ImageOps.exif_transpose(img)` before
     passing a PIL image, and use the upright size (`exif_transpose(img).size`) when you decode
     masks or draw boxes.
+
+### Client-side resizing (on by default)
+
+A model resizes every photo to its own small input on the server: RF-DETR to 560 × 560,
+GroundingDINO to 800 × 800, CLIP to 224 × 224. A 12-megapixel phone photo is therefore mostly
+pixels the model throws away, and uploading and decoding them is most of the request's cost on
+a network. Since SDK 0.2.0 the client shrinks such a photo before uploading it, to a size the
+server says is still worth sending for that model, and maps the answer back, so every
+coordinate is still in your photo's pixels. It is **on by default** (a user decision of
+2026-10-05; the [measured cost](#what-it-costs-and-saves) is below) and `resize="off"` turns it
+off.
+
+```python
+import os
+from PIL import Image
+from visionserve import Client
+
+# A 3840 x 2556 stand-in for a camera photo: dogs.jpg upscaled 6x.
+Image.open("dogs.jpg").resize((3840, 2556), Image.BICUBIC).save("dogs-6x.jpg", quality=95)
+print("file", os.path.getsize("dogs-6x.jpg") // 1000, "kB")
+
+c = Client()                                   # resize="auto", jpeg=True, jpeg_quality=90
+print(c.useful_side("rf-detr"), c.useful_side("grounding-dino"), c.useful_side("mobile-sam"))
+res = c.predict("rf-detr", "dogs-6x.jpg")
+print(res.client_resize)
+off = Client(resize="off").predict("rf-detr", "dogs-6x.jpg")
+for a, b in list(zip(res.detections, off.detections))[:3]:
+    print(a.cls, round(a.conf, 3), [round(v) for v in a.bbox], "| off:", round(b.conf, 3), [round(v) for v in b.bbox])
+
+gd = c.predict("grounding-dino", "dogs-6x.jpg", prompt="dog. person.")
+print("grounding-dino", gd.client_resize.resized, gd.client_resize.reason)
+sam = c.predict("mobile-sam", "dogs-6x.jpg", box=[1296, 1362, 345, 555])
+print("mobile-sam", sam.client_resize, sam.masks[0].to_ndarray(3840, 2556).shape)
+```
+
+```text
+file 2720 kB
+(None, 1120) (None, 1600) (None, None)
+ClientResize(original_width=3840, original_height=2556, sent_width=1683, sent_height=1120, jpeg_quality=90, reason='hint')
+person 0.931 [2650, 190, 508, 794] | off: 0.93 [2651, 190, 507, 793]
+dog 0.928 [1296, 1363, 345, 554] | off: 0.928 [1296, 1363, 344, 554]
+person 0.899 [3261, 155, 391, 873] | off: 0.899 [3261, 155, 391, 873]
+grounding-dino False loopback: scale 0.63 > 0.5, sent as is
+mobile-sam None (2556, 3840)
+```
+
+(Run against a server on GPU 3 of the same machine, port 11751; `Client()` above stood for
+`Client("http://127.0.0.1:11751")`.) RF-DETR's hint bounds the shorter side at 1120 px, so the
+3840 × 2556 photo went up as 1683 × 1120 (one ninth of the pixels); the boxes came back in the
+photo's own pixels, within a pixel of the full-resolution run. GroundingDINO's hint (1600) would
+shrink the photo only to 0.63 of its size, and the server is on this machine, so the
+[loopback rule](#the-loopback-rule) sent it whole. `mobile-sam` has no hint: its photo went up
+unchanged (`client_resize` is `None`) and its mask is at full resolution.
+
+The rules, applied per request:
+
+| Situation | What is uploaded |
+|---|---|
+| The model has no size hint (see the table below), or `resize="off"` | The photo exactly as before 0.2.0: a path or bytes verbatim, a PIL image or array as lossless PNG. |
+| The photo (or the `roi` region) is larger than the hint | Decoded (a JPEG at a reduced scale, below), rotated by its EXIF tag the way the server would (JPEG only), alpha dropped (the server ignores it too), shrunk with a Lanczos filter keeping the aspect ratio, sent as JPEG at `jpeg_quality` with 4:4:4 colour, or lossless PNG with `jpeg=False`. |
+| The same, but the server is on this machine and the shrink would keep more than half of each side | Sent as given ([the loopback rule](#the-loopback-rule)); `client_resize.reason` says so. |
+| The photo is within the hint | Sent as given: a path or bytes verbatim (a 640 × 480 COCO photo goes to RF-DETR byte for byte), a PIL image or array as lossless PNG. Nothing that is not shrunk is re-encoded. |
+| The request has `depth`, `dilate`, `gripper_min` / `gripper_max` or `template_name` | As before, full resolution (they are pixel quantities tied to the full photo, or templates). |
+
+(For the 224-pixel models, CLIP and the classifiers, even a 640 × 480 photo is larger than the
+448-px hint and is shrunk to 597 × 448 when the server is remote; on localhost the loopback rule
+keeps it whole.)
+
+Prompts in pixels (`box`, `point`, a pixel `roi`) are scaled into the sent photo; a fractional
+`roi` is left alone. Detection and mask boxes, grasp centres, jaw widths and angles are mapped
+back (each axis by its own rounded scale). A mask's run-length encoding stays as the server sent
+it, at the sent size; `Mask.to_ndarray` with your photo's size decodes it there and scales it up
+(nearest neighbour), and the [visualizer](#helpers) does the same. Depth maps are at the model's
+resolution either way. `Result.client_resize` is `None` when the photo went out as given for one
+of the ordinary reasons (no hint, small enough, `resize="off"`), else a `ClientResize` with
+`original_width/height`, `sent_width/height`, `jpeg_quality` (`None` for PNG or not
+re-encoded), `resized`, `scale_x/y` and `reason`: `"hint"`, `"resize=N"` or the loopback
+message.
+
+**Decoding at a reduced size.** A JPEG is decoded with Pillow's draft mode: libjpeg scales the
+image down by 1/2, 1/4 or 1/8 inside the decoder (the largest of those that is still at least
+the target), so a 12-megapixel photo for RF-DETR is decoded as 2000 × 1500 and for CLIP as
+1000 × 750, and only the rest is done by the Lanczos filter. It changes neither the size sent
+nor, measurably, the result ([below](#what-it-costs-and-saves)). GroundingDINO's target
+(2133 × 1600 for 4000 × 3000) is above half the photo, so its photos are decoded in full.
+
+##### The loopback rule
+
+When the client's `host` is this machine (`localhost`, 127.0.0.0/8 or `::1`; names are not
+resolved), `resize="auto"` shrinks a photo only if that at least halves its sides
+(scale ≤ 0.5). On localhost the upload costs nothing, so the only gain is the server's smaller
+decode, and a mild shrink costs the client more than that: GroundingDINO on a 4000 × 3000 photo
+(scale 0.53) was 1.7–1.9× slower shrunk than sent whole. Remote hosts keep the plain hint, and
+an explicit `resize=N` is always applied. The shrinks that remain on localhost (scale 0.37 for
+RF-DETR, 0.15 for CLIP on a 12-megapixel photo) measured faster or level on JPEG files; a
+12-megapixel PNG is still slower for RF-DETR ([numbers](#what-it-costs-and-saves)).
+
+**Where the size comes from.** `GET /api/models` gives each model `max_useful_side` (the longest
+**longer** side worth sending) or `max_useful_short_side` (the longest **shorter** side), and the
+SDK fetches the list once per `Client` (`c.useful_side(model)` shows it; an unknown model name
+refreshes the list at most every 5 s). The server derives it from the model's preprocessing:
+2 × the model's input side, so the server's own resize still shrinks by at least 2 on every
+axis. Models that fit the photo inside their input (letterbox) are bounded by the longer side;
+models that fill their input on both axes (squash, centre crop) by the shorter side, so a wide
+panorama keeps its rows. A model whose output needs the full photo gets no hint:
+
+| Hint | Models (shipped manifests) |
+|---|---|
+| `max_useful_short_side` 1120 / 1024 / 768 / 1280 / 1600 | `rf-detr` / `rfdetr-small*` / `rf-detr-nano` / `rt-detr` / `grounding-dino`, `grounding-dino-fixed` |
+| `max_useful_short_side` 448 / 512 | `clip`, `siglip-image*`, `efficientnet-b0`, `mobilenet-v3` / `midas` |
+| `max_useful_side` 1280 | `scrfd` |
+| none: always the full photo | SAM family and every model that returns masks (`mobile-sam`, `nano-sam`, `efficient-sam`, `sam2`, `grounded-sam`, `gdino-siglip-sam`, `rfdetr-gdino-sam*`, `background`), `paddle-ocr`, grasp models, `owlv2_base_patch16` (templates), the crop-naming pipelines (`rfdetr-gdino*`, `rfdetr-textalign*`, `rfdetr-dualhead-dec1`, `gdino-siglip`), `depth-anything-v2` (its tensor follows the photo's aspect ratio), text towers |
+
+A manifest can override it with [`runtime.max_useful_side`](../reference/manifest.md) (`0` =
+never). An `int` `resize` (`Client(resize=1280)`, or per call) ignores the hint and shrinks
+every model's photos, masks included, to that longer side.
+
+**Turning it off.** `Client(resize="off")` restores the 0.1.x uploads exactly;
+`predict(..., resize="off")` does it for one call; `jpeg=False` keeps shrinking but sends
+lossless PNG (larger). On the command line: `--resize off`, `--no-jpeg`, `--jpeg-quality Q`.
+Without Pillow the SDK cannot decode, and sends every photo as given. `preprocess()` sends the
+photo as given by default (its job is comparing the server's tensor with yours for the same
+pixels); pass `resize="auto"` there to see what `predict` feeds the model.
+
+#### What it costs and saves
+
+Measured with SDK 0.2.0 and a server built from the same commit, both on one shared host (48
+cores; other jobs kept the load average between 60 and 95 during the runs, so absolute times
+are pessimistic and noisy). Server on GPU 3 (RTX A6000, ONNX Runtime 1.26, CUDA). Inputs: three
+COCO val2017 photos (CC BY 2.0: #500663, #321214, #34873) upscaled to 4000 × 3000 and saved as
+JPEG (≈1.1 MB, very compressible), a real 4000 × 3000 camera photo (Open Images, 4.3 MB), and
+#500663 as a 4000 × 3000 PNG (7 MB). Medians of 9 interleaved rounds per photo. "Localhost" is the
+client talking to `127.0.0.1` with the defaults, so the loopback rule applies; "+100 Mbit/s"
+is what a client on another machine uploads (the plain hint), its localhost time plus the
+upload at 100 Mbit/s (bytes × 8 / 10⁸).
+
+| Model (hint) | Photo | Upload, shrunk | Client prep | Server time | Localhost: off → auto | + 100 Mbit/s: off → auto |
+|---|---|---|---|---|---|---|
+| `rf-detr` (1120) | COCO 4000², JPEG (mean of 3) | 1.10 MB → 322 kB | 234 ms | 90 → 50 ms | 360 → 338 ms | 448 → 362 ms |
+| | real photo, JPEG | 4.30 MB → 346 kB | 408 ms | 80 → 46 ms | 588 → 616 ms | 933 → 602 ms |
+| | PNG | 7.04 MB → 367 kB | 762 ms | 36 → 47 ms | 710 → 820 ms | 1274 → 1087 ms |
+| `grounding-dino` (1600) | COCO 4000², JPEG (mean of 3) | 1.10 MB → 535 kB | 539 ms | 213 → 208 ms | 473 → 444 ms, kept whole (scale 0.53) | 561 → 932 ms |
+| | real photo, JPEG | 4.30 MB → 645 kB | 586 ms | 193 → 204 ms | 628 → 613 ms, kept whole | 973 → 933 ms |
+| | PNG | 7.04 MB → 604 kB | 963 ms | 209 → 189 ms | 992 → 957 ms, kept whole | 1555 → 1347 ms |
+| `clip` (448) | COCO 4000², JPEG (mean of 3) | 1.10 MB → 77 kB | 77 ms | 93 → 16 ms | 372 → 114 ms | 460 → 116 ms |
+| | real photo, JPEG | 4.30 MB → 61 kB | 427 ms | 21 → 13 ms | 340 → 281 ms | 684 → 328 ms |
+| | PNG | 7.04 MB → 90 kB | 560 ms | 47 → 9 ms | 607 → 598 ms | 1170 → 591 ms |
+
+("Client prep" is the SDK's decode, shrink and JPEG encode of a photo it shrinks; "server time"
+is `duration_ms`, which excludes the server's own decode of the upload. GroundingDINO's localhost
+rows send the same bytes in both columns, so their difference is the host's noise.)
+
+What this says:
+
+- **Uploads are 2–19× smaller** for the detectors and 14–78× for CLIP, and the server's own work
+  drops on JPEG input (about 45% for RF-DETR, 40–85% for CLIP). Over a network that dominates: at 100 Mbit/s
+  RF-DETR and CLIP are faster on every photo (RF-DETR 933 → 602 ms, CLIP 684 → 328 ms on the real
+  photo), and GroundingDINO on the real photo and the PNG; at 10 Mbit/s the real photo alone takes
+  3.4 s to upload, against 0.28 s shrunk. GroundingDINO on the very compressible upscaled COCO
+  JPEGs is the exception (561 → 932 ms): its mild shrink (2133 × 1600) cannot use the reduced-scale
+  decode, so the client decodes 12 megapixels to save half a megabyte. Send such photos with
+  `resize="off"` if your link is fast.
+- **On localhost the loopback rule removes the slow case.** Shrinking GroundingDINO's photos on
+  localhost took 473 → 889 ms in this run (371 → 646 ms in an earlier one); the rule sends
+  them whole (`reason` says so) and they are level with `off`. CLIP is up to 3.3× faster on JPEG
+  (372 → 114, 340 → 281 ms) and level on the PNG; RF-DETR is level on JPEG files (360 → 338,
+  588 → 616 ms, within the noise) and slower on the 12-megapixel PNG (710 → 820 ms: Pillow
+  decodes a PNG in full, at about 0.5 s here). With the server on the same machine and PNG
+  input, prefer `resize="off"`.
+- **The reduced-scale JPEG decode** (draft mode) made the client 3–4.6× faster on the upscaled
+  COCO JPEGs (RF-DETR 428 → 144 ms, CLIP 307 → 66 ms, single runs of the preparation alone) but
+  only 5–7% faster on the real 4.3 MB photo, whose cost is reading its compressed data (the
+  entropy decoding a smaller scale does not avoid); GroundingDINO's target is too large for it.
+
+Accuracy, `auto` against `off`. The rows marked *shrunk* measure the shrink itself, as a client
+on another machine does it (on localhost the 4×-upscaled 2560 × 1920 COCO photos are at scale
+0.58 for RF-DETR and are sent whole):
+
+| Check | `off` | `auto` | Change |
+|---|---|---|---|
+| RF-DETR, COCO val2017 mAP@[.5:.95], first 500 images upscaled 4× (boxes scored at ÷4), GPU, *shrunk* | 47.22 | 47.20 | −0.02 |
+| the same without the reduced-scale JPEG decode | 47.22 | 47.20 | −0.02 (AP50 59.25 vs 59.26) |
+| the same, first 200 images, CPU server (deterministic), *shrunk* | 48.73 | 48.61 | −0.12 |
+| the 500 images with a bilinear client filter instead of Lanczos (not shipped) | 47.22 | 46.95 | −0.27 |
+| RF-DETR, the 200 images at their own size, as JPEG files | 48.63 | 48.63 | none: uploads byte-identical, detections identical |
+| RF-DETR, the 200 images at their own size, as numpy arrays | 48.66 | 48.66 | none: not shrunk, so sent as lossless PNG as before |
+| GroundingDINO, 200 images upscaled 4×, 12-word prompt, *shrunk*: detections ≥ 0.3 matched (same word, IoU ≥ 0.5) | 1628 | 98.0% found, 98.2% of its own matched, mean IoU 0.991 | re-saving the photo as JPEG q90 at full size: 98.2%, 97.9%, 0.987 |
+| CLIP, the five 4000 × 3000 photos above, *shrunk*: embedding cosine with `off` | 1 | 0.9973–0.9991 (0.9964–0.9986 without the reduced-scale decode) | |
+| CLIP, first 300 COCO photos at their own size, *shrunk* (124 of them to a 448-px short side) | 1 | cosine mean 0.9989, min 0.986; zero-shot top-1 over the 80 COCO names unchanged for 99.3% | |
+
+The shrunk photo is sent with 4:4:4 colour: at 2× the model's input, the usual 4:2:0 JPEG
+subsampling halves colour to the model's own resolution, and measured on CLIP (23 photos) it
+moved the embedding to a mean cosine of 0.976 with the full-resolution one, against 0.995 with
+4:4:4, for about 25% more bytes. GroundingDINO changes about as much as re-saving the photo
+would; RF-DETR's mAP does not move beyond the noise of 200–500 images; the reduced-scale decode
+changes nothing measurable.
 
 ### Prompts
 
@@ -252,7 +458,7 @@ The rule, from the SDK:
     return text
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L645-L653)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L815-L823)
 
 CLIP and SigLIP prompts are sent unchanged, because a comma is part of a sentence there
 (`"a photo of a cat, sleeping"`). GroundingDINO reads at most 256 text tokens per pass; a longer
@@ -787,6 +993,7 @@ does not produce is empty.
 | `classifications` | `list[Classification]` | `efficientnet-b0`, `mobilenet-v3` |
 | `depth_map`, `depth_width`, `depth_height` | `list[float]` or `FloatArray`, `int`, `int` | `midas`, `depth-anything-v2`: row-major, at the **model's** resolution |
 | `embeddings` | `list[list[float]]` or `FloatArray` | `clip`, `siglip-image`, `clip-text`, `siglip-text`: one row per image or phrase |
+| `client_resize` | `ClientResize` or `None` | client side only (not in `to_json()`, ignored by `==`): what the SDK did to the photo before uploading it, `original_width/height`, `sent_width/height`, `jpeg_quality` (`None` = PNG), `resized`, `scale_x/y`; `None` = your bytes went out untouched. Every coordinate above is in your photo's pixels either way |
 
 The items:
 
@@ -796,7 +1003,9 @@ The items:
   `H × W`; `bbox` is its tight box (Grounded-SAM and grasp models copy the detection's box
   instead); `conf` is the model's estimate of mask quality, which for SAM masks can slightly
   exceed 1. `Mask.to_ndarray(width, height)` decodes it to a `bool` numpy array of shape
-  `(height, width)`; pass the photo's (upright) size.
+  `(height, width)`; pass the photo's (upright) size. When the client shrank the photo, the
+  RLE covers the sent photo: `to_ndarray` with your photo's size decodes it there and scales it
+  up (nearest neighbour), so the same call works either way.
 - `Grasp(x, y, theta, width, quality, cls, conf)`: centre, closing direction in radians, jaw
   opening in pixels, a 0–1 score, and the object's label and score (empty / 0 for the
   class-agnostic `grasp` model). `g.pose` is `[x, y, width, theta]`; `g.contacts()` and
@@ -866,10 +1075,11 @@ has no scale. `visionserve.utils` has optional OpenCV drawing helpers (`pip inst
 | Method | HTTP | Returns |
 |---|---|---|
 | `health()` | `GET /api/health` | `{"status": "ok"}` |
-| `list_models()` | `GET /api/models` | `list[ModelInfo]`: `name`, `task`, `license`, `state` (`not_downloaded`, `available`, `loaded`) |
+| `list_models()` | `GET /api/models` | `list[ModelInfo]`: `name`, `task`, `license`, `state` (`not_downloaded`, `available`, `loaded`), `max_useful_side`, `max_useful_short_side` |
 | `ps()` | `GET /api/models` | only the loaded ones |
 | `load(model)` / `unload(model)` | `POST /api/load` / `/api/unload` | `{"model", "state"}`: load now (so the first `predict` is fast), or free the memory |
-| `preprocess(model, image=None, *, prompt=, box=, point=)` | `POST /api/preprocess` | `PreprocessResult`: the exact input tensors the model would get, as numpy arrays, without running it |
+| `preprocess(model, image=None, *, prompt=, box=, point=, resize="off", jpeg=, jpeg_quality=)` | `POST /api/preprocess` | `PreprocessResult`: the exact input tensors the model would get, as numpy arrays, without running it. The photo is sent as given unless you pass `resize="auto"` (then `res.client_resize` says what was sent) |
+| `useful_side(model)` | `GET /api/models` (cached) | `(max_useful_side, max_useful_short_side)`: the model's size hint, `(None, None)` for none |
 | `tokenize(model, text)` | `POST /api/preprocess` | the token ids a text model gets |
 
 ```python
@@ -887,7 +1097,7 @@ print(c.tokenize("clip-text", "a photo of a dog")[0, :8])
 ```
 
 ```text
-[ModelInfo(name='rf-detr', task='detection', license='Apache-2.0', state='loaded'), ModelInfo(name='rf-detr-nano', task='detection', license='Apache-2.0', state='available')]
+[ModelInfo(name='rf-detr', task='detection', license='Apache-2.0', state='loaded', max_useful_side=None, max_useful_short_side=1120), ModelInfo(name='rf-detr-nano', task='detection', license='Apache-2.0', state='available', max_useful_side=None, max_useful_short_side=768)]
 {'model': 'midas', 'state': 'unloaded'} {'model': 'midas', 'state': 'loaded'}
 ['background', 'clip', 'clip-text', 'gdino-siglip', 'grasp-gd']
 PreprocessResult(model='rf-detr', inputs={'input': (1, 3, 560, 560)}, meta={'orig_width': 640, 'orig_height': 426, 'scale_x': 0.875, 'scale_y': 1.3145539906103287, 'pad_x': 0, 'pad_y': 0})
@@ -1058,9 +1268,9 @@ A 503 is rare with the default bound (`max(32, 2 × sessions)` requests per mode
   `idle_unload_seconds` (300 s on the shipped models) and the next request pays the load again
   (seconds for GroundingDINO). Call `load()` at startup, and start the server with
   `--idle-unload-seconds 0` if it serves a live loop.
-- **Send less.** A path or JPEG bytes is cheaper than a numpy array (which the SDK encodes to
-  PNG). Use `roi` when only part of the frame matters, and `base64_arrays=True` for depth maps and
-  embeddings.
+- **Send less.** Client-side resizing (on by default) already sends a large photo at the size the
+  model can use, as JPEG. Use `roi` when only part of the frame matters, and `base64_arrays=True`
+  for depth maps and embeddings.
 
 ## The Python command-line client
 
@@ -1082,8 +1292,10 @@ Global options, before or after the command: `--host URL` (default `http://local
 `--box x,y,w,h` and `--point x,y[,label]` (several separated by `;`), `--roi`, `--dilate`,
 `--method`, `--box-threshold`, `--text-threshold`, `--bg-max-area`, `--fg-min-area`,
 `--grid-size`, `--min-size`, `--max-size`, `--gripper-min`, `--gripper-max`,
-`--max-grasps-per-object` (default 3), `--claim-threshold`, `--crop-temp`, `--template-name` and
-`--depth PATH`. Only `base64_arrays` has none: the CLI prints JSON numbers. Output: `--save`
+`--max-grasps-per-object` (default 3), `--claim-threshold`, `--crop-temp`, `--template-name`,
+`--depth PATH`, and for client-side resizing `--resize auto|off|N`, `--no-jpeg` and
+`--jpeg-quality Q` (the summary line then ends with `sent 1493x1120 of 4000x3000 as JPEG q90`).
+Only `base64_arrays` has none: the CLI prints JSON numbers. Output: `--save`
 writes an annotated PNG named `<stem>.python.<model>.<task>.png`, `--save-as PATH` picks the
 name, `--alpha` sets the mask opacity, `--compact` prints the JSON on one line, `--quiet` drops
 the summary. For grasp results the printed JSON holds only the single best grasp (picked with

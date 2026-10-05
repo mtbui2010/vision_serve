@@ -351,6 +351,13 @@ def run(args):
 
 
 def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["check"]:  # `visionserve check`: verify an INSTALLED model (check.py)
+        from .check import main as check_main
+        return check_main(argv[1:])
+    if argv and argv[0] in ("sensitivity", "optimize"):   # `visionserve sensitivity|optimize` (edge.py)
+        from .edge import main as edge_main
+        return edge_main(argv)
     args = build_parser().parse_args(argv)
     if getattr(args, "_unavailable", None):
         log(f"error: this Python environment cannot run {args._unavailable}")

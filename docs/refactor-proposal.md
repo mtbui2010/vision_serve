@@ -420,3 +420,30 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   Sửa: `parity_run` đọc input và index của `TopK` qua một bản sao graph có thêm 2 output, kiểm
   điểm proposal khớp tới tolerance và mỗi slot đổi là near-tie, rồi so lại với PyTorch chạy theo
   thứ tự của ORT bằng luật cũ. Lỗi export thật (cạnh một tie hay không) vẫn FAIL, có test.
+- Manifest so với cách model được train, audit bằng `visionserve check` (2026-10-05): **đã
+  sửa 5, không còn mục mở.** Cùng loại lỗi với BUGS_TO_FIX.md #1. `rf-detr-nano` letterbox trong khi
+  RF-DETR train bằng squash: so với checkpoint chính thức chạy bằng `rfdetr` (CPU, 200 ảnh COCO
+  val2017) B1 lệch 46.6 mức xám, B2 31/36 box, mAP 40.92 so với 44.09 (−3.16); squash: 0.4,
+  38/38, 43.80 (−0.29). `rt-detr` letterbox và chuẩn hóa ImageNet trong khi RT-DETR train bằng
+  squash 640×640, chỉ chia 255: đo bằng weights thay thế `rtdetr_r50vd` (RT-DETR-l-hf đã mất),
+  mAP 7.16 so với 50.40 (−43.25); sửa xong 50.34. Đã đổi manifest, catalog, golden Go; `pull`
+  lại sẽ ghi đè manifest do `pull` cũ sinh ra mà chưa ai sửa. Golden 43 case trên CPU: chỉ 3 case
+  `rf-detr-nano` đổi, 40 case còn lại trùng từng byte. Các model còn lại đạt (`rf-detr`,
+  `rfdetr-small*`, `depth-anything-v2`, `clip`, `siglip-image*`), bảng đầy đủ ở BUGS_TO_FIX.md #1.
+  `grasp-rfdetr` letterbox phần detector (cùng weights với `rf-detr`): detection của nó trên
+  cùng 200 ảnh mAP 45.50, squash 47.77 (trùng từng box với `rf-detr`); tâm grasp nằm trên mask
+  GT đúng lớp 86.1% → 87.6%. Đã đổi sang squash (manifest, catalog).
+  `efficientnet-b0` và `mobilenet-v3` squash cả ảnh trong khi timm/torchvision resize cạnh ngắn
+  về 256 rồi cắt giữa 224: đo top-1 served trên 5000 ảnh ImageNet val (lớp 0-99) 77.44 → 79.04
+  và 68.08 → 71.82 (timm 78.84, torchvision 71.86). Đã sửa: thêm `preprocess.crop_pct`, lớp
+  classification nhận `center_crop`, manifest/catalog/golden/hình gallery.
+  `check` từng báo FAIL sai cho `scrfd` vì phía Python không áp luật legacy theo kiến trúc
+  (`top_left_pad`, mean/std theo đơn vị 0..255) như Go: đã sửa (`spec.resolve_arch`, corpus chung
+  `arch_resolve_sync.json` chạy ở cả hai phía), `check scrfd` đạt 0.18 mức xám.
+
+- **Số held-out phụ thuộc phiên bản cuDNN (2026-10-06).** `scripts/gpu-env.sh` (aaecfcb) nay chọn
+  ORT 1.26 của env `vseval` kèm cuDNN 9.23, thay vì cuDNN 9.10 của env `label` như trước. Cùng một
+  binary cho: cuDNN 9.10 → 89.75/49.54, 89.75/62.47, 89.75/48.11, 57.41/61.07 (đúng số trong
+  manifest); cuDNN 9.23 → 89.90/49.53, 89.90/62.39, 89.90/48.68, 57.47/61.11. Code không đổi
+  (đã chạy binary cũ và mới trên cả hai bộ thư viện). Số trong manifest được đo với cuDNN 9.10;
+  muốn tái lập đúng thì đưa `nvidia/cudnn/lib` của env `label` lên `LD_LIBRARY_PATH`.

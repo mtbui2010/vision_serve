@@ -230,7 +230,7 @@ A directory named `testdata` is ignored by the Go build, so it is the standard p
 test inputs and expected outputs. A **golden file** stores the current output; the test
 compares against it, and a flag regenerates it when a change is intended:
 
-```go title="internal/vision/preprocess/sync_test.go (lines 14, 70-121, trimmed)"
+```go title="internal/vision/preprocess/sync_test.go (lines 14, 76-127, trimmed)"
 var update = flag.Bool("update", false, "rewrite testdata/geometry_sync.json from the Go implementation")
 
 func TestGeometrySyncCorpus(t *testing.T) {
@@ -255,7 +255,7 @@ func TestGeometrySyncCorpus(t *testing.T) {
 }
 ```
 
-[sync_test.go#L14-L121 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/sync_test.go#L14-L121)
+[sync_test.go#L14-L127 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/sync_test.go#L14-L127)
 
 This one does double duty: the Python converter's tests read the **same** JSON file, so the
 Go and Python preprocessing cannot drift apart. The package `internal/models/golden` pins

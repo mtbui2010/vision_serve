@@ -6,6 +6,8 @@
  * single {@link Result} type rather than one per model.
  */
 
+import type { ClientResize } from "./resize.js";
+
 /** Task kind reported by the server. Open-ended on purpose (new tasks may appear). */
 export type Task = "detection" | "segmentation" | "open_vocab" | "classification" | "depth" | "embed" | (string & {});
 
@@ -46,11 +48,17 @@ export class Mask {
   readonly bbox: number[];
   /** Confidence (e.g. predicted IoU) in `[0, 1]`. */
   readonly conf: number;
+  /**
+   * `[width, height]` the RLE was encoded at when the client shrank the image before uploading
+   * it (`Result.clientResize`); `null` = the original size. Not part of the wire format.
+   */
+  readonly rleSize: [number, number] | null;
 
-  constructor(rle: string, bbox: number[], conf: number) {
+  constructor(rle: string, bbox: number[], conf: number, rleSize: [number, number] | null = null) {
     this.rle = rle;
     this.bbox = bbox;
     this.conf = conf;
+    this.rleSize = rleSize;
   }
 
   static fromJSON(d: Record<string, unknown>): Mask {
@@ -69,9 +77,25 @@ export class Mask {
    *
    * @param width  ORIGINAL image width (W) the mask was encoded against.
    * @param height ORIGINAL image height (H) the mask was encoded against.
+   *
+   * When the client shrank the image before uploading it, the RLE covers the SENT image
+   * (`rleSize`); pass the ORIGINAL size anyway: the mask is decoded at the sent size and scaled
+   * to `width` x `height` by nearest neighbour. Passing the sent size returns it as received.
    * @throws if the run counts do not sum to `width * height`.
    */
   toMask(width: number, height: number): Uint8Array {
+    if (this.rleSize && (this.rleSize[0] !== width || this.rleSize[1] !== height)) {
+      const [sw, sh] = this.rleSize;
+      const small = new Mask(this.rle, this.bbox, this.conf).toMask(sw, sh);
+      const out = new Uint8Array(width * height);
+      // Nearest neighbour on pixel centres: original pixel i samples sent pixel floor((i + 0.5) * sent / original).
+      const xs = Array.from({ length: width }, (_, x) => Math.min(sw - 1, Math.floor(((x + 0.5) * sw) / width)));
+      for (let y = 0; y < height; y++) {
+        const row = Math.min(sh - 1, Math.floor(((y + 0.5) * sh) / height)) * sw;
+        for (let x = 0; x < width; x++) out[y * width + x] = small[row + xs[x]!]!;
+      }
+      return out;
+    }
     const total = width * height;
     const counts = this.rle.trim() ? this.rle.trim().split(/\s+/).map((c) => parseInt(c, 10)) : [];
     const sum = counts.reduce((a, b) => a + b, 0);
@@ -192,6 +216,12 @@ export class Result {
   readonly device: string;
   /** The server's setup recommendation, if any (e.g. how to enable TensorRT); `""` otherwise. */
   readonly hint: string;
+  /**
+   * What the client did to the image before uploading it (original and sent size, JPEG quality),
+   * or `null` when the input bytes were sent untouched. Coordinates above are ALWAYS in ORIGINAL
+   * image pixels either way. Client-side only: not part of the server's JSON.
+   */
+  readonly clientResize: ClientResize | null;
 
   constructor(
     task: Task,
@@ -207,6 +237,7 @@ export class Result {
     grasps: Grasp[] = [],
     device = "",
     hint = "",
+    clientResize: ClientResize | null = null,
   ) {
     this.task = task;
     this.model = model;
@@ -221,6 +252,7 @@ export class Result {
     this.durationMs = durationMs;
     this.device = device;
     this.hint = hint;
+    this.clientResize = clientResize;
   }
 
   static fromJSON(d: Record<string, unknown>): Result {
@@ -283,6 +315,7 @@ export class Result {
       this.grasps,
       this.device,
       this.hint,
+      this.clientResize,
     );
   }
 
@@ -304,6 +337,7 @@ export class Result {
       this.grasps,
       this.device,
       this.hint,
+      this.clientResize,
     );
   }
 
@@ -323,6 +357,7 @@ export class Result {
       this.grasps,
       this.device,
       this.hint,
+      this.clientResize,
     );
   }
 
@@ -370,6 +405,7 @@ export class Result {
       this.grasps,
       this.device,
       this.hint,
+      this.clientResize,
     );
   }
 
@@ -402,6 +438,7 @@ export class Result {
         this.grasps,
         this.device,
         this.hint,
+        this.clientResize,
       );
     }
     return result;
@@ -414,12 +451,29 @@ export class ModelInfo {
   readonly task: Task;
   readonly license: string;
   readonly state: ModelState;
+  /**
+   * The server's client-resize hint: the longest LONGER side (`maxUsefulSide`) or SHORTER side
+   * (`maxUsefulShortSide`) worth uploading for this model, which resizes to its own input
+   * anyway. At most one is set; both `null` = send full resolution (masks, OCR, templates, ...,
+   * or a server that predates the hint). {@link Client} applies it by default.
+   */
+  readonly maxUsefulSide: number | null;
+  readonly maxUsefulShortSide: number | null;
 
-  constructor(name: string, task: Task, license: string, state: ModelState) {
+  constructor(
+    name: string,
+    task: Task,
+    license: string,
+    state: ModelState,
+    maxUsefulSide: number | null = null,
+    maxUsefulShortSide: number | null = null,
+  ) {
     this.name = name;
     this.task = task;
     this.license = license;
     this.state = state;
+    this.maxUsefulSide = maxUsefulSide;
+    this.maxUsefulShortSide = maxUsefulShortSide;
   }
 
   static fromJSON(d: Record<string, unknown>): ModelInfo {
@@ -428,12 +482,19 @@ export class ModelInfo {
       String(d.task ?? ""),
       String(d.license ?? ""),
       String(d.state ?? ""),
+      positiveInt(d.max_useful_side),
+      positiveInt(d.max_useful_short_side),
     );
   }
 
   get isLoaded(): boolean {
     return this.state === "loaded";
   }
+}
+
+/** A positive integer hint, or null (null, absent, 0, or not an integer). */
+function positiveInt(v: unknown): number | null {
+  return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
 }
 
 /**

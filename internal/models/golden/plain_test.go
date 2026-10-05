@@ -7,6 +7,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/preprocess"
 
 	_ "visionserve/internal/models/classification"
 	_ "visionserve/internal/models/clip"
@@ -62,10 +63,14 @@ func TestGoldenRFDETR(t *testing.T) {
 		name string
 		cfg  models.Config
 	}{
-		// models/rf-detr/manifest.yaml (squash 560) and models/rf-detr-nano (letterbox 384).
+		// models/rf-detr/manifest.yaml (squash 560) and models/rf-detr-nano (squash 384 since
+		// 2026-10-05, BUGS_TO_FIX.md #1), plus the letterbox branch at 384: the case formerly named
+		// "nano384lb", values unchanged.
 		{"base560", models.Config{Name: "rf-detr", Width: 560, Height: 560, Mean: mean, Std: std,
 			BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300, Labels: coco91}},
-		{"nano384lb", models.Config{Name: "rf-detr-nano", Width: 384, Height: 384, Letterbox: true, Mean: mean, Std: std,
+		{"nano384", models.Config{Name: "rf-detr-nano", Width: 384, Height: 384, Mean: mean, Std: std,
+			BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300, Labels: coco91}},
+		{"lb384", models.Config{Name: "rf-detr-lb", Width: 384, Height: 384, Letterbox: true, Mean: mean, Std: std,
 			BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300, Labels: coco91}},
 		{"xyxy512max7", models.Config{Name: "x", Width: 512, Height: 512, Mean: mean, Std: std,
 			BoxFormat: "xyxy", ConfThresh: 0.3, MaxDet: 7, Labels: []string{"a", "b", "c"}}},
@@ -105,7 +110,11 @@ func TestGoldenRTDETR(t *testing.T) {
 		name string
 		cfg  models.Config
 	}{
-		// models/rt-detr/manifest.yaml (letterbox 640, COCO-80) + a squash variant.
+		// models/rt-detr/manifest.yaml (squash 640, [0, 1] with no mean/std since 2026-10-05,
+		// BUGS_TO_FIX.md #1; COCO-80), the letterbox + ImageNet branch it used before (values
+		// unchanged), and a squash variant.
+		{"manifest640", models.Config{Name: "rt-detr", Width: 640, Height: 640, Mean: []float32{0, 0, 0},
+			Std: []float32{1, 1, 1}, BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300, Labels: coco80}},
 		{"lb640", models.Config{Name: "rt-detr", Width: 640, Height: 640, Letterbox: true, Mean: mean, Std: std,
 			BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300, Labels: coco80}},
 		{"sq640max5", models.Config{Name: "rt", Width: 640, Height: 480, Mean: mean, Std: std,
@@ -249,11 +258,19 @@ func TestGoldenClassification(t *testing.T) {
 	mean := []float32{0.485, 0.456, 0.406}
 	std := []float32{0.229, 0.224, 0.225}
 	in1k := readLabels(t, "models/mobilenet-v3/imagenet1k.txt")
+	// The shipped manifests: resize the short side to 256, keep the centred 224 (crop_pct 0.875),
+	// as timm (bicubic) and torchvision (bilinear) evaluate these weights.
+	crop := func(resample preprocess.Resample) *preprocess.Spec {
+		return &preprocess.Spec{Resize: preprocess.CenterCrop, Width: 224, Height: 224, CropPct: 0.875,
+			Resample: resample, Mean: mean, Std: std}
+	}
 	for _, c := range []struct {
 		name, arch string
 		cfg        models.Config
 	}{
 		{"mobilenet-v3", "mobilenet-v3", models.Config{Name: "mobilenet-v3", Width: 224, Height: 224, Mean: mean, Std: std, MaxDet: 5, Labels: in1k}},
+		{"mobilenet-v3-crop", "mobilenet-v3", models.Config{Name: "mobilenet-v3", Width: 224, Height: 224, Mean: mean, Std: std, MaxDet: 5, Labels: in1k, Preprocess: crop(preprocess.Bilinear)}},
+		{"efficientnet-b0-crop", "efficientnet", models.Config{Name: "efficientnet-b0", Width: 224, Height: 224, Mean: mean, Std: std, Preprocess: crop(preprocess.Bicubic)}},
 		{"efficientnet-nolabels", "efficientnet", models.Config{Name: "efficientnet-b0", Width: 224, Height: 224, Mean: mean, Std: std}},
 		{"top50", "mobilenet-v3", models.Config{Name: "m", Width: 160, Height: 128, MaxDet: 50, Labels: in1k[:10]}},
 	} {

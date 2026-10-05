@@ -119,7 +119,7 @@ the raw numbers are in [`figures.json`](assets/img/figures.json).
 
 <figure markdown="span">
   ![Top-5 ImageNet classes from two classifiers](assets/img/classify-564133.jpg){ loading=lazy }
-  <figcaption>Top-5 ImageNet classes from two classifiers<br/><code>efficientnet-b0 + mobilenet-v3</code> · efficientnet-b0 5 ms, mobilenet-v3 5 ms on gpu:0 · Photo: COCO val2017 #564133 (<a href="http://farm9.staticflickr.com/8348/8197453784_a3be1b210e_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+  <figcaption>Top-5 ImageNet classes from two classifiers<br/><code>efficientnet-b0 + mobilenet-v3</code> · efficientnet-b0 9 ms, mobilenet-v3 11 ms on gpu:0 · Photo: COCO val2017 #564133 (<a href="http://farm9.staticflickr.com/8348/8197453784_a3be1b210e_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
 <figure markdown="span">
@@ -160,13 +160,13 @@ the raw numbers are in [`figures.json`](assets/img/figures.json).
 ## Preprocessing
 
 <figure markdown="span">
-  ![One photo, prepared for four different models — real tensors from /api/preprocess](assets/img/preprocess-modes-177015.jpg){ loading=lazy }
-  <figcaption>One photo, prepared for four different models — real tensors from /api/preprocess<br/><code>rf-detr + rf-detr-nano + clip + mobile-sam</code> · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+  ![One photo, prepared for five models — real tensors from /api/preprocess](assets/img/preprocess-modes-177015.jpg){ loading=lazy }
+  <figcaption>One photo, prepared for five models — real tensors from /api/preprocess<br/><code>rf-detr + rf-detr-nano-letterbox + clip + depth-anything-v2 + mobile-sam</code> · the letterbox panel is an illustration: a scratch copy of rf-detr-nano set to letterbox (rf-detr-nano itself squashes, as RF-DETR is trained) · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
 <figure markdown="span">
   ![The same detection in the model's input space and in the original photo](assets/img/bbox-mapping-177015.jpg){ loading=lazy }
-  <figcaption>The same detection in the model's input space and in the original photo<br/><code>rf-detr-nano</code> · 17 ms on gpu:0 · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+  <figcaption>The same detection in the model's input space and in the original photo<br/><code>rf-detr-nano</code> (squash: scale_x 0.6, scale_y 0.8, no padding) · 29 ms on gpu:0 · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
 ---

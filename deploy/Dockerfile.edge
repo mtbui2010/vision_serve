@@ -1,27 +1,37 @@
 # deploy/Dockerfile.edge — VisionServe SERVER image for arm64 edge devices (e.g. Jetson).
 #
-# There is no single, stable, public download URL for an ONNX Runtime *C/C++ shared
-# library* built with the TensorRT/CUDA execution providers for Jetson: that build must
-# match the device's JetPack (CUDA + cuDNN + TensorRT) versions and is normally produced
-# from source or taken from a JetPack-matched package. We therefore expose a build-arg to
-# pick how the runtime ONNX Runtime is provided:
+# JetPack 6 (Orin) only. Jetson Thor runs JetPack 7 (CUDA 13, SBSA-aligned, no l4t-* images):
+# use deploy/Dockerfile.thor.
 #
-#   ORT_SOURCE=cpu  (default) — download the official linux-aarch64 CPU build from the
-#                   ONNX Runtime GitHub releases. Portable, works on any arm64 box and on
-#                   Jetson, but runs on CPU only (no TensorRT/CUDA acceleration).
+# Two ways to provide ONNX Runtime, chosen with ORT_SOURCE:
 #
-#   ORT_SOURCE=jetson — use a base image that already ships ONNX Runtime with the
-#                   TensorRT/CUDA EP (NVIDIA L4T ML containers do), OR expect a Jetson ORT
-#                   .so to be present in the build context under deploy/ort-jetson/. This
-#                   path is hardware-specific; see the ASSUMPTIONS block below and
-#                   deploy/README.md before using it.
+#   ORT_SOURCE=cpu  (default) — the official linux-aarch64 CPU build from the ONNX Runtime GitHub
+#                   releases, on debian:bookworm-slim. Portable: any arm64 box, Jetson included,
+#                   but CPU only (no CUDA/TensorRT).
+#
+#   ORT_SOURCE=jetson — JetPack 6.1 / 6.2 (L4T r36.4): CUDA 12.6, cuDNN 9.3, TensorRT 10.3.
+#                   Runtime base: NVIDIA's nvcr.io/nvidia/l4t-jetpack:r36.4.0, which carries
+#                   CUDA, cuDNN and TensorRT inside the image. (Since JetPack 5, l4t-base no
+#                   longer mounts them from the host, so an l4t-base image cannot load ORT's CUDA
+#                   provider.) ONNX Runtime: the onnxruntime-gpu 1.24.0 wheel of the Jetson AI Lab
+#                   jp6/cu126 index (CUDA + TensorRT providers, built for JetPack 6 / CUDA 12.6),
+#                   pinned by SHA-256; only its shared libraries are copied.
+#
+#   Checked 2026-10-05 with `docker manifest inspect` and the NGC registry: the old default
+#   nvcr.io/nvidia/l4t-ml:r36.3.0 does not exist (l4t-ml stops at r36.2.0-py3), and l4t-ml
+#   r36.2.0-py3 ships ONNX Runtime 1.16.3, older than the 1.20 C API (ORT_API_VERSION 20) that
+#   this binary's onnxruntime_go v1.13 binding requests. l4t-jetpack r36.2.0 / r36.3.0 / r36.4.0
+#   exist; r36.4.0 matches the cu126 wheel.
+#
+# Every stage that RUNs a command runs on the BUILD platform, so `docker buildx --platform
+# linux/arm64` needs no QEMU; the arm64 stages only copy files.
 #
 # Examples:
 #   # Portable arm64 CPU image:
-#   docker buildx build --platform linux/arm64 -f deploy/Dockerfile.edge -t visionserve:edge .
-#   # Jetson (TensorRT/CUDA), built ON the Jetson or with an L4T base:
-#   docker build -f deploy/Dockerfile.edge --build-arg ORT_SOURCE=jetson \
-#       --build-arg L4T_BASE=nvcr.io/nvidia/l4t-base:r36.3.0 -t visionserve:jetson .
+#   docker buildx build --platform linux/arm64 -f deploy/Dockerfile.edge -t visionserve:edge --load .
+#   # Jetson Orin, JetPack 6.1 / 6.2 (CUDA + TensorRT EP); run it with --runtime nvidia:
+#   docker buildx build --platform linux/arm64 -f deploy/Dockerfile.edge --build-arg ORT_SOURCE=jetson \
+#       -t visionserve:jetson --load .
 #
 # Model weights are NOT baked into the image — pull them at runtime into /root/.models
 # (declared as a VOLUME, so they persist without a -v flag).
@@ -29,11 +39,12 @@
 ARG ORT_VERSION=1.20.1
 ARG ORT_SOURCE=cpu
 ARG VERSION=docker-arm
-# L4T ML image that ships libonnxruntime.so with CUDA+TRT EP for arm64.
-# r36.x = JetPack 6.x (CUDA 12.2 + TensorRT 8.6).
-# Used ONLY when ORT_SOURCE=jetson.
-ARG L4T_BASE=nvcr.io/nvidia/l4t-base:r36.3.0
-ARG L4T_ML_IMAGE=nvcr.io/nvidia/l4t-ml:r36.3.0
+# ORT_SOURCE=jetson only: the runtime base and the ONNX Runtime wheel (see above).
+ARG L4T_BASE=nvcr.io/nvidia/l4t-jetpack:r36.4.0
+ARG JETSON_ORT_WHEEL_INDEX=https://pypi.jetson-ai-lab.io/jp6/cu126
+ARG JETSON_ORT_VERSION=1.24.0
+# sha256 of onnxruntime_gpu-1.24.0-cp310-cp310-linux_aarch64.whl from the index above (2026-10-05).
+ARG JETSON_ORT_WHEEL_SHA256=d980b934b9a29c1a9d6f39751edd7662b69fadd75556a10ff363773a58ce0950
 
 ############################
 # Stage 1 — build the Go binary for arm64
@@ -61,9 +72,11 @@ RUN CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
     -o /out/visionserve ./cmd/visionserve
 
 ############################
-# Stage 2 — fetch ONNX Runtime (portable arm64 CPU build)
+# Stage 2a — fetch ONNX Runtime (portable arm64 CPU build), on the build platform
 ############################
-FROM --platform=linux/arm64 debian:bookworm-slim AS ort-cpu
+# Downloading and unpacking a tarball is the same on any CPU, so this stage runs natively. It
+# also provides the CA bundle the runtime image needs for `visionserve pull` (HTTPS).
+FROM --platform=$BUILDPLATFORM debian:bookworm-slim AS ort-cpu
 ARG ORT_VERSION
 RUN apt-get update && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
@@ -78,68 +91,61 @@ RUN set -eux; \
     ls -l /opt/ort/lib/libonnxruntime.so*
 
 ############################
+# Stage 2b — ONNX Runtime (CUDA 12.6 + TensorRT EP) out of the Jetson AI Lab wheel, on the build platform
+############################
+# The CUDA/TensorRT execution providers are SEPARATE shared objects that ORT dlopens at session
+# creation (libonnxruntime_providers_shared.so, _cuda.so, _tensorrt.so) from the directory
+# libonnxruntime.so was loaded from. Copying only libonnxruntime.so* gives an image whose CUDA EP
+# silently falls back to the CPU, so every libonnxruntime* of the ONE wheel is copied together.
+FROM --platform=$BUILDPLATFORM python:3.12-slim-bookworm AS ort-jetson-src
+ARG JETSON_ORT_WHEEL_INDEX
+ARG JETSON_ORT_VERSION
+ARG JETSON_ORT_WHEEL_SHA256
+RUN set -eux; \
+    pip download --no-deps --only-binary=:all: --platform linux_aarch64 --python-version 3.10 \
+        --index-url "${JETSON_ORT_WHEEL_INDEX}" "onnxruntime-gpu==${JETSON_ORT_VERSION}" -d /tmp/whl; \
+    whl="$(ls /tmp/whl/onnxruntime_gpu-*.whl)"; \
+    echo "${JETSON_ORT_WHEEL_SHA256}  ${whl}" | sha256sum -c -; \
+    mkdir -p /export; \
+    python - "$whl" <<'EOF'
+import sys, zipfile, os
+z = zipfile.ZipFile(sys.argv[1])
+libs = [n for n in z.namelist() if n.startswith("onnxruntime/capi/libonnxruntime")]
+assert any("providers_cuda" in n for n in libs), "the wheel has no CUDA execution provider"
+for n in libs:
+    with z.open(n) as src, open(os.path.join("/export", os.path.basename(n)), "wb") as dst:
+        dst.write(src.read())
+core = [os.path.basename(n) for n in libs if os.path.basename(n).startswith("libonnxruntime.so.")]
+assert len(core) == 1, core
+os.symlink(core[0], "/export/libonnxruntime.so")
+print("ONNX Runtime libraries:", sorted(os.listdir("/export")))
+EOF
+
+############################
 # Stage 3a — portable arm64 CPU runtime
 ############################
 FROM --platform=linux/arm64 debian:bookworm-slim AS runtime-cpu
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
+COPY --from=ort-cpu /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=ort-cpu /opt/ort/lib/libonnxruntime*.so* /usr/local/lib/
 
 ############################
-# Stage 2c — extract ORT from L4T-ML (Jetson CUDA+TRT EP)
+# Stage 3b — Jetson runtime (l4t-jetpack: CUDA, cuDNN, TensorRT inside) + ORT from stage 2b
 ############################
-# L4T-ML ships ONNX Runtime built with the CUDA+TensorRT EP as part of the Python onnxruntime
-# package. The CUDA/TensorRT execution providers are SEPARATE shared objects that ORT dlopens at
-# session creation — libonnxruntime_providers_shared.so, libonnxruntime_providers_cuda.so,
-# libonnxruntime_providers_tensorrt.so — from the directory libonnxruntime.so itself was loaded
-# from (or LD_LIBRARY_PATH). Copying only libonnxruntime.so* (as this stage used to) produced an
-# image whose CUDA/TensorRT EPs silently failed to load and fell back to CPU.
-#
-# So: pick ONE directory — the one holding the CUDA provider, i.e. the GPU build — and copy every
-# libonnxruntime*.so* from it, core and providers together, so they are guaranteed to be the same
-# ORT build. (A blind `find / -name ...` copy could mix copies from different installs.) The build
-# fails if that directory has no core library; it warns if no CUDA provider exists at all.
-FROM ${L4T_ML_IMAGE} AS ort-jetson-src
-RUN set -eu; \
-    mkdir -p /export; \
-    cuda="$(find / -xdev -name 'libonnxruntime_providers_cuda.so' -not -path '/proc/*' 2>/dev/null | head -n1)"; \
-    if [ -n "$cuda" ]; then dir="$(dirname "$cuda")"; \
-    else \
-      echo "WARNING: no libonnxruntime_providers_cuda.so in the L4T-ML image: the image will run on CPU only"; \
-      core="$(find / -xdev -name 'libonnxruntime.so*' -not -path '/proc/*' 2>/dev/null | head -n1)"; \
-      [ -n "$core" ] || { echo "ERROR: no libonnxruntime.so in the L4T-ML image"; exit 1; }; \
-      dir="$(dirname "$core")"; \
-    fi; \
-    echo "ONNX Runtime libraries from: $dir"; \
-    ls "$dir"/libonnxruntime.so* >/dev/null 2>&1 || { echo "ERROR: $dir has providers but no libonnxruntime.so*"; exit 1; }; \
-    cp -a "$dir"/libonnxruntime*.so* /export/; \
-    if [ ! -e /export/libonnxruntime.so ]; then \
-      ln -s "$(cd /export && ls libonnxruntime.so.* | head -n1)" /export/libonnxruntime.so; \
-    fi; \
-    ls -l /export/
-
-############################
-# Stage 3b — Jetson runtime (L4T base + ORT extracted above)
-############################
-FROM ${L4T_BASE} AS runtime-jetson
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
-    rm -rf /var/lib/apt/lists/* || true
-# Core + provider libraries, all from the same directory of the same ORT build (see stage 2c).
-# They sit next to libonnxruntime.so, where ORT looks for providers, and LD_LIBRARY_PATH below
-# also points here. The CUDA/cuDNN/TensorRT libraries the providers link against come from
-# JetPack on the host, mounted by `--runtime nvidia`.
+FROM --platform=linux/arm64 ${L4T_BASE} AS runtime-jetson
+# Core + provider libraries, all from the same wheel. They sit next to libonnxruntime.so, where
+# ORT looks for providers. CUDA 12.6, cuDNN 9 and TensorRT 10 come from the base image; the
+# GPU driver (libcuda, nvgpu) comes from the host through `--runtime nvidia`.
 COPY --from=ort-jetson-src /export/ /usr/local/lib/
 
 ############################
 # Final — select runtime by ORT_SOURCE
 ############################
 FROM runtime-${ORT_SOURCE} AS final
-RUN ldconfig || true
 
 ENV ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
-ENV LD_LIBRARY_PATH=/usr/local/lib
+# /usr/local/cuda/lib64 exists only in the Jetson image (it is the base image's own path, which
+# this ENV would otherwise replace).
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/cuda/lib64
 
 COPY --from=build /out/visionserve /usr/local/bin/visionserve
 

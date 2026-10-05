@@ -14,15 +14,15 @@ Here is the same photo prepared for five different models — these are the real
 from the server's `/api/preprocess` endpoint and turned back into pictures:
 
 <figure markdown="span">
-  ![One photo, prepared for four different models — real tensors from /api/preprocess](../assets/img/preprocess-modes-177015.jpg){ loading=lazy }
-  <figcaption>One photo, prepared for four different models — real tensors from /api/preprocess<br/><code>rf-detr + rf-detr-nano + clip + mobile-sam</code> · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+  ![One photo, prepared for five models — real tensors from /api/preprocess](../assets/img/preprocess-modes-177015.jpg){ loading=lazy }
+  <figcaption>One photo, prepared for five models — real tensors from /api/preprocess<br/><code>rf-detr + rf-detr-nano-letterbox + clip + depth-anything-v2 + mobile-sam</code> · the letterbox panel is an illustration: a scratch copy of rf-detr-nano set to letterbox (rf-detr-nano itself squashes, as RF-DETR is trained) · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
 | Mode (`resize:`) | What it does | Used by |
 |---|---|---|
-| `squash` | Stretch to W×H, ignoring the aspect ratio. | RF-DETR, GroundingDINO, SAM 2, classifiers |
+| `squash` | Stretch to W×H, ignoring the aspect ratio. | RF-DETR, GroundingDINO, SAM 2 |
 | `letterbox` | Shrink to fit, keep the aspect ratio, pad the rest (centred). | DETR-family models that were trained that way (manifest option) |
-| `center_crop` | Resize the short side, then cut out the centre. | CLIP |
+| `center_crop` | Resize the short side, then cut out the centre; with `crop_pct` the short side is first resized a little larger (256 for a 224 crop at 0.875). | CLIP; the ImageNet classifiers (`crop_pct: 0.875`) |
 | `keep_aspect` | Resize keeping the aspect ratio, sides rounded to a multiple (e.g. 14). | Depth-Anything |
 | `long_side` / `long_side_pad` | Longest side to the target; `_pad` also pads the bottom/right. | MobileSAM / NanoSAM, PaddleOCR |
 | `top_left_pad` | Fit and keep the aspect ratio, image at the top-left corner, pad the rest. | SCRFD (faces) |
@@ -66,7 +66,7 @@ pixels:
 
 <figure markdown="span">
   ![The same detection in the model's input space and in the original photo](../assets/img/bbox-mapping-177015.jpg){ loading=lazy }
-  <figcaption>The same detection in the model's input space and in the original photo<br/><code>rf-detr-nano</code> · 17 ms on gpu:0 · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+  <figcaption>The same detection in the model's input space and in the original photo<br/><code>rf-detr-nano</code> (squash: scale_x 0.6, scale_y 0.8, no padding) · 29 ms on gpu:0 · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
 !!! code "Where in the code"

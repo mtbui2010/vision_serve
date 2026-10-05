@@ -182,7 +182,7 @@ GO_PREPROCESS = ROOT / "internal" / "vision" / "preprocess" / "spec.go"
 def _canonical(s) -> dict:
     import numpy as np
     return {"resize": s.resize, "width": s.width, "height": s.height, "multiple_of": s.multiple_of,
-            "no_upscale": s.no_upscale, "resample": s.resample,
+            "no_upscale": s.no_upscale, "crop_pct": float(np.float32(s.crop_pct)), "resample": s.resample,
             "mean": [float(np.float32(v)) for v in (s.mean or [])],
             "std": [float(np.float32(v)) for v in (s.std or [])],
             "rescale": s.rescale, "layout": s.layout, "pad": float(np.float32(s.pad)), "legacy": s.legacy}
@@ -210,9 +210,10 @@ def test_preprocess_resolution_corpus():
             for sub in c["error"]:
                 assert sub in str(e.value), f"{c['name']}: {e.value!r} does not name {sub!r}"
             continue
-        want = {"resize": "", "width": 0, "height": 0, "multiple_of": 0, "no_upscale": False, "resample": "",
-                "mean": [], "std": [], "rescale": True, "layout": "", "pad": 0.0, "legacy": False}
+        want = {"resize": "", "width": 0, "height": 0, "multiple_of": 0, "no_upscale": False, "crop_pct": 0.0,
+                "resample": "", "mean": [], "std": [], "rescale": True, "layout": "", "pad": 0.0, "legacy": False}
         want.update(c["spec"])
+        want["crop_pct"] = float(np.float32(want["crop_pct"]))
         want["mean"] = [float(np.float32(v)) for v in want["mean"]]
         want["std"] = [float(np.float32(v)) for v in want["std"]]
         assert _canonical(spec.spec_from_manifest(doc)) == want, c["name"]
@@ -235,3 +236,65 @@ def test_preprocess_geometry_corpus():
         assert meta == {"orig_width": m["OrigWidth"], "orig_height": m["OrigHeight"], "scale_x": m["ScaleX"],
                         "scale_y": m["ScaleY"], "pad_x": m["PadX"], "pad_y": m["PadY"]}, (c["spec"], c["image"])
         assert spec.spec_meta(s, w, h) == meta
+
+
+ARCH_CORPUS = ROOT / "internal" / "vision" / "preprocess" / "testdata" / "arch_resolve_sync.json"
+
+
+def test_arch_resolution_corpus():
+    """spec.resolve_arch(spec_from_manifest(doc), arch) gives what the Go model resolves (models.New
+    + ResolvedPreprocess, internal/vision/preprocess/arch_sync_test.go) for every row: legacy
+    flags read each architecture's way, blocks with an unsupported mode refused, fixed-by-export
+    architectures. `visionserve check`'s manifest reference is built this way."""
+    import numpy as np
+    from visionserve.convert import spec
+    cases = json.loads(ARCH_CORPUS.read_text(encoding="utf-8"))["cases"]
+    assert len(cases) >= 30
+    for c in cases:
+        doc = {k: c[k] for k in ("input", "preprocess") if k in c}
+        if "error" in c:
+            with pytest.raises(spec.SpecError) as e:
+                spec.resolve_arch(spec.spec_from_manifest(doc), c["architecture"])
+            for sub in c["error"]:
+                assert sub in str(e.value), f"{c['name']}: {e.value!r} does not name {sub!r}"
+            continue
+        got = spec.resolve_arch(spec.spec_from_manifest(doc), c["architecture"])
+        if c.get("fixed_by_export"):
+            assert got is None, c["name"]
+            continue
+        want = {"resize": "", "width": 0, "height": 0, "multiple_of": 0, "no_upscale": False, "crop_pct": 0.0,
+                "resample": "", "mean": [], "std": [], "rescale": True, "layout": "", "pad": 0.0, "legacy": False}
+        want.update(c["spec"])
+        want["crop_pct"] = float(np.float32(want["crop_pct"]))
+        want["mean"] = [float(np.float32(v)) for v in want["mean"]]
+        want["std"] = [float(np.float32(v)) for v in want["std"]]
+        assert _canonical(got) == want, c["name"]
+    assert {c["architecture"] for c in cases} >= set(spec.ARCHS) | set(spec.FIXED_BY_EXPORT)
+
+
+def test_arch_modes_match_go():
+    """spec.ARCHS names the modes each Go model package declares (`prep.Arch{Name: ..., Modes:
+    ...}`), and spec.FIXED_BY_EXPORT the packages that call FixedByExport."""
+    from visionserve.convert import spec
+    consts = dict(re.findall(r'^\t(\w+)\s+Mode = "(\w+)"', _go(GO_PREPROCESS), re.M))
+    models_dir = ROOT / "internal" / "models"
+    go_archs = {}
+    for f in models_dir.glob("*/*.go"):
+        if f.name.endswith("_test.go"):
+            continue
+        for name, modes in re.findall(r'Arch\{Name:\s*"([\w-]+)",\s*Modes:\s*\[\]\w+\.Mode\{([^}]*)\}', _go(f)):
+            go_archs[name] = tuple(consts[m.split(".")[-1].strip()] for m in modes.split(",") if m.strip())
+    # detr builds its Arch per variant: Name is the variant prefix ("rfdetr" / "rtdetr").
+    detr = _go(models_dir / "detr" / "preprocess.go")
+    m = re.search(r"Arch\{Name:\s*prefix,\s*Modes:\s*\[\]\w+\.Mode\{([^}]*)\}", detr)
+    assert m, "could not find detr's Arch"
+    detr_modes = tuple(consts[x.split(".")[-1].strip()] for x in m.group(1).split(",") if x.strip())
+    go_archs["rfdetr"] = go_archs["rtdetr"] = detr_modes
+    for reg, a in spec.ARCHS.items():
+        assert a.name in go_archs, f"{reg}: no Go Arch named {a.name!r}"
+        assert a.modes == go_archs[a.name], f"{reg}: modes {a.modes} != Go {go_archs[a.name]}"
+    fixed = set()
+    for f in models_dir.glob("*/*.go"):
+        if not f.name.endswith("_test.go"):
+            fixed |= set(re.findall(r'FixedByExport\("([\w-]+)"', _go(f)))
+    assert fixed == set(spec.FIXED_BY_EXPORT)

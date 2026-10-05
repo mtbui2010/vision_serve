@@ -227,6 +227,11 @@ type Manifest struct {
 		// session of a pool). 0 = ORT's default. Keys must be roles of `files:`. See
 		// IntraOpThreads and docs/manifest-spec.md.
 		Threads map[string]wholeNumber `yaml:"threads"`
+		// MaxUsefulSide (OPTIONAL) overrides the client-resize hint GET /api/models derives from
+		// the architecture's preprocessing (models.UsefulSide): N > 0 = an SDK may shrink an
+		// image until its LONGER side is N pixels; 0 = never shrink (send full resolution);
+		// absent = derived. See UsefulSideOverride and docs/manifest-spec.md.
+		MaxUsefulSide *wholeNumber `yaml:"max_useful_side"`
 	} `yaml:"runtime"`
 
 	// dir is the directory containing the manifest (filled at load time, not in the YAML).
@@ -343,6 +348,9 @@ func (m *Manifest) validate() error {
 	}
 	if err := m.validateThreads(); err != nil {
 		return err
+	}
+	if v := m.Runtime.MaxUsefulSide; v != nil && *v < 0 {
+		return fmt.Errorf("runtime.max_useful_side must be >= 0 (0 = clients never shrink images), got %d", *v)
 	}
 	if err := m.Instance.validate(); err != nil {
 		return err
@@ -528,4 +536,13 @@ func (c *InstanceConfig) validate() error {
 		return fmt.Errorf("instance.patch_size must be >= 0 (0 = the model's default), got %d", c.PatchSize)
 	}
 	return nil
+}
+
+// UsefulSideOverride returns the manifest's runtime.max_useful_side and whether it sets one
+// (0 with ok = true: clients must send full-resolution images).
+func (m *Manifest) UsefulSideOverride() (n int, ok bool) {
+	if m.Runtime.MaxUsefulSide == nil {
+		return 0, false
+	}
+	return int(*m.Runtime.MaxUsefulSide), true
 }

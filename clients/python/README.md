@@ -24,6 +24,7 @@ needed for:
   - [Examples](#examples-1)
 - [Public API](#public-api)
   - [Image inputs](#image-inputs)
+  - [Client-side resizing (on by default)](#client-side-resizing-on-by-default)
   - [Result types](#result-types)
   - [Detection](#detection)
   - [Segmentation](#segmentation)
@@ -40,6 +41,7 @@ needed for:
   - [Visualization](#visualization----draw--resultvisualize)
 - [Script examples](#examples)
 - [Tests](#tests)
+- [Changelog](#changelog)
 
 ## Install
 
@@ -139,6 +141,8 @@ Global flags (accepted **before or after** the subcommand):
 | `--template-name NAME` | `instance_detection` models: a template set registered via `POST /api/templates` |
 | `--depth PATH` | Aligned depth image for `background` (`--method depth`/`auto`): `.npy`, a 16-bit/float `.png`/`.tif`, or raw little-endian bytes (needs numpy) |
 | `--depth-dtype uint16\|float32`, `--depth-width W`, `--depth-height H` | Raw `--depth` files only: element type (default `uint16`) and size (default: the image's) |
+| `--resize auto\|off\|N` | Client-side resizing (default `auto`: shrink to the model's size hint; `off`: send the file as is; `N`: longer side N px for any model) |
+| `--no-jpeg` / `--jpeg-quality Q` | Send a shrunk image as lossless PNG / JPEG quality (default `90`) |
 | `--save` | Save an annotated image, auto-named `<stem>.python.<model>.<task>.png` |
 | `--save-as PATH` | Save the annotated image to this exact path (extension picks the format) |
 | `--alpha FLOAT` | Mask overlay opacity for `--save` (0..1, default `0.45`) |
@@ -196,7 +200,7 @@ visionserve load rf-detr
 
 ## Public API
 
-### `Client(host="http://localhost:11435", timeout=120, *, base64_arrays=False)`
+### `Client(host="http://localhost:11435", timeout=120, *, base64_arrays=False, resize="auto", jpeg=True, jpeg_quality=90)`
 
 | Method | HTTP | Returns |
 | --- | --- | --- |
@@ -205,8 +209,9 @@ visionserve load rf-detr
 | `load(model)` | `POST /api/load` | `{"model", "state"}` |
 | `unload(model)` | `POST /api/unload` | `{"model", "state"}` |
 | `ps()` | `GET /api/models` (filtered) | loaded `list[ModelInfo]` |
-| `predict(model, image, *, prompt=None, box=None, point=None, box_threshold=None, text_threshold=None, bg_max_area=None, fg_min_area=None, grid_size=None, method=None, roi=None, dilate=None, depth=None, min_size=None, max_size=None, gripper_min=None, gripper_max=None, max_grasps_per_object=3, claim_threshold=None, crop_temp=None, template_name=None)` | `POST /api/predict` | `Result` |
-| `preprocess(model, image=None, *, prompt=None, box=None, point=None)` / `tokenize(model, text)` | `POST /api/preprocess` | `PreprocessResult` / token ids |
+| `predict(model, image, *, prompt=None, box=None, point=None, box_threshold=None, text_threshold=None, bg_max_area=None, fg_min_area=None, grid_size=None, method=None, roi=None, dilate=None, depth=None, min_size=None, max_size=None, gripper_min=None, gripper_max=None, max_grasps_per_object=3, claim_threshold=None, crop_temp=None, template_name=None, resize=None, jpeg=None, jpeg_quality=None)` | `POST /api/predict` | `Result` |
+| `preprocess(model, image=None, *, prompt=None, box=None, point=None, resize="off", jpeg=None, jpeg_quality=None)` / `tokenize(model, text)` | `POST /api/preprocess` | `PreprocessResult` / token ids |
+| `useful_side(model)` | `GET /api/models` (cached) | `(max_useful_side, max_useful_short_side)` |
 
 Every `predict` option, what it does and which models read it, with real outputs:
 [Clients › Python](https://mtbui2010.github.io/vision_serve/clients/python/) on the docs site.
@@ -241,16 +246,48 @@ res = c.predict("rf-detr", pil_img)
 arr = np.array(pil_img)           # shape (H, W, 3), dtype uint8
 res = c.predict("rf-detr", arr)
 
-# 4. raw bytes — already-encoded PNG/JPEG, sent verbatim
+# 4. raw bytes — already-encoded PNG/JPEG
 with open("photo.jpg", "rb") as f:
     raw = f.read()
 res = c.predict("rf-detr", raw)
 ```
 
 Grayscale `(H, W)` ndarrays are automatically promoted to RGB. Float arrays in `[0, 1]`
-are scaled to `uint8`. Encoded to lossless PNG client-side before upload (so the server sees
-exactly your pixels); pass JPEG bytes yourself if upload size matters more. Boxes, points and
-numeric options may also be numpy arrays / scalars.
+are scaled to `uint8`. Paths and bytes go out verbatim and PIL images / arrays as lossless PNG,
+except a photo larger than the model can use, which is shrunk and sent as JPEG by default
+(next section). Boxes, points and numeric options may also be numpy
+arrays / scalars.
+
+### Client-side resizing (on by default)
+
+A model resizes every photo to its own small input on the server (RF-DETR 560 × 560,
+GroundingDINO 800 × 800, CLIP 224 × 224), so most of a 12-megapixel upload is thrown away.
+`GET /api/models` therefore tells the client, per model, how far a photo can be shrunk without
+changing what the model sees (`max_useful_side` bounds the longer side, `max_useful_short_side`
+the shorter, 2 × the model's input; `None` = never). By default the client fetches it once,
+shrinks a larger photo to it, sends JPEG (quality 90, 4:4:4 colour), scales `box` / `point` /
+`roi` into the sent photo and maps every box, mask and grasp back, so results are in your
+photo's pixels as before. Only a shrunk photo is re-encoded. `res.client_resize` records what
+was sent and why (`reason`; `None` = your bytes, untouched). With the server on this machine
+(`localhost`, 127.0.0.0/8, `::1`) a photo is shrunk only when that at least halves its sides:
+on localhost the upload is free, and a milder shrink costs the client more to decode than the
+server saves (the loopback rule).
+
+```python
+c = Client()                                   # resize="auto", jpeg=True, jpeg_quality=90
+res = c.predict("rf-detr", "photo_4000x3000.jpg")
+print(res.client_resize)    # ClientResize(original_width=4000, ..., sent_width=1493, sent_height=1120, jpeg_quality=90, reason='hint')
+
+Client(resize="off")                           # send every photo as given (the 0.1.x behaviour)
+c.predict("rf-detr", "photo.jpg", resize=1280, jpeg=False)   # per call: longer side 1280, PNG
+```
+
+Never resized: models without a hint (SAM family and every model returning masks, OCR,
+grasping, `background`, templates, crop-naming pipelines, `depth-anything-v2`), a photo already
+within the hint (sent exactly as given), and requests with `depth`, `dilate`, `gripper_min` /
+`gripper_max` or `template_name`. Needs Pillow; without it photos are sent as given.
+`preprocess()` sends the photo as given unless you pass `resize="auto"`. Measured cost and gain
+(bytes, latency, COCO mAP): [Clients › Python](https://mtbui2010.github.io/vision_serve/clients/python/#client-side-resizing-on-by-default).
 
 Prompts (serialized to the server's string format):
 - `box`: `[x, y, w, h]` or a list of boxes → `"x,y,w,h"` joined by `;`.
@@ -839,3 +876,21 @@ python -m pytest clients/python/tests -v
 # or as a dependency-free self-test:
 python clients/python/tests/test_client.py
 ```
+
+## Changelog
+
+### 0.2.0
+
+- **Client-side resizing, on by default** (a user decision: it changes what is uploaded, so
+  results on photos larger than a model's input move slightly; measured in the docs).
+  `Client(resize="auto", jpeg=True, jpeg_quality=90)` shrinks a photo larger than the model can
+  use to the server's per-model hint (`GET /api/models`: `max_useful_side` /
+  `max_useful_short_side`), sends JPEG (4:4:4), and maps boxes, masks and grasps back to the
+  original pixels; `Result.client_resize` records it with a `reason`. Only shrunk photos are
+  re-encoded (JPEGs decoded at a reduced scale, Pillow's draft mode); with a loopback `host`
+  only a shrink to half the sides or less is done. `Mask.to_ndarray(original_w, original_h)`
+  keeps working on a shrunk photo's masks. `resize="off"` restores the 0.1.x uploads exactly. Also per call
+  (`predict(..., resize=, jpeg=, jpeg_quality=)`, `preprocess(..., resize="auto")`) and in the
+  CLI (`--resize auto|off|N`, `--no-jpeg`, `--jpeg-quality Q`).
+- `ModelInfo.max_useful_side` / `max_useful_short_side`; `Client.useful_side(model)`;
+  `visionserve list --json` prints both.

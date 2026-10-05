@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"visionserve/internal/cli/clireport"
 	"visionserve/internal/engine"
 )
 
@@ -26,6 +27,19 @@ Usage:
   visionserve pull <folder>         validate a local model folder (manifest.yaml + .onnx) + install it into the registry
   visionserve convert <fmt> <ckpt>  convert a PyTorch/RF-DETR/HuggingFace/TensorFlow checkpoint to ONNX + install it
                                     (runs the converter image via Docker; see: visionserve convert --help)
+  visionserve check <model> --images DIR
+                                    does the served model behave like your training pipeline? verdict +
+                                    likely causes (needs a running server; see: visionserve check --help)
+  visionserve inspect <model>       model card: ready to serve or not (PASS/WARN/FAIL), files, licence, ONNX
+                                    inputs/outputs, preprocessing, runtime; also takes a .onnx file or a folder
+  visionserve import <file.onnx>    make an existing ONNX file servable: write its manifest + install it
+                                    (--name --task --license required; see: visionserve import --help)
+  visionserve bench <model>         latency, throughput, memory and EP of a model on THIS machine
+                                    (see: visionserve bench --help)
+  visionserve sensitivity <model>   which layers of a model lose accuracy at reduced precision
+  visionserve optimize <model>      build FP16 / INT8 / mixed variants for a target (jetson-orin,
+                                    jetson-thor, cpu, cuda), measure them, recommend one
+                                    (sensitivity and optimize run the converter: Docker or --python)
   visionserve version               print the version
 
 Common flags:
@@ -71,6 +85,18 @@ func Execute(args []string) error {
 		return runPull(args[2:])
 	case "convert":
 		return runConvert(args[2:])
+	case "check":
+		return runCheck(args[2:])
+	case "inspect":
+		return runInspect(args[2:])
+	case "import":
+		return runImport(args[2:])
+	case "bench":
+		return runBench(args[2:])
+	case "sensitivity":
+		return runSensitivity(args[2:])
+	case "optimize":
+		return runOptimize(args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("visionserve %s\n", Version)
 		for _, line := range epStatus() {
@@ -85,6 +111,19 @@ func Execute(args []string) error {
 		fmt.Print(usage)
 		return fmt.Errorf("unknown command: %s", args[1])
 	}
+}
+
+// ExitCode is the process exit code for an error returned by Execute: 0 for nil, 1 for a failure,
+// and for inspect/import (clireport) 1 for a FAIL verdict and 2 for a usage or setup error.
+func ExitCode(err error) int { return clireport.ExitCode(err) }
+
+// ErrorText is the line main prints for an error returned by Execute: "error: <err>\n", or ""
+// when the command already reported it (a printed FAIL report).
+func ErrorText(err error) string {
+	if err == nil || clireport.Reported(err) || err.Error() == "" { // "" = the command already said it
+		return ""
+	}
+	return fmt.Sprintln("error:", err)
 }
 
 // tensorRTUsage is the help text of the --tensorrt flag (serve and run).

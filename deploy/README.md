@@ -21,7 +21,7 @@ Model weights are **not** baked in; they are downloaded on first use via `vision
 |-----|----------|----------|------|
 | `latest`, `latest-gpu` | x86-64 NVIDIA | CUDA 12.4 + cuDNN 9 (no TensorRT) | ~4 GB |
 | `latest-cpu` | x86-64 | CPU only — no GPU required | ~141 MB |
-| `latest-arm` | Jetson arm64 | CUDA + TensorRT EP (JetPack 6) | ~4 GB |
+| `latest-arm` | Jetson arm64 | CUDA + TensorRT EP (JetPack 6.1 / 6.2, built with `ORT_SOURCE=jetson`) | ~10 GB |
 
 > **`latest` = GPU image.** Use `latest-cpu` explicitly on machines without an NVIDIA GPU.
 > Immutable versioned tags (`vX.Y.Z`, `vX.Y.Z-cpu`, `vX.Y.Z-arm`) are also published for
@@ -416,16 +416,22 @@ wins over the opt-in. With Compose, see the commented `VISIONSERVE_TENSORRT` lin
 
 ## Jetson / arm64
 
-The ARM image (`latest-arm`) is built with `deploy/Dockerfile.edge` using
-`nvcr.io/nvidia/l4t-ml:r36.3.0` (JetPack 6.x, CUDA 12.2 + TensorRT 8.6) as the ORT source.
+The ARM image (`latest-arm`) is built with `deploy/Dockerfile.edge`. With `ORT_SOURCE=jetson` it
+targets JetPack 6.1 / 6.2 (L4T r36.4): the runtime base is NVIDIA's
+`nvcr.io/nvidia/l4t-jetpack:r36.4.0`, which carries CUDA 12.6, cuDNN 9.3 and TensorRT 10.3 inside
+the image (since JetPack 5, `l4t-base` no longer mounts them from the host), and ONNX Runtime
+1.24.0 comes from the Jetson AI Lab `jp6/cu126` `onnxruntime-gpu` wheel (CUDA + TensorRT
+providers, pinned by SHA-256). Without it (`ORT_SOURCE=cpu`, the default) the image is a portable
+arm64 CPU image (Debian + the official ONNX Runtime aarch64 CPU build).
 
-**Build on a machine with `docker buildx` + QEMU or directly on the Jetson:**
+**Build on any machine with `docker buildx` (no QEMU needed) or directly on the Jetson:**
 
 ```bash
-# Requires: docker login nvcr.io (free NVIDIA NGC account)
-make docker-arm ORT_SOURCE=jetson
+make docker-arm ORT_SOURCE=jetson     # pulls nvcr.io/nvidia/l4t-jetpack:r36.4.0 (~5.6 GB download, ~10 GB image)
 make push-docker-arm
 ```
+
+Every stage that runs a command runs on the build platform; the arm64 stages only copy files.
 
 **Run on Jetson:**
 
@@ -437,6 +443,33 @@ docker run -d \
   --name visionserve \
   mtbui2010/visionserve:latest-arm
 ```
+
+> **Checked 2026-10-05:** the previous default, `nvcr.io/nvidia/l4t-ml:r36.3.0`, does not exist on
+> NGC (`docker manifest inspect`: "no such manifest"; l4t-ml stops at `r36.2.0-py3`), and
+> `l4t-ml:r36.2.0-py3` ships ONNX Runtime 1.16.3, older than the 1.20 C API this binary's
+> `onnxruntime_go` binding needs. `l4t-jetpack:r36.2.0`, `r36.3.0` and `r36.4.0` exist. Both
+> variants of `Dockerfile.edge` build with `docker buildx --platform linux/arm64` on an x86-64
+> host without QEMU, and the Jetson image contains every library ONNX Runtime's CUDA and
+> TensorRT providers link against (cuDNN 9, cuBLAS 12, cuFFT 11, cudart 12, TensorRT 10). It has
+> **not run on an Orin yet**: on the device, `docker run ... visionserve:<version>-arm bench MODEL
+> --ep cuda` must report `gpu:0`. For JetPack 6.0 (r36.2/r36.3, CUDA 12.2), pass
+> `--build-arg L4T_BASE=nvcr.io/nvidia/l4t-jetpack:r36.3.0` and a matching wheel index
+> (`--build-arg JETSON_ORT_WHEEL_INDEX=... JETSON_ORT_VERSION=... JETSON_ORT_WHEEL_SHA256=...`).
+
+### Jetson Thor (JetPack 7): `deploy/Dockerfile.thor` (untested on hardware)
+
+JetPack 7 is SBSA-aligned (standard arm64 CUDA 13 packages; no l4t-* images) and Thor's GPU is
+Blackwell (sm_110), so the JetPack 6 image does not apply. `Dockerfile.thor` uses
+`nvcr.io/nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04` and the ONNX Runtime 1.24 libraries of the
+Jetson AI Lab `sbsa/cu130` wheel (CUDA + TensorRT providers, sm_110 kernels, pinned by SHA-256).
+It builds without QEMU (every `RUN` runs on the build platform):
+
+```bash
+docker buildx build --platform linux/arm64 -f deploy/Dockerfile.thor -t visionserve:thor --load .
+docker run -d --runtime nvidia --gpus all -p 11435:11435 -v visionserve:/root/.models visionserve:thor
+```
+
+It has not run on a Thor yet: see the checklist in `website/docs/guides/edge.md`.
 
 ---
 

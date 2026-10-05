@@ -51,6 +51,8 @@ runtime:
                                   # `serve --tensorrt` / VISIONSERVE_TENSORRT=1 inserts it before cuda
                                   # valid EPs: tensorrt, cuda, coreml, directml, openvino, cpu
   idle_unload_seconds: 300        # 0 = never auto-unload
+  # max_useful_side: 0            # optional client-resize override: 0 = SDKs never shrink
+                                  # images; N = shrink to a longer side of N px (absent = derived)
 ```
 
 ## Multi-session model (the `files:` map)
@@ -104,7 +106,7 @@ runtime:
 | `sha256_files` | **optional** — `relative/path: digest` pins for files that are not ONNX sessions: external weight data (`model.onnx.data`), tokenizers (`tokenizer.json`, `vocab.txt`), labels. Checked at load like `sha256`. In verified mode an unpinned `<session>.data` next to a session file is refused, because that file holds most of the weights |
 | `source_url` | **optional** — the audited upstream the weights came from (provenance). Purely informational unless a deployer enables the verified-source allowlist (see threat model) |
 | `input.*` | width/height/layout/letterbox/crop/keep_aspect/multiple_of/normalize — the legacy spelling of the preprocessing (aliases of `preprocess:`) |
-| `preprocess` | **optional** — the preprocessing as data: `resize`, `size`/`width`/`height`, `multiple_of`, `no_upscale`, `resample`, `mean`, `std`, `rescale`, `layout`, `pad` (see [Preprocessing](#preprocessing)) |
+| `preprocess` | **optional** — the preprocessing as data: `resize`, `size`/`width`/`height`, `multiple_of`, `no_upscale`, `crop_pct`, `resample`, `mean`, `std`, `rescale`, `layout`, `pad` (see [Preprocessing](#preprocessing)) |
 | `postprocess.type` | decode hint (`detr`, `sam`, ...) |
 | `postprocess.box_format` | `cxcywh` / `xyxy` |
 | `postprocess.conf_threshold` | confidence threshold (for GroundingDINO this is the **box** threshold). Not read by classification (`efficientnet`, `mobilenet-v3`): it always returns the top K. Refused by `owlvit` (a load error): its requests are all template-prompted, and their threshold is `instance.sim_threshold` |
@@ -118,6 +120,7 @@ runtime:
 | `instance.sim_threshold` | default minimum score of a template match, in [0, 1); a request's `box_threshold` overrides it. Absent or 0 ⇒ the model's default: **0.9** for `owlvit`, the threshold of Hugging Face's image-guided example (`post_process_image_guided_detection(threshold=0.9)`). An image query's score is a raw sigmoid, not calibrated: OWLv2's text-query value 0.1 keeps weak background matches |
 | `runtime.prefer` | EP fallback chain (NVIDIA `tensorrt`/`cuda`, Apple `coreml`, Windows `directml`, Intel `openvino`, `cpu`). Write `[cuda, cpu]` for NVIDIA: the operator turns TensorRT on for the whole server with `--tensorrt` / `VISIONSERVE_TENSORRT=1`, which inserts `tensorrt` before `cuda`. List `tensorrt` here only if the model was measured under it. `VISIONSERVE_EP` replaces this chain |
 | `runtime.idle_unload_seconds` | idle auto-unload (0 = never) |
+| `runtime.max_useful_side` | **optional** — overrides the client-resize hint `GET /api/models` publishes for this model (`max_useful_side` / `max_useful_short_side`), which the Python and JS SDKs use to shrink large photos before uploading them. Absent ⇒ derived from the architecture's preprocessing: 2 × the larger input side, on the longer side for fit-inside modes (`letterbox`, `top_left_pad`, `long_side`, `long_side_pad`) and on the shorter side for fill modes (`squash`, `center_crop`); none for `keep_aspect`, `none`, and every architecture that has not registered one (masks, OCR, depth-aligned grasping, templates, crop namers — see `models.RegisterUsefulSide`). `N` > 0 ⇒ SDKs may shrink an image until its **longer** side is `N` px; `0` ⇒ never shrink (always full resolution). Set `0` for a model whose output needs the photo's full resolution, or a larger `N` for one that reads fine detail (small text, far objects) |
 | `runtime.threads` | **optional** — map role → ONNX Runtime intra-op threads for that role's session(s), e.g. `threads: {head: 1}`. Overrides the default for that role only: ORT's own (one spinning thread per physical core) for a lone session, the pool cap (`NumCPU/(2n)`, 1 to 3, `VISIONSERVE_POOL_THREADS`) for each session of a pool. `0` = ORT's default, explicitly. A value above the host's logical CPUs is capped at load (logged once). Roles not listed keep the default. Results do not depend on it; use it for a small session that runs between a large one's calls, whose default thread pool otherwise competes with the large one on CPU |
 
 ## Validation rules (the registry rejects violations)
@@ -134,6 +137,7 @@ runtime:
 | `preprocess` | optional; each field valid for its `resize` mode (table below), `mean`+`std` together with 3 values each; a field also set through its legacy `input.*` alias must agree with it — the error names both |
 | `runtime.prefer` | each EP ∈ {tensorrt, cuda, coreml, directml, openvino, cpu} |
 | `runtime.threads` | optional; needs a `files:` map, every key must be one of its roles, every value an integer >= 0 (a float such as `1.5` is refused, not truncated) |
+| `runtime.max_useful_side` | optional; an integer >= 0 (`1.5` or a string is refused) |
 | `instance` | optional; `sim_threshold` in [0, 1) (`NaN` refused), `max_templates` and `patch_size` >= 0 |
 | `sha256` | optional; if present, must be a hex string or a role→hex map. Mismatch is rejected at **load** time, not scan time (weights may not be downloaded yet) |
 | `sha256_files` | optional; paths must be relative and stay inside the model directory; digests are hex |
@@ -167,6 +171,7 @@ preprocess:
   size: 640                # width = height = 640; or width: / height:
   multiple_of: 14          # keep_aspect: round sides to it; long_side_pad: pad sides up to it
   no_upscale: true         # long_side / long_side_pad: never enlarge
+  crop_pct: 0.875          # center_crop: keep this fraction of the resized short side (timm)
   resample: bilinear       # bilinear | bicubic (default: the mode's)
   mean: [0.485, 0.456, 0.406]
   std:  [0.229, 0.224, 0.225]
@@ -180,9 +185,9 @@ With `rescale: false`: `v = p`, or `v = (p - mean[c]) / std[c]` with mean/std in
 
 | `resize` | Geometry (exactly the upstream recipe) | Tensor size | Default resample |
 |---|---|---|---|
-| `squash` | resize to width×height, aspect not kept (RF-DETR, MiDaS, EfficientNet, SAM2) | width×height | bilinear |
+| `squash` | resize to width×height, aspect not kept (RF-DETR, RT-DETR, MiDaS, SAM2) | width×height | bilinear |
 | `letterbox` | fit inside width×height keeping the aspect (scale `min(W/w, H/h)`, sides rounded half up), centred, padded with the **pixel** `pad` (default black) before normalisation | width×height | bilinear |
-| `center_crop` | short side → its target (long side truncated), centred crop — HF CLIPImageProcessor | width×height | bicubic |
+| `center_crop` | short side → its target (long side truncated), centred crop, offset floored — HF CLIPImageProcessor. With `crop_pct` p the short side goes to `floor(width / p)` first: timm's eval transform, torchvision's `Resize(256)` + `CenterCrop(224)` at p = 0.875 (EfficientNet, MobileNetV3) | width×height | bicubic |
 | `keep_aspect` | HF DPTImageProcessor `keep_aspect_ratio`: both axes scaled by whichever of W/w, H/h is closer to 1, sides rounded (half to even) to `multiple_of`; no crop, no pad | varies per image (dynamic H/W graph) | bicubic |
 | `long_side` | scale `min(W/w, H/h)` (long side → target), sides rounded half away from zero, no pad (MobileSAM: the graph pads) | varies per image | bilinear |
 | `long_side_pad` | `long_side`, then the **normalised** tensor is padded bottom/right with `pad` (SAM: normalise, then zero-pad) to width×height, or up to multiples of `multiple_of` | width×height or multiples | bilinear |
@@ -190,7 +195,7 @@ With `rescale: false`: `v = p`, or `v = (p - mean[c]) / std[c]` with mean/std in
 | `none` | the original image size (EfficientSAM: the graph resizes itself) | the image's | — |
 
 `multiple_of` is only valid with `keep_aspect` / `long_side_pad`, `no_upscale` only with
-`long_side` / `long_side_pad`, a non-zero `pad` only with the padding modes (pixel pads in
+`long_side` / `long_side_pad`, `crop_pct` only with `center_crop` (in (0, 1]), a non-zero `pad` only with the padding modes (pixel pads in
 [0, 255]), `resample` not with `none`.
 
 ### Legacy aliases and precedence
@@ -223,7 +228,7 @@ With `rescale: false`: `v = p`, or `v = (p - mean[c]) / std[c]` with mean/std in
 | Architecture | Modes (first = default) | Notes |
 |---|---|---|
 | `rf-detr`, `rt-detr` (and the RF-DETR stage of composites) | `squash`, `letterbox` | boxes map back through the meta; crops / variable sizes are refused |
-| `efficientnet`, `mobilenet-v3` | `squash` | |
+| `efficientnet`, `mobilenet-v3` | `squash`, `center_crop` | the shipped manifests declare `center_crop` + `crop_pct: 0.875`, as the weights are evaluated (`input.crop: center` selects it too since 2026-10; before, it was ignored) |
 | `midas`, `depth-anything-v2` | `squash`, `keep_aspect` | `keep_aspect` needs dynamic H/W in the graph (checked at load) |
 | `clip` | `squash`, `center_crop` | CLIP mean/std (and 224) when not declared |
 | `scrfd` | `top_left_pad` | its legacy `letterbox: true` always meant this; its legacy `normalize` is in 0..255 units (a block says `rescale: false`) |

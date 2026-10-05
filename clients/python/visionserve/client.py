@@ -15,12 +15,16 @@ import numbers
 import os
 import re
 import socket
+import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
+from . import resize as _resize
+from .resize import ClientResize, ResizeOption
 from .types import Detection, Mask, ModelInfo, Result, _is_loaded
 
 # Type alias for accepted image inputs (documented in predict()).
@@ -58,6 +62,22 @@ class Client:
             ``numpy.asarray``), which are not lists — ``json.dumps``, ``+`` and ``append`` need
             ``.tolist()`` first. Requires numpy (without it the base64 is decoded into plain
             lists). A server that predates the option ignores it and sends numbers.
+        resize: client-side resizing of :meth:`predict` uploads (ON by default). ``"auto"``: shrink
+            an image larger than the model can use to the server's hint for that model
+            (``GET /api/models``, fetched once and cached): a 12 MP photo becomes ~1.7 MP for
+            RF-DETR, while masks, OCR, grasping and template models (no hint) always get the full
+            image. When ``host`` is this machine (``localhost``, 127.0.0.0/8, ``::1``) a photo is
+            shrunk only when that at least halves its sides (the loopback rule; see
+            :attr:`Result.client_resize`). ``"off"``: send every image exactly as given. An int ``N``: shrink to a longer
+            side of ``N`` pixels for every model, whatever its hint. Results are always mapped
+            back to ORIGINAL image pixels; :attr:`Result.client_resize` says what was done.
+        jpeg: send a shrunk image as JPEG (default ``True``) instead of lossless PNG. An image that
+            is not shrunk is always sent exactly as given (a path / bytes verbatim, PIL / numpy as
+            lossless PNG).
+        jpeg_quality: JPEG quality 1..100 (default 90).
+
+    Client-side resizing needs Pillow (``pip install 'visionserve[images]'``); without it every
+    image is sent as given. See ``docs/clients/python.md``, "Client-side resizing".
     """
 
     def __init__(
@@ -66,11 +86,22 @@ class Client:
         timeout: float = 120,
         *,
         base64_arrays: bool = False,
+        resize: ResizeOption = "auto",
+        jpeg: bool = True,
+        jpeg_quality: int = 90,
     ):
         self.host = host.rstrip("/")
         self.timeout = timeout
         # Opt-in: the default keeps Result.depth_map / embeddings plain lists, as they always were.
         self.base64_arrays = bool(base64_arrays)
+        # ON by default — a user decision (2026-10-05) that overrides the "output-changing
+        # behaviour is opt-in" rule for this feature; the measured cost is in the docs.
+        self.resize = _resize.check_resize(resize)
+        self.jpeg = bool(jpeg)
+        self.jpeg_quality = _resize.check_quality(jpeg_quality)
+        self._hints: Dict[str, "tuple[Optional[int], Optional[int]]"] = {}
+        self._hints_fetched = float("-inf")  # monotonic time of the last /api/models fetch
+        self._hints_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     # Public API
@@ -82,7 +113,11 @@ class Client:
     def list_models(self) -> List[ModelInfo]:
         """GET /api/models -> list of :class:`ModelInfo`."""
         data = self._get_json("/api/models")
-        return [ModelInfo.from_json(x) for x in (data or [])]
+        infos = [ModelInfo.from_json(x) for x in (data or []) if isinstance(x, dict)]
+        with self._hints_lock:
+            self._hints = {m.name: (m.max_useful_side, m.max_useful_short_side) for m in infos}
+            self._hints_fetched = time.monotonic()
+        return infos
 
     def load(self, model: str) -> Dict[str, str]:
         """POST /api/load -> ``{"model", "state"}``."""
@@ -121,6 +156,9 @@ class Client:
         claim_threshold: Optional[float] = None,
         crop_temp: Optional[float] = None,
         template_name: Optional[str] = None,
+        resize: Optional[ResizeOption] = None,
+        jpeg: Optional[bool] = None,
+        jpeg_quality: Optional[int] = None,
     ) -> Result:
         """POST /api/predict (multipart) -> :class:`Result`.
 
@@ -128,10 +166,14 @@ class Client:
             model: model name (must be loaded, or the server may auto-load it).
             image: one of —
                 * ``str`` / ``os.PathLike``: path to an image file on disk.
-                * ``bytes``: already-encoded image (PNG/JPEG bytes), sent verbatim.
-                * ``PIL.Image.Image``: encoded to PNG client-side.
+                * ``bytes``: already-encoded image (PNG/JPEG bytes).
+                * ``PIL.Image.Image``: encoded client-side.
                 * ``numpy.ndarray``: HWC ``uint8`` (or float in ``[0, 1]`` -> scaled to
-                  uint8); grayscale ``(H, W)`` is promoted to RGB. Encoded to PNG.
+                  uint8); grayscale ``(H, W)`` is promoted to RGB. Encoded client-side.
+                  How it is sent depends on the client's ``resize`` / ``jpeg`` (see
+                  :class:`Client`): by default, an image larger than the model can use is shrunk
+                  and sent as JPEG; anything not shrunk goes out as before: paths and bytes
+                  verbatim, PIL / ndarray images as lossless PNG.
             prompt: free-text open-vocab prompt, e.g. ``"cat. remote."``.
                     For ``grounding-dino``, ``grounded-sam``, and ``grasp-gd`` models,
                     defaults to ``"object"`` when not provided.
@@ -176,6 +218,12 @@ class Client:
                     decisive. ``None`` = model default.
             template_name: ``instance_detection`` models — a template set registered via
                     ``POST /api/templates``.
+            resize, jpeg, jpeg_quality: override the client's client-side resizing for this call
+                    (see :class:`Client`); ``None`` = the client's setting. Boxes, points and a
+                    pixel ``roi`` are scaled with the image, and every returned coordinate is
+                    mapped back to ORIGINAL pixels. A request with ``depth``, ``dilate`` or
+                    ``gripper_min`` / ``gripper_max`` (pixel quantities tied to the full image) or
+                    ``template_name`` is always sent at full resolution.
 
         Boxes, points and numeric options may be Python numbers or numpy arrays / scalars.
 
@@ -183,7 +231,15 @@ class Client:
             :class:`Result`.
         """
         effective_prompt = normalize_prompt(model, prompt)
-        image_bytes, filename = _encode_image(image)
+        full_res = depth is not None or bool(dilate) or gripper_min is not None or gripper_max is not None \
+            or template_name is not None
+        image_bytes, filename, cr = self._prepare(
+            model, image, resize, jpeg, jpeg_quality, roi=None if full_res else roi, full_res=full_res)
+        if cr is not None and cr.resized:
+            box = _resize.scale_boxes(_normalize_list(box), cr) if box is not None else None
+            point = _resize.scale_points(_normalize_list(point), cr) if point is not None else None
+            if roi is not None:
+                roi = _resize.scale_roi(_single_box(roi), cr)
 
         fields: Dict[str, str] = {"model": model}
         if effective_prompt is not None:
@@ -232,6 +288,8 @@ class Client:
         body, content_type = _build_multipart(fields, image_bytes, filename, extra_files)
         data = self._post_raw("/api/predict", body, content_type)
         result = Result.from_json(data)
+        if cr is not None:
+            _resize.map_result(result, cr)
         if max_grasps_per_object is not None:
             result = result.filter_grasps(max_grasps_per_object)
         return result
@@ -244,6 +302,9 @@ class Client:
         prompt: Optional[str] = None,
         box: BoxInput = None,
         point: PointInput = None,
+        resize: ResizeOption = "off",
+        jpeg: Optional[bool] = None,
+        jpeg_quality: Optional[int] = None,
     ) -> "PreprocessResult":
         """POST /api/preprocess -> exactly what ``model`` would feed its first ONNX session.
 
@@ -252,21 +313,36 @@ class Client:
         the same image (resize / normalisation / letterbox) or text (token ids, padding). A
         mismatch there serves a working model silently worse.
 
+        Unlike :meth:`predict`, the image is sent as given by default (``resize="off"``): the
+        point is comparing the server's tensor with yours for the SAME pixels. Pass
+        ``resize="auto"`` (and ``jpeg`` / ``jpeg_quality``) to see what :meth:`predict` feeds
+        the model with the client's resizing; ``res.client_resize`` then says what was done, and
+        ``res.meta`` maps the tensor to the SENT image.
+
         Needs numpy. ``image`` is optional for text-only models (``siglip-text``, ``clip-text``).
         """
         fields: Dict[str, str] = {"model": model}
         effective_prompt = normalize_prompt(model, prompt)  # exactly what predict() would send
         if effective_prompt is not None:
             fields["prompt"] = effective_prompt
+        cr = None
+        if image is not None:
+            image_bytes, filename, cr = self._prepare(model, image, resize, jpeg, jpeg_quality)
+        else:
+            image_bytes, filename = None, ""
+        if cr is not None and cr.resized:
+            box = _resize.scale_boxes(_normalize_list(box), cr) if box is not None else None
+            point = _resize.scale_points(_normalize_list(point), cr) if point is not None else None
         box_str = _serialize_boxes(box)
         if box_str:
             fields["box"] = box_str
         point_str = _serialize_points(point)
         if point_str:
             fields["point"] = point_str
-        image_bytes, filename = _encode_image(image) if image is not None else (None, "")
         body, content_type = _build_multipart(fields, image_bytes, filename)
-        return PreprocessResult.from_json(self._post_raw("/api/preprocess", body, content_type))
+        res = PreprocessResult.from_json(self._post_raw("/api/preprocess", body, content_type))
+        res.client_resize = cr
+        return res
 
     def tokenize(self, model: str, text: str) -> "Any":
         """Token ids the server feeds ``model`` for ``text`` (padded exactly as served).
@@ -278,6 +354,63 @@ class Client:
         if "input_ids" not in res.inputs:
             raise VisionServeError(f"{model} takes no token ids (inputs: {sorted(res.inputs)})")
         return res.inputs["input_ids"]
+
+    # ------------------------------------------------------------------ #
+    # Client-side resizing
+    # ------------------------------------------------------------------ #
+    def useful_side(self, model: str) -> "tuple[Optional[int], Optional[int]]":
+        """The server's client-resize hint for ``model``: ``(max_useful_side,
+        max_useful_short_side)`` (see :class:`ModelInfo`), ``(None, None)`` for no hint.
+
+        Fetched with ONE ``GET /api/models`` and cached for the client's lifetime; a model the
+        cache does not know triggers a refresh (at most every few seconds). If the listing fails
+        (an unreachable or old server), there is no hint: the image is sent at full resolution
+        and predict() reports the server's own error, if any.
+        """
+        with self._hints_lock:
+            if model in self._hints:
+                return self._hints[model]
+            stale = time.monotonic() - self._hints_fetched > _HINT_REFRESH_S
+        if stale:
+            try:
+                self.list_models()
+            except (VisionServeError, ValueError, TypeError):
+                with self._hints_lock:
+                    self._hints_fetched = time.monotonic()
+        with self._hints_lock:
+            return self._hints.get(model, (None, None))
+
+    def _prepare(
+        self,
+        model: str,
+        image: ImageInput,
+        resize: Optional[ResizeOption],
+        jpeg: Optional[bool],
+        jpeg_quality: Optional[int],
+        *,
+        roi: Any = None,
+        full_res: bool = False,
+    ) -> "tuple[bytes, str, Optional[ClientResize]]":
+        """The upload for ``image``: (bytes, filename, what was done or None)."""
+        # Validated here too: the attributes may be reassigned after construction.
+        mode = _resize.check_resize(self.resize if resize is None else resize)
+        use_jpeg = bool(self.jpeg if jpeg is None else jpeg)
+        quality = _resize.check_quality(self.jpeg_quality if jpeg_quality is None else jpeg_quality)
+        max_side = max_short = max_scale = None
+        reason = "hint"
+        if not full_res and mode != _resize.RESIZE_OFF:
+            if mode == _resize.RESIZE_AUTO:
+                max_side, max_short = self.useful_side(model)
+                if _is_loopback(self.host):
+                    max_scale = _LOOPBACK_MAX_SCALE
+            else:
+                max_side, reason = int(mode), "resize=%d" % int(mode)
+        roi_box = _single_box(roi) if roi is not None else None
+        return _resize.prepare_upload(
+            image, max_side=max_side, max_short_side=max_short, jpeg=use_jpeg, quality=quality,
+            roi=roi_box, encode_plain=_encode_image, ndarray_to_pil=_ndarray_to_pil,
+            reason=reason, max_scale=max_scale,
+        )
 
     # ------------------------------------------------------------------ #
     # Transport
@@ -338,6 +471,43 @@ class Client:
             return json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError) as e:
             raise VisionServeError("invalid JSON response from %s: %s" % (url, e))
+
+
+# How long an unknown model name waits before it triggers another GET /api/models (seconds).
+_HINT_REFRESH_S = 5.0
+
+# The loopback rule of resize="auto": with the server on this machine the upload costs nothing,
+# so a photo is shrunk only when that at least halves its sides; a milder shrink (GroundingDINO's
+# 1600 px hint on a 4000 x 3000 photo: scale 0.53) measured slower than sending it whole, because
+# the client must decode the full photo. Remote servers keep shrinking to the hint.
+_LOOPBACK_MAX_SCALE = 0.5
+
+
+def _is_loopback(host: str) -> bool:
+    """True when ``host`` (the client's base URL) names this machine: ``localhost``, 127.0.0.0/8
+    or ``::1``. Only literal addresses and the name ``localhost`` count (no DNS lookup)."""
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    try:
+        name = urlsplit(host if "://" in host else "http://" + host).hostname or ""
+    except ValueError:
+        return False
+    name = name.lower().rstrip(".")
+    if name == "localhost" or name.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(name).is_loopback
+    except ValueError:
+        return False
+
+
+def _single_box(roi: Any) -> List[float]:
+    """A ``roi`` as one ``[x, y, w, h]`` list of floats (numpy accepted)."""
+    boxes = _normalize_list(roi)
+    if len(boxes) != 1 or len(boxes[0]) != 4:
+        raise ValueError("roi must be one box [x,y,w,h], got %r" % (roi,))
+    return [float(v) for v in boxes[0]]
 
 
 # ---------------------------------------------------------------------- #
@@ -683,11 +853,15 @@ class PreprocessResult:
         roles:  ``{onnx_input_name: session_role}`` (``"model"`` for single-session models).
         meta:   ``{"orig_width", "orig_height", "scale_x", "scale_y", "pad_x", "pad_y"}`` mapping
                 model-input pixels back to the original image (``input = orig * scale + pad``),
-                or ``None`` when the model's preprocessing has no such mapping.
+                or ``None`` when the model's preprocessing has no such mapping. "Original" is the
+                image the server received: the SENT one when ``client_resize`` is set.
+        client_resize: what the client did to the image before sending it, or ``None`` (the
+                default for preprocess(): the image is sent as given).
     """
 
     def __init__(self, model: str, inputs: Dict[str, Any], roles: Dict[str, str], meta: Optional[Dict[str, Any]]):
         self.model, self.inputs, self.roles, self.meta = model, inputs, roles, meta
+        self.client_resize: Optional[ClientResize] = None  # set by Client.preprocess
 
     @classmethod
     def from_json(cls, data: Dict[str, Any]) -> "PreprocessResult":

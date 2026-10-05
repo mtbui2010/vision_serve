@@ -109,13 +109,25 @@ func readONNXHeader(path string) (inputs, outputs []IOInfo, err error) {
 // parseONNXHeader is readONNXHeader over any ReaderAt; bufSize is the read window (tests shrink
 // it to push varints and names across window boundaries).
 func parseONNXHeader(r io.ReaderAt, size int64, bufSize int) (inputs, outputs []IOInfo, err error) {
+	in, out, _, err := parseONNX(r, size, bufSize, nil)
+	return in, out, err
+}
+
+// parseONNX is parseONNXHeader that also fills facts (model metadata, node and initializer
+// statistics) when it is non-nil; see ReadFacts. With facts nil it reads exactly what
+// parseONNXHeader always read. The returned graphHeader holds the parsed inputs and outputs with
+// their dim names.
+func parseONNX(r io.ReaderAt, size int64, bufSize int, facts *Facts) (inputs, outputs []IOInfo, g *graphHeader, err error) {
 	p := &pbReader{r: r, size: size, buf: make([]byte, 0, bufSize)}
-	g := &graphHeader{initializers: map[string]bool{}}
+	g = &graphHeader{initializers: map[string]bool{}, facts: facts}
 	sawGraph := false
 	// The ModelProto is the whole file. Every occurrence of the graph field is walked into the
 	// same graphHeader: protobuf merges a repeated singular message field, appending its
 	// repeated fields — which is what accumulating does.
 	err = p.walk(size, func(num uint64, wt int) (bool, error) {
+		if facts != nil && num != fieldModelGraph {
+			return p.modelFact(num, wt, size, facts)
+		}
 		if num != fieldModelGraph || wt != wireBytes {
 			return false, nil
 		}
@@ -127,15 +139,15 @@ func parseONNXHeader(r io.ReaderAt, size int64, bufSize int) (inputs, outputs []
 		return true, p.graph(end, g)
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if !sawGraph {
-		return nil, nil, errors.New("no graph in the model")
+		return nil, nil, nil, errors.New("no graph in the model")
 	}
 	if len(g.outputs) == 0 {
 		// Every valid graph has an output; zero means this was not an ONNX model at all (random
 		// bytes can parse as protobuf). Let the caller fall back to ORT for a real diagnosis.
-		return nil, nil, errors.New("graph declares no outputs")
+		return nil, nil, nil, errors.New("graph declares no outputs")
 	}
 	for _, in := range g.inputs {
 		if !g.initializers[in.name] {
@@ -145,13 +157,14 @@ func parseONNXHeader(r io.ReaderAt, size int64, bufSize int) (inputs, outputs []
 	for _, out := range g.outputs {
 		outputs = append(outputs, out.info())
 	}
-	return inputs, outputs, nil
+	return inputs, outputs, g, nil
 }
 
 // graphHeader accumulates what parseONNXHeader needs from a GraphProto.
 type graphHeader struct {
 	inputs, outputs []valueInfo
 	initializers    map[string]bool
+	facts           *Facts // nil = header only (parseONNXHeader); see parseONNX
 }
 
 // valueInfo is a parsed ValueInfoProto.
@@ -160,6 +173,7 @@ type valueInfo struct {
 	member   uint64 // the TypeProto oneof member set: fieldTypeTensor, fieldTypeSequence, ...; 0 if none
 	elemType int32  // TensorProto.DataType, for a (sparse) tensor
 	dims     []int64
+	params   []string // per dim: its dim_param name ("" when fixed or unnamed); len(params) == len(dims)
 }
 
 // tensor reports whether the value is a tensor or a sparse tensor: the types ORT reports a
@@ -186,12 +200,22 @@ func (p *pbReader) graph(end int64, g *graphHeader) error {
 			return false, nil
 		}
 		switch num {
+		case fieldGraphNode:
+			if g.facts != nil {
+				g.facts.Nodes++
+			}
+			return false, nil // stepped over by its length
 		case fieldGraphInitializer:
 			e, err := p.lenEnd(end)
 			if err != nil {
 				return true, err
 			}
-			name, err := p.tensorName(e)
+			var name string
+			if g.facts != nil {
+				name, err = p.tensorFacts(e, g.facts)
+			} else {
+				name, err = p.tensorName(e)
+			}
 			if err != nil {
 				return true, err
 			}
@@ -226,6 +250,9 @@ func (p *pbReader) graph(end int64, g *graphHeader) error {
 			}
 			if name != "" {
 				g.initializers[name] = true
+			}
+			if g.facts != nil {
+				g.facts.SparseInitializers++
 			}
 			return true, nil
 		case fieldGraphInput, fieldGraphOutput:
@@ -297,7 +324,7 @@ func (p *pbReader) typeProto(end int64, v *valueInfo) error {
 		switch num {
 		case fieldTypeTensor, fieldTypeSparseTensor:
 			if v.member != num {
-				v.elemType, v.dims = 0, nil
+				v.elemType, v.dims, v.params = 0, nil, nil
 			}
 			v.member = num
 			e, err := p.lenEnd(end)
@@ -307,7 +334,7 @@ func (p *pbReader) typeProto(end int64, v *valueInfo) error {
 			return true, p.tensorType(e, v)
 		case fieldTypeSequence, fieldTypeMap, fieldTypeOpaque, fieldTypeOptional:
 			// ORT reports neither a shape nor an element type for these: skip the payload.
-			v.member, v.elemType, v.dims = num, 0, nil
+			v.member, v.elemType, v.dims, v.params = num, 0, nil, nil
 		}
 		return false, nil
 	})
@@ -334,8 +361,9 @@ func (p *pbReader) tensorType(end int64, v *valueInfo) error {
 				if err != nil {
 					return true, err
 				}
-				d, err := p.dim(de)
+				d, param, err := p.dim(de)
 				v.dims = append(v.dims, d)
+				v.params = append(v.params, param)
 				return true, err
 			})
 		}
@@ -343,21 +371,25 @@ func (p *pbReader) tensorType(end int64, v *valueInfo) error {
 	})
 }
 
-// dim parses a TensorShapeProto.Dimension: its dim_value, or -1 for a dim_param or nothing.
-func (p *pbReader) dim(end int64) (int64, error) {
-	d := int64(-1)
+// dim parses a TensorShapeProto.Dimension: its dim_value, or -1 for a dim_param or nothing, and
+// the dim_param's name ("" when it has none).
+func (p *pbReader) dim(end int64) (int64, string, error) {
+	d, param := int64(-1), ""
 	err := p.walk(end, func(num uint64, wt int) (bool, error) {
 		switch {
 		case num == fieldDimValue && wt == wireVarint:
 			x, err := p.varint()
-			d = int64(x)
+			d, param = int64(x), ""
 			return true, err
 		case num == fieldDimParam && wt == wireBytes:
 			d = -1 // oneof: a later dim_param replaces an earlier dim_value
+			s, err := p.str(end)
+			param = s
+			return true, err
 		}
 		return false, nil
 	})
-	return d, err
+	return d, param, err
 }
 
 // pbReader reads protobuf wire format from a ReaderAt through a small window, so stepping over

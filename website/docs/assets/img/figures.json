@@ -83,23 +83,23 @@
         "orig_width": 640,
         "orig_height": 480,
         "scale_x": 0.6,
-        "scale_y": 0.6,
+        "scale_y": 0.8,
         "pad_x": 0,
-        "pad_y": 48
+        "pad_y": 0
       },
       "input_box": [
-        188.1,
-        156.5,
-        181.3,
-        109.5
+        190.7,
+        145.9,
+        179.2,
+        146.0
       ],
       "original_box": [
-        313.5,
-        180.9,
-        302.2,
+        317.8,
+        182.3,
+        298.6,
         182.5
       ],
-      "duration_ms": 17.2,
+      "duration_ms": 28.5,
       "device": "gpu:0"
     },
     {
@@ -121,52 +121,52 @@
       "top5": {
         "efficientnet-b0": [
           [
-            "African elephant",
-            0.4219
+            "tusker",
+            0.4578
           ],
           [
-            "tusker",
-            0.3545
+            "African elephant",
+            0.4537
           ],
           [
             "Indian elephant",
-            0.026
+            0.0236
           ],
           [
             "water buffalo",
-            0.0081
+            0.002
           ],
           [
-            "bison",
-            0.0077
+            "warthog",
+            0.0011
           ]
         ],
         "mobilenet-v3": [
           [
             "tusker",
-            0.5888
+            0.7347
           ],
           [
             "African elephant",
-            0.2615
+            0.2322
           ],
           [
             "Indian elephant",
-            0.107
+            0.0267
           ],
           [
             "water buffalo",
-            0.0291
+            0.0057
           ],
           [
             "bison",
-            0.007
+            0.0004
           ]
         ]
       },
       "duration_ms": {
-        "efficientnet-b0": 5.2,
-        "mobilenet-v3": 4.8
+        "efficientnet-b0": 9.0,
+        "mobilenet-v3": 11.0
       },
       "device": "gpu:0"
     },
@@ -632,8 +632,9 @@
       "figure": "The same photo as each model's input tensor (via /api/preprocess)",
       "model": [
         "rf-detr",
-        "rf-detr-nano",
+        "rf-detr-nano-letterbox",
         "clip",
+        "depth-anything-v2",
         "mobile-sam"
       ],
       "request": {
@@ -668,8 +669,8 @@
           }
         },
         {
-          "model": "rf-detr-nano",
-          "mode": "letterbox",
+          "model": "rf-detr-nano-letterbox",
+          "mode": "letterbox (illustration)",
           "tensor": "input",
           "shape": [
             1,
@@ -702,6 +703,25 @@
             "scale_x": 0.465625,
             "scale_y": 0.4666666666666667,
             "pad_x": -37,
+            "pad_y": 0
+          }
+        },
+        {
+          "model": "depth-anything-v2",
+          "mode": "keep aspect, multiple of 14",
+          "tensor": "pixel_values",
+          "shape": [
+            1,
+            3,
+            518,
+            686
+          ],
+          "meta": {
+            "orig_width": 640,
+            "orig_height": 480,
+            "scale_x": 1.071875,
+            "scale_y": 1.0791666666666666,
+            "pad_x": 0,
             "pad_y": 0
           }
         },

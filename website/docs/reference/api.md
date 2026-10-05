@@ -12,7 +12,7 @@ The server listens on `http://127.0.0.1:11435` by default. Requests are `multipa
 | Method | Path | What it does |
 |---|---|---|
 | `GET` | `/api/health` | `{"status":"ok"}` when the server is up. |
-| `GET` | `/api/models` | Every model: `name`, `task`, `license`, `state` (`not_downloaded`, `available`, `loaded`). |
+| `GET` | `/api/models` | Every model: `name`, `task`, `license`, `state` (`not_downloaded`, `available`, `loaded`), and the client-resize hint `max_useful_side` / `max_useful_short_side` ([below](#get-apimodels)). |
 | `POST` | `/api/load` | `{"model":"rf-detr"}` — load now instead of on first use. |
 | `POST` | `/api/unload` | `{"model":"rf-detr"}` — free its memory. |
 | `POST` | `/api/predict` | Run a model on an image. **The main endpoint.** |
@@ -25,6 +25,39 @@ The server listens on `http://127.0.0.1:11435` by default. Requests are `multipa
 
 Routes are declared in
 [`internal/server/server.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go).
+
+## `GET /api/models`
+
+```json
+[
+  {"name": "rf-detr", "task": "detection", "license": "Apache-2.0", "state": "loaded",
+   "max_useful_side": null, "max_useful_short_side": 1120},
+  {"name": "rf-detr-nano", "task": "detection", "license": "Apache-2.0", "state": "available",
+   "max_useful_side": 768, "max_useful_short_side": null},
+  {"name": "mobile-sam", "task": "segmentation", "license": "Apache-2.0", "state": "available",
+   "max_useful_side": null, "max_useful_short_side": null}
+]
+```
+
+`max_useful_side` and `max_useful_short_side` tell a client how far it may shrink a photo before
+uploading it without changing what the model sees: the model resizes every photo to its own
+input anyway (RF-DETR to 560 × 560), so a 12-megapixel upload mostly carries pixels it throws
+away. At most one is set:
+
+| Field | Bounds the photo's | Models | Value |
+|---|---|---|---|
+| `max_useful_side` | **longer** side | those that fit the photo inside their input (`letterbox`, `top_left_pad`, `long_side`): `rf-detr-nano`, `rt-detr`, `scrfd` | 2 × the larger input side |
+| `max_useful_short_side` | **shorter** side | those that fill their input on both axes (`squash`, `center_crop`): `rf-detr`, `rfdetr-small*`, `grounding-dino`, `clip`, `siglip-image`, `efficientnet-b0`, `mobilenet-v3`, `midas` | 2 × the larger input side |
+| both `null` | — | everything whose output needs the full photo or that crops it itself: SAM family and every model returning masks, `paddle-ocr`, grasp models, `background`, `owlv2_base_patch16` (templates), crop-naming pipelines (`rfdetr-gdino*`, `rfdetr-textalign*`, `gdino-siglip*`), `depth-anything-v2` (`keep_aspect`), text towers | send the photo as it is |
+
+The shorter side is the one bounded for fill modes because they resample each axis on its own: a
+wide panorama shrunk by its longer side would lose rows the model then stretches back. With a
+region of interest (`roi`) the bound applies to the region. A manifest overrides the hint with
+[`runtime.max_useful_side`](manifest.md) (`0` = never shrink). Both keys are always present;
+a server that predates them sends neither, which clients read as "no hint". The
+[Python and JavaScript SDKs](../clients/python.md#client-side-resizing-on-by-default) apply the
+hint by default (on a server on the same machine only when it at least halves the photo's
+sides) and map every result back to the original photo's pixels.
 
 ## `POST /api/predict`
 

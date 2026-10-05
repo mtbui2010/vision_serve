@@ -225,7 +225,7 @@ is exactly why each `engine.Session` pins its worker with `runtime.LockOSThread(
     scheduler sends a signal (`SIGURG`) to preempt long-running goroutines; arriving during a C
     call it aborted the process under load. `main()` therefore re-executes the binary once with
     `GODEBUG=asyncpreemptoff=1`, which turns that preemption signal off
-    ([main.go#L42-L65](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L42-L65)).
+    ([main.go#L41-L65](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L41-L65)).
     You do not need to do anything about it; it explains the odd re-exec you may see in a
     debugger.
 
@@ -325,7 +325,7 @@ for the Jetson target:
 [ci.yml#L78-L86 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/.github/workflows/ci.yml#L78-L86)
 
 The edge Docker image does the same in its build stage
-([deploy/Dockerfile.edge#L41-L61](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile.edge#L41-L61)):
+([deploy/Dockerfile.edge#L52-L72](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile.edge#L52-L72)):
 `CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build ...`, then copies
 the binary into an arm64 image that also contains `libonnxruntime.so`. The stage installs
 `libc6-dev-arm64-cross` (the arm64 C library headers) next to the compiler: with

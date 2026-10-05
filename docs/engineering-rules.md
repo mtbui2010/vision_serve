@@ -48,7 +48,7 @@ CLAUDE.md carries the one-line version; this file is the "why" and "where".
 
 | Rule | The bug it prevents | Guard |
 |---|---|---|
-| Any rule implemented in both Go and Python (preprocessing, manifest parsing, licence allowlist) has **one** shared fixture set and a sync test on both sides. | Python read YAML booleans, null keys and short normalisation lists differently from Go. | `test_spec_from_manifest_reads_yaml_like_go`, `test_odd_legacy_normalize_matches_go`, `internal/vision/preprocess/sync_test.go` |
+| Any rule implemented in both Go and Python (preprocessing, manifest parsing, licence allowlist) has **one** shared fixture set and a sync test on both sides. | Python read YAML booleans, null keys and short normalisation lists differently from Go; `check` read SCRFD's legacy `letterbox: true` as a centred letterbox in 0..1 units (Go: top-left pad, 0..255) and reported a false FAIL. | `test_spec_from_manifest_reads_yaml_like_go`, `test_odd_legacy_normalize_matches_go`, `internal/vision/preprocess/sync_test.go`, `TestArchResolveSyncCorpus` / `test_arch_resolution_corpus` |
 | One code path per concern: a request option resolved by one endpoint is resolved by the shared helper for all. | `/api/preprocess` did not resolve `template_name` like `/api/predict`. | `TestPreprocessResolvesTemplateName` |
 | Never write a test that pins today's output without a reference; a test must encode the *correct* behaviour. | A Python test pinned the Go/Python divergence itself. | review |
 
@@ -65,7 +65,7 @@ CLAUDE.md carries the one-line version; this file is the "why" and "where".
 | Rule | The bug it prevents |
 |---|---|
 | Any change of execution provider, precision, thread/kernel settings or preprocessing re-measures **accuracy** (held-out protocol), not only latency. A quoted number records the EP it was measured on. | TensorRT was 1.5× faster and 6.8 mAP worse; it sat first in every chain. A preprocessing mismatch cost RF-DETR ~2 mAP silently. |
-| A change that moves outputs or quoted numbers is **opt-in** until the numbers are re-measured and updated (`VISIONSERVE_DETERMINISTIC`, `--tensorrt`, SDK `base64_arrays`). | Defaults that silently changed results or return types. |
+| A change that moves outputs or quoted numbers is **opt-in** until the numbers are re-measured and updated (`VISIONSERVE_DETERMINISTIC`, `--tensorrt`, SDK `base64_arrays`). **Exception, per user decision 2026-10-05:** the SDKs' client-side resize + JPEG upload is on by default (`resize="auto"`, `jpeg=True`); its accuracy cost was measured before it shipped and is quoted in `website/docs/clients/python.md` ("Client-side resizing"), and `resize="off"` restores the old uploads exactly. | Defaults that silently changed results or return types. |
 | Measure end to end (whole request, peak RSS) before optimising; find the real cause first. | Automask was slow from ORT thread oversubscription (4 pooled sessions × all cores spinning), not from the code the proposal targeted. |
 | Size thread pools explicitly: a pooled or small session must not get ORT's default spinning pool. | Pools spun 4× the cores; a 1 ms head session made its detector 3× slower on CPU. |
 | Golden/equivalence checks run on CPU (deterministic). GPU comparisons use a tolerance or `VISIONSERVE_DETERMINISTIC=1`. | GPU reductions flip last bits depending on load; masks moved by boundary pixels. |

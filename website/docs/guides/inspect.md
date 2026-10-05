@@ -1,10 +1,89 @@
-# Inspect and verify a model
+# Inspect and verify a model: deep dive
+
+!!! info "This is a deep dive"
+    The short versions, one command each:
+    [See what a model takes and returns](see-a-model.md) (`visionserve inspect`),
+    [Check it behaves like training](check-training.md) (`visionserve check`) and
+    [My served model is worse than in training](worse-than-training.md) (the checklist). This page
+    explains what those commands check, shows how to do the same by hand, and keeps the
+    measurements behind the defaults.
 
 A served model can be worse than the same model in your training notebook and never say so. It
 loads, it answers, the boxes look plausible. The cause is almost always one of three things: the
 model file is not what the manifest says, the photo is prepared differently, or the raw outputs
 are decoded differently. This page shows how to look at each of them, with commands and outputs
 from real runs on this repository's models.
+
+## Quick way: visionserve check
+
+One command runs the checks of this page on a model you already serve and tells you, in plain
+words, whether it behaves like your training pipeline:
+
+```console
+$ visionserve serve --models ./models          # in another terminal: check needs a running server
+$ visionserve check rf-detr --images ./photos [--labels val.json] [--checkpoint best.pth] [--report check.html]
+```
+
+It runs in the converter image, like `visionserve convert` (Docker), and talks to the server at
+`--server` (default `http://localhost:11435`). With no server it stops with exit code 2 and the
+`visionserve serve` command to start one. What it checks:
+
+| Check | Runs when | Compares |
+|---|---|---|
+| Preprocessing (B1) | always | `/api/preprocess` with a reference preprocessing of your `--images`: your `--reference SCRIPT.py`, else the `--checkpoint`'s own pipeline, else the architecture's known recipe (RF-DETR: squash + ImageNet mean/std, what the `rfdetr` package does), else what the manifest declares, read the way its architecture reads it (SCRFD's legacy `letterbox: true` is its top-left pad in 0..255 units; a SAM-family or PaddleOCR model, whose export fixes the preprocessing, is skipped) — then it checks only the server's code, and says so |
+| Outputs (B2) | `--checkpoint` or `--reference` | `/api/predict` with the original model on the same photos |
+| Accuracy (C) | `--labels` | mAP (COCO json) or top-1 (folder per class, or a CSV `image,label`); served vs the original model, or the served number alone |
+
+The first line is the verdict, then one row per check with the likely cause and the fix of each
+FAIL or WARN (a fix never asks for a value the manifest already has: then it says how the
+architecture serves that value instead), next steps, and the detailed tier table of section 3. A real run (CPU, 5 COCO
+photos) on a copy of the `rf-detr` manifest with `letterbox: true`, the mistake of
+[section 3](#tier-b1-catching-a-preprocessing-mistake); the scratch registry's path is shortened
+to `…/reg`:
+
+```console
+$ visionserve check rf-detr-lb --images ./photos --models ./reg --server http://127.0.0.1:11720 --report check.html
+FAIL: rf-detr-lb does not see photos the way it was trained: the server letterboxes (shrinks the photo and adds bars) while training stretches the whole photo to 560x560.
+
+Summary: rf-detr-lb (detection, rf-detr) on http://127.0.0.1:11720, 5 photo(s) from …/photos
+  check                        status  what we found
+  Preprocessing (B1)           FAIL    The model sees a different picture than in training: average
+                                       difference 59.0 gray levels (out of 255) over 5 photos, where
+                                       more than 8 costs accuracy. Reference: the rfdetr package's
+                                       preprocessing.
+                                       Likely cause: the server letterboxes (shrinks the photo and
+                                         adds bars) while training stretches the whole photo to
+                                         560x560.
+                                       Fix: in …/reg/rf-detr-lb/manifest.yaml set
+                                         `input.letterbox: false` (unless the model really was trained
+                                         letterboxed).
+  Outputs vs original (B2)     SKIP    Not compared: no reference model was given. Pass --checkpoint
+                                       PATH (the checkpoint the ONNX was exported from) or
+                                       --reference SCRIPT.py to compare the served outputs with the
+                                       original model.
+  Accuracy on your labels (C)  SKIP    Not measured: pass --labels (a COCO json for detection; a
+                                       folder per class or a CSV `image,label` for classification).
+
+Next steps
+  1. In …/reg/rf-detr-lb/manifest.yaml set `input.letterbox: false` (unless the model really was trained letterboxed).
+  2. Restart `visionserve serve` (it reads a manifest once), then re-run this check.
+  ...
+```
+
+The correct `rf-detr` manifest on the same photos gives `PASS: rf-detr behaves like its training
+pipeline on 5 photos (preprocessing within 0.4 gray levels)`, and with `--labels` on 200 COCO
+val2017 photos it adds the served mAP, 47.6. With `--checkpoint`, B2 and C compare against the
+original model. This check is how the `rf-detr-nano` manifest was found wrong: on the official
+`rf-detr-nano.pth` and 200 COCO val2017 photos (CPU), the manifest as shipped until 5 October 2026
+letterboxed and failed: B1 46.6 gray levels, B2 31 of 36 boxes matched, C mAP 40.92 served against
+44.09 for `rfdetr` itself. With `letterbox: false`, what it ships now, it passes all three: 0.4 gray
+levels, 38 of 38 boxes, mAP 43.80 against 44.09.
+
+`--report check.html` writes the same verdict as one self-contained page (no network access when
+opened): the summary, what the model sees next to the reference with a heatmap of the difference,
+the boxes of both models on the photos where they disagree most, and the details. `--json` prints
+one object, `{"verdict", "reason", "summary", "details"}`, for scripts. The exit code is 0 for
+PASS or WARN, 1 for FAIL, 2 for a usage or setup error.
 
 ```mermaid
 flowchart LR
@@ -27,6 +106,46 @@ checks for you; section 5 is a short checklist.
     Every output on this page was produced on the development machine on 5 October 2026: a
     VisionServe server on CPU (ONNX Runtime 1.26) serving copies of the shipped manifests, and
     the Python package from `clients/python`. Long outputs are trimmed; nothing else is edited.
+
+## Quick way: `visionserve inspect`
+
+One command does the checks of sections 1 and 2 for you, offline, without loading the model
+into ONNX Runtime. The first line is the answer: `PASS`, `WARN` or `FAIL`, with the reason.
+
+```console
+$ visionserve inspect efficientnet-b0
+PASS: efficientnet-b0 is ready to serve: its preprocessing makes a [1,3,224,224] tensor and model.onnx accepts it
+
+  Model           efficientnet-b0
+  Task            classification
+  Architecture    efficientnet
+  Licence         Apache-2.0 (allowed)
+  Files           1 ONNX file, 20.2 MiB in all (with labels and side files)
+  Parameters      5.27 M
+  Input           photo → squash 224×224, ImageNet mean/std → tensor [1,3,224,224]
+  Fits the graph  yes (model.onnx input "x" is [1,3,224,224])
+  Outputs         648 [1,1000]
+  Runs on         cuda → cpu (first one available on this machine)
+...
+```
+
+Below the summary it lists the files (with their `sha256` pin status), each ONNX file's inputs,
+outputs, opset and parameter count, the preprocessing the model's code applies, and the
+execution providers, sessions and threads a load would use.
+
+- `--image photo.jpg` runs the model's real preprocessing on your photo (what `/api/preprocess`
+  returns, without a server) and writes `<name>-input.png`: the tensor turned back into a
+  picture, so you see exactly what the model sees.
+- It also takes a folder or a bare `.onnx` file. A file without a manifest gets the
+  `visionserve import` command that makes it servable:
+  `visionserve import model.onnx --name my-model --task classification --license MIT`. Import
+  reads the input size and layout from the file, checks the outputs against the decoder of the
+  task, prints every value it had to assume (resize, mean/std), and installs the model.
+- `--json` prints one JSON object (`verdict`, `reason`, `summary`, `details`); `--report r.html`
+  writes a self-contained HTML page. Exit status: 0 for PASS or WARN, 1 for FAIL, 2 for a usage
+  error.
+
+The sections below show what it reads and how to check the same by hand.
 
 ## 1. Inspect the model file
 
@@ -150,21 +269,25 @@ and compares the tensor with the input shape in the file header:
 ```go title="internal/lifecycle/inputshape.go"
 	produced, ok := probeShape(pre)
 	if !ok {
-		return "the probes could not be preprocessed", nil
+		fit.Skipped = "the probes could not be preprocessed"
+		return fit
 	}
+	fit.Produced = produced
 	if !shapeFits(produced, graph.Shape) {
 		spec, _ := man.PreprocessSpec()
-		return "", &InputShapeError{
+		fit.Err = &InputShapeError{
 			Model: man.Name, File: file, Input: graph.Name,
 			Graph: graph.Shape, Produced: produced,
 			Width: spec.Width, Height: spec.Height, Layout: string(spec.Layout),
 		}
 	}
-	return "", nil
+	return fit
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/inputshape.go#L198-L211)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/inputshape.go#L221-L236)
+
+`visionserve inspect` runs this same function and prints what it compared (`Fits the graph`).
 
 It compares only what is fixed on both sides. A dimension the file declares dynamic (a name
 instead of a number) is not judged, and neither is one that changes with the photo
@@ -406,7 +529,8 @@ The VisionServe server always feeds RGB, so a BGR mismatch is fixed on the train
 re-exporting; the other two are one-line manifest fixes.
 
 !!! tip "Run the tiers on a model you already serve"
-    The converter runs the tiers as part of a conversion. The functions behind them
+    The converter runs the tiers as part of a conversion; `visionserve check`
+    ([above](#quick-way-visionserve-check)) runs them on any installed model. The functions behind them
     (`tier_b1`, `tier_b2`, `tier_c` in `visionserve.convert.verify` / `.evaluate`) also work on
     any installed model; the `inspect` step of
     [`website/tools/figures.py`](https://github.com/mtbui2010/vision_serve/blob/main/website/tools/figures.py),

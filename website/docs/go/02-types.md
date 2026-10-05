@@ -78,7 +78,7 @@ serves every task without sending empty `"masks": []` to a detection client.
 The manifest parser uses the same trick with `yaml:"..."` tags. Nested YAML maps become
 nested structs, which can be written inline:
 
-```go title="internal/registry/manifest.go (lines 123-242, trimmed)"
+```go title="internal/registry/manifest.go (lines 123-247, trimmed)"
 type Manifest struct {
 	Name      string `yaml:"name"`
 	Task      string `yaml:"task"`
@@ -100,7 +100,7 @@ type Manifest struct {
 }
 ```
 
-[manifest.go#L123-L242 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L123-L242)
+[manifest.go#L123-L247 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L123-L247)
 
 So this manifest fragment fills `m.Input.Normalize.Mean`:
 
@@ -114,7 +114,7 @@ input:
 Reading the file is then two calls. Note `&m`: the decoder needs the *address* of `m` so
 it can write into it (more on pointers below):
 
-```go title="internal/registry/manifest.go (lines 250-259)"
+```go title="internal/registry/manifest.go (lines 255-264)"
 // LoadManifest reads + parses + validates a manifest.yaml file.
 func LoadManifest(path string) (*Manifest, error) {
 	raw, err := os.ReadFile(path)
@@ -127,7 +127,7 @@ func LoadManifest(path string) (*Manifest, error) {
 	}
 ```
 
-[manifest.go#L250-L259 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L250-L259)
+[manifest.go#L255-L264 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L255-L264)
 
 !!! tip "Unknown YAML keys are ignored, with a warning"
     `yaml.Unmarshal` does not fail on a misspelt key (`idle_unload_second:`); it simply leaves
@@ -136,7 +136,7 @@ func LoadManifest(path string) (*Manifest, error) {
     `unknown key(s) ignored, check for a typo: runtime.idle_unload_second (line 14)`. When a
     manifest "does nothing", look for that warning, or compare its keys with the tags above. The
     tag `yaml:"-"` (used on `dir` at
-    [L232-L233](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L232-L233))
+    [L237-L238](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L237-L238))
     means "never read this field from YAML".
 
 ## Zero values: empty means default
@@ -144,7 +144,7 @@ func LoadManifest(path string) (*Manifest, error) {
 Every Go type has a zero value, and a struct's zero value has every field at zero. The
 project leans on this deliberately. The preprocessing spec says so in its doc comment:
 
-```go title="internal/vision/preprocess/spec.go (lines 98-139, trimmed)"
+```go title="internal/vision/preprocess/spec.go (lines 99-143, trimmed)"
 // Spec declares one model's preprocessing. The zero value of each field is the common case.
 // ...
 type Spec struct {
@@ -166,7 +166,7 @@ type Spec struct {
 }
 ```
 
-[spec.go#L98-L139 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L98-L139)
+[spec.go#L99-L143 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L99-L143)
 
 `NoRescale bool` is named so that its zero value (`false`) is the usual case (divide by 255).
 A manifest that does not mention it gets the right behaviour without a default value
@@ -178,14 +178,14 @@ anywhere. In Python you would write `no_rescale: bool = False`; in Go you choose
 You can define a new type on top of a basic one and attach methods to it. The resize
 mode is a string, but a *typed* one:
 
-```go title="internal/vision/preprocess/spec.go (lines 24-31, 59, 64-66, trimmed)"
+```go title="internal/vision/preprocess/spec.go (lines 24-31, 60, 65-67, trimmed)"
 // Mode is how an image is brought to the model's input size. Only modes that a served
 // architecture really uses exist; each one reproduces its upstream recipe exactly.
 type Mode string
 
 const (
 	// Squash resizes to exactly Width×Height; the aspect ratio is not kept (RF-DETR, MiDaS,
-	// EfficientNet, SAM2, …). Default resample: bilinear.
+	// RT-DETR, SAM2, …). Default resample: bilinear.
 	Squash Mode = "squash"
 	// ...
 )
@@ -196,7 +196,7 @@ func (m Mode) Pads() bool { return m == Letterbox || m == TopLeftPad || m == Lon
 ```
 
 [spec.go#L24-L31](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L24-L31),
-[#L64-L66](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L64-L66)
+[#L65-L67](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L65-L67)
 
 `(m Mode)` before the name is the **receiver**: Go's `self`, but written explicitly and
 named by you (usually one or two letters). You call it as `spec.Resize.Pads()`. A function
@@ -206,7 +206,7 @@ bugs a type checker in Python would only catch with `Literal[...]` or an `Enum`.
 A named type can even control how it is decoded. `wholeNumber` refuses `1.5` where an
 integer is expected, because yaml.v3 would otherwise truncate it silently:
 
-```go title="internal/registry/manifest.go (lines 426-440)"
+```go title="internal/registry/manifest.go (lines 434-448)"
 // wholeNumber is an int that refuses a YAML float: yaml.v3 truncates `1.5` into an int field
 // silently, and a thread count of 1 written as 1.5 should be an error, not a guess.
 type wholeNumber int
@@ -224,7 +224,7 @@ func (w *wholeNumber) UnmarshalYAML(n *yaml.Node) error {
 }
 ```
 
-[manifest.go#L426-L440 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L426-L440)
+[manifest.go#L434-L448 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L434-L448)
 
 This is the Go equivalent of a pydantic validator. yaml.v3 sees the method and calls it.
 
@@ -242,7 +242,7 @@ In Python every object is passed by reference, so `self.license = ...` always ch
 original. In Go a value receiver changes only its copy. `validate` must write the
 canonical license back, so it takes a pointer:
 
-```go title="internal/registry/manifest.go (lines 285-291)"
+```go title="internal/registry/manifest.go (lines 290-296)"
 	// License: required + must be in the permissive allowlist (case-insensitive match,
 	// stored back in canonical SPDX form so later == comparisons see one spelling).
 	canonLicense, ok := canonicalLicense(m.License)
@@ -252,7 +252,7 @@ canonical license back, so it takes a pointer:
 	m.License = canonLicense
 ```
 
-[manifest.go#L285-L291 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L285-L291)
+[manifest.go#L290-L296 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L290-L296)
 
 `preprocess.Spec`, `preprocess.Meta` and `engine.Tensor` use value receivers: they are
 plain data, and `Tensor` only holds slice *headers* (pointer + length), so copying it does
@@ -286,7 +286,7 @@ type Request struct {
 [request.go#L48-L52 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L48-L52)
 
 So the handler can write `q.Model` and `q.Encoding`
-([handlers.go#L164-L165](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L164-L165))
+([handlers.go#L166-L167](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L166-L167))
 although those fields belong to `api.PredictJSONRequest`.
 
 The tests use embedding to build a variant of a fake model that adds one method:
