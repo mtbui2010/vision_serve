@@ -106,7 +106,7 @@ lifecycle manager and the engine are never edited to add a model.
 	_ "visionserve/internal/models/textalign"
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L13-L32)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L12-L31)
 
 Which network file to load, how to preprocess for it, which hardware to prefer and under which
 license it is distributed is **data**, written in the model's `manifest.yaml`, not code.

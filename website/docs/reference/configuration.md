@@ -19,6 +19,14 @@ visionserve pull    MODEL [--models DIR] [--force]
 visionserve ps      [--addr ...]               # models loaded in a running server
 visionserve rm      MODEL [--addr ...]         # unload a model from a running server
 visionserve convert ...                        # convert a checkpoint to ONNX (Docker image)
+visionserve inspect MODEL|FILE.onnx|DIR [--image PHOTO [--image-out F] [--prompt T]]
+                    [--models DIR] [--tensorrt] [--json] [--report r.html]
+                                               # model card: PASS/WARN/FAIL, files, ONNX I/O,
+                                               # preprocessing, runtime (nothing loaded)
+visionserve import  FILE.onnx --name N --task classification|detection|depth --license ID
+                    [--labels F] [--input WxH] [--resize MODE] [--mean a,b,c --std a,b,c]
+                    [--layout NCHW|NHWC] [--force] [--dry-run] [--models DIR] [--json]
+                    [--report r.html]          # write a manifest for an ONNX file + install it
 visionserve check   MODEL --images DIR [--labels FILE] [--reference SCRIPT.py | --checkpoint PATH]
                     [--server URL] [--models DIR] [--report FILE.html] [--json]
                                                # does the served model behave like training? (Docker image)
@@ -44,6 +52,11 @@ Two stand in for uploads: `--depth FILE` is a raw little-endian depth map (`uint
 `--depth-dtype float32`; the image's size unless `--depth-width`/`--depth-height`), and
 `--template IMG` (repeat it for several images) gives an `instance_detection` model its example
 images directly, since there is no server to register a `template_name` with.
+
+`inspect` and `import` share one output format: the first line is `PASS|WARN|FAIL: <reason>`,
+then a short summary and the details; `--json` prints one object `{verdict, reason, summary,
+details}` and nothing else; `--report` writes a self-contained HTML file. They exit 0 on PASS or
+WARN, 1 on FAIL, 2 on a usage error. See [Inspect and verify a model](../guides/inspect.md).
 
 The source of truth for flags is `visionserve help` and
 [`internal/cli`](https://github.com/mtbui2010/vision_serve/tree/main/internal/cli).

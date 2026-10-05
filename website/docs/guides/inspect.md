@@ -97,6 +97,46 @@ checks for you; section 5 is a short checklist.
     VisionServe server on CPU (ONNX Runtime 1.26) serving copies of the shipped manifests, and
     the Python package from `clients/python`. Long outputs are trimmed; nothing else is edited.
 
+## Quick way: `visionserve inspect`
+
+One command does the checks of sections 1 and 2 for you, offline, without loading the model
+into ONNX Runtime. The first line is the answer: `PASS`, `WARN` or `FAIL`, with the reason.
+
+```console
+$ visionserve inspect efficientnet-b0
+PASS: efficientnet-b0 is ready to serve: its preprocessing makes a [1,3,224,224] tensor and model.onnx accepts it
+
+  Model           efficientnet-b0
+  Task            classification
+  Architecture    efficientnet
+  Licence         Apache-2.0 (allowed)
+  Files           1 ONNX file, 20.2 MiB in all (with labels and side files)
+  Parameters      5.27 M
+  Input           photo → squash 224×224, ImageNet mean/std → tensor [1,3,224,224]
+  Fits the graph  yes (model.onnx input "x" is [1,3,224,224])
+  Outputs         648 [1,1000]
+  Runs on         cuda → cpu (first one available on this machine)
+...
+```
+
+Below the summary it lists the files (with their `sha256` pin status), each ONNX file's inputs,
+outputs, opset and parameter count, the preprocessing the model's code applies, and the
+execution providers, sessions and threads a load would use.
+
+- `--image photo.jpg` runs the model's real preprocessing on your photo (what `/api/preprocess`
+  returns, without a server) and writes `<name>-input.png`: the tensor turned back into a
+  picture, so you see exactly what the model sees.
+- It also takes a folder or a bare `.onnx` file. A file without a manifest gets the
+  `visionserve import` command that makes it servable:
+  `visionserve import model.onnx --name my-model --task classification --license MIT`. Import
+  reads the input size and layout from the file, checks the outputs against the decoder of the
+  task, prints every value it had to assume (resize, mean/std), and installs the model.
+- `--json` prints one JSON object (`verdict`, `reason`, `summary`, `details`); `--report r.html`
+  writes a self-contained HTML page. Exit status: 0 for PASS or WARN, 1 for FAIL, 2 for a usage
+  error.
+
+The sections below show what it reads and how to check the same by hand.
+
 ## 1. Inspect the model file
 
 An ONNX file declares the name, element type and shape of each input and output. A dimension is
@@ -219,21 +259,25 @@ and compares the tensor with the input shape in the file header:
 ```go title="internal/lifecycle/inputshape.go"
 	produced, ok := probeShape(pre)
 	if !ok {
-		return "the probes could not be preprocessed", nil
+		fit.Skipped = "the probes could not be preprocessed"
+		return fit
 	}
+	fit.Produced = produced
 	if !shapeFits(produced, graph.Shape) {
 		spec, _ := man.PreprocessSpec()
-		return "", &InputShapeError{
+		fit.Err = &InputShapeError{
 			Model: man.Name, File: file, Input: graph.Name,
 			Graph: graph.Shape, Produced: produced,
 			Width: spec.Width, Height: spec.Height, Layout: string(spec.Layout),
 		}
 	}
-	return "", nil
+	return fit
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/inputshape.go#L198-L211)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/inputshape.go#L221-L236)
+
+`visionserve inspect` runs this same function and prints what it compared (`Fits the graph`).
 
 It compares only what is fixed on both sides. A dimension the file declares dynamic (a name
 instead of a number) is not judged, and neither is one that changes with the photo

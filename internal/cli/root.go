@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"visionserve/internal/cli/clireport"
 	"visionserve/internal/engine"
 )
 
@@ -29,6 +30,10 @@ Usage:
   visionserve check <model> --images DIR
                                     does the served model behave like your training pipeline? verdict +
                                     likely causes (needs a running server; see: visionserve check --help)
+  visionserve inspect <model>       model card: ready to serve or not (PASS/WARN/FAIL), files, licence, ONNX
+                                    inputs/outputs, preprocessing, runtime; also takes a .onnx file or a folder
+  visionserve import <file.onnx>    make an existing ONNX file servable: write its manifest + install it
+                                    (--name --task --license required; see: visionserve import --help)
   visionserve version               print the version
 
 Common flags:
@@ -76,6 +81,10 @@ func Execute(args []string) error {
 		return runConvert(args[2:])
 	case "check":
 		return runCheck(args[2:])
+	case "inspect":
+		return runInspect(args[2:])
+	case "import":
+		return runImport(args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("visionserve %s\n", Version)
 		for _, line := range epStatus() {
@@ -90,6 +99,19 @@ func Execute(args []string) error {
 		fmt.Print(usage)
 		return fmt.Errorf("unknown command: %s", args[1])
 	}
+}
+
+// ExitCode is the process exit code for an error returned by Execute: 0 for nil, 1 for a failure,
+// and for inspect/import (clireport) 1 for a FAIL verdict and 2 for a usage or setup error.
+func ExitCode(err error) int { return clireport.ExitCode(err) }
+
+// ErrorText is the line main prints for an error returned by Execute: "error: <err>\n", or ""
+// when the command already reported it (a printed FAIL report).
+func ErrorText(err error) string {
+	if err == nil || clireport.Reported(err) || err.Error() == "" { // "" = the command already said it
+		return ""
+	}
+	return fmt.Sprintln("error:", err)
 }
 
 // tensorRTUsage is the help text of the --tensorrt flag (serve and run).

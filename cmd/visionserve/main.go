@@ -2,7 +2,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -35,16 +34,8 @@ import (
 func main() {
 	ensureSignalSafe()
 	if err := cli.Execute(os.Args); err != nil {
-		// A command with its own exit status (check: 1 FAIL, 2 setup error) and maybe nothing to add.
-		var coded interface{ ExitCode() int }
-		if errors.As(err, &coded) {
-			if msg := err.Error(); msg != "" {
-				fmt.Fprintln(os.Stderr, "error:", msg)
-			}
-			os.Exit(coded.ExitCode())
-		}
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		fmt.Fprint(os.Stderr, cli.ErrorText(err)) // "error: ...\n"; "" after a printed FAIL report
+		os.Exit(cli.ExitCode(err))                // 1, or inspect/import's 1 = FAIL, 2 = usage error
 	}
 }
 
