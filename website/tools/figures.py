@@ -30,7 +30,10 @@ Usage
    registry. Use a scratch registry holding a copy of models/rf-detr: the step writes two copies
    of its manifest with one preprocessing mistake each (letterbox, mean/std), runs the
    converter's tiers B1 / B2 / C against them (Python package clients/python/visionserve/convert,
-   plus onnxruntime, pyyaml and pycocotools), prints the report and removes the copies.
+   plus onnxruntime, pyyaml and pycocotools), prints the report and removes the copies. The
+   `preprocessing` step uses the same directory for its letterbox panel: it draws a temporary
+   copy of models/rf-detr-nano with `letterbox: true` (labelled "illustration"; rf-detr-nano
+   itself squashes, as RF-DETR is trained) and removes it afterwards.
 
 Photos: only COCO val2017 images whose Flickr license is "Attribution License" (CC BY 2.0)
 are used (PHOTOS below); each figure credits its photo. Durations are the server's own
@@ -729,17 +732,37 @@ class Builder:
             t = (t * np.array(std) + np.array(mean)) * 255.0
         return Image.fromarray(t.clip(0, 255).astype(np.uint8)), shape
 
+    # The letterbox panel used rf-detr-nano, which letterboxed until 2026-10-05 although RF-DETR is
+    # trained squashed (BUGS_TO_FIX.md #1, -3.16 mAP). Rather than show a model served wrongly, the
+    # panel is a temporary copy of rf-detr-nano with letterbox: true (needs --inspect-models), and
+    # the figure says it is an illustration.
+    LETTERBOX_COPY = {"rf-detr-nano-letterbox": [("\n  letterbox: false\n", "\n  letterbox: true\n")]}
+
     def preprocessing(self):
         pid = 177015
         img, raw = self.photo(pid)
+        made = []
+        if self.args.inspect_models and self.srv.has("rf-detr-nano"):
+            made = self._scratch_copies("rf-detr-nano", self.LETTERBOX_COPY)
+        try:
+            self._preprocessing(pid, img, raw, {d.name for d in made})
+        finally:
+            self._remove_copies(made)
+
+    def _preprocessing(self, pid, img, raw, copies):
         modes = [("rf-detr", "stretch (squash) resize", "imagenet"),
-                 ("rf-detr-nano", "letterbox", "imagenet"),
+                 ("rf-detr-nano-letterbox", "letterbox (illustration)", "imagenet"),
                  ("clip", "center crop", "clip"),
                  ("depth-anything-v2", "keep aspect, multiple of 14", "imagenet"),
                  ("mobile-sam", "longest side = 1024", None)]
         panels, info = [], []
         for model, mode, norm in modes:
-            if not self.srv.has(model):
+            if model in self.LETTERBOX_COPY and model not in copies:
+                self.skipped.append(f"{model} (preprocessing panel '{mode}': needs --inspect-models and rf-detr-nano)")
+                print(f"  skip panel {mode}: the letterbox copy needs --inspect-models (a scratch registry) "
+                      "holding rf-detr-nano")
+                continue
+            if model not in copies and not self.srv.has(model):
                 self.skipped.append(f"{model} (preprocessing panel '{mode}')")
                 print(f"  skip panel {mode}: {model} not installed")
                 continue
@@ -775,6 +798,7 @@ class Builder:
     # -- 14. box mapped back to original coordinates --------------------------------------------
 
     def box_mapping(self):
+        # rf-detr-nano squashes (as trained): scale_x != scale_y on a non-square photo, no padding.
         model = "rf-detr-nano"
         if not self.need(model):
             return
@@ -799,7 +823,8 @@ class Builder:
         db.rectangle([x, y, x + w, y + h], outline=c, width=3)
         fig, axes = plt.subplots(1, 2, figsize=(8, 3.85), gridspec_kw={"width_ratios": [384, 640 * 384 / 480]})
         axes[0].imshow(a)
-        axes[0].set_title(f"model input {shape[2]}x{shape[3]} (letterbox)", fontsize=10, color=INK, loc="left")
+        mode = "letterbox" if px or py else "squash"
+        axes[0].set_title(f"model input {shape[2]}x{shape[3]} ({mode})", fontsize=10, color=INK, loc="left")
         axes[1].imshow(b)
         axes[1].set_title(f"original image {meta['orig_width']}x{meta['orig_height']}", fontsize=10, color=INK, loc="left")
         for ax in axes:
@@ -811,8 +836,9 @@ class Builder:
                            fontsize=9.5, color=INK)
         axes[1].set_xlabel(f"original space  bbox = [{x:.0f}, {y:.0f}, {w:.0f}, {h:.0f}]   ({det['class']} {det['conf']:.2f})",
                            fontsize=9.5, color=INK)
+        scale = f"scale = {sx:g}" if sx == sy else f"scale_x = {sx:g}, scale_y = {sy:g}"
         fig.text(0.5, 0.025,
-                 f"meta: scale = {sx:g}, pad_x = {px}, pad_y = {py};   original = (input - pad) / scale",
+                 f"meta: {scale}, pad_x = {px}, pad_y = {py};   original = (input - pad) / scale",
                  ha="center", fontsize=9.5, color=INK2)
         fig.subplots_adjust(left=0.01, right=0.99, top=0.92, bottom=0.17, wspace=0.04)
         self._save_chart(fig, f"bbox-mapping-{pid}.jpg",
@@ -868,22 +894,27 @@ class Builder:
     }
 
     def _inspect_registry(self):
-        """Write the wrong copies next to models/rf-detr in the server's registry (the server picks
-        new names up on first use). Returns the directories written, for removal afterwards."""
+        """Write the wrong copies next to models/rf-detr in the server's registry."""
+        return self._scratch_copies("rf-detr", self.INSPECT_WRONG)
+
+    def _scratch_copies(self, src_name, copies):
+        """Write copies of models/<src_name>'s manifest, one edit list {name: [(old, new), ...]}
+        each, into the server's registry (--inspect-models; the server picks new names up on first
+        use), weights symlinked. Returns the directories written, for _remove_copies."""
         import yaml
         root = Path(self.args.inspect_models)
-        src = root / "rf-detr"
+        src = root / src_name
         text = (src / "manifest.yaml").read_text()
         weights = src / yaml.safe_load(text)["model_file"]
         made = []
-        for name, subs in self.INSPECT_WRONG.items():
+        for name, subs in copies.items():
             d = root / name
             if d.exists():
-                raise SystemExit(f"{d} exists; remove it first (the inspect step writes and removes it)")
-            t = text.replace("name: rf-detr\n", f"name: {name}\n")
+                raise SystemExit(f"{d} exists; remove it first (this script writes and removes it)")
+            t = text.replace(f"name: {src_name}\n", f"name: {name}\n")
             for a, b in subs:
                 if a not in t:
-                    raise SystemExit(f"{src}/manifest.yaml has no {a!r}; update INSPECT_WRONG")
+                    raise SystemExit(f"{src}/manifest.yaml has no {a!r}; update the copy's edits")
                 t = t.replace(a, b)
             d.mkdir()
             made.append(d)
@@ -893,6 +924,13 @@ class Builder:
                     (d / f.name).write_bytes(f.read_bytes())
             os.symlink(weights.resolve(), d / weights.name)
         return made
+
+    @staticmethod
+    def _remove_copies(made):
+        for d in made:
+            for f in d.iterdir():
+                f.unlink()
+            d.rmdir()
 
     def _inspect_bundle(self, name):
         """A converter Bundle describing models/<name> as the server reads it."""
@@ -917,10 +955,7 @@ class Builder:
         try:
             self._inspect_run()
         finally:
-            for d in made:
-                for f in d.iterdir():
-                    f.unlink()
-                d.rmdir()
+            self._remove_copies(made)
 
     def _inspect_run(self):
         import dataclasses
@@ -1068,8 +1103,9 @@ def main():
     ap.add_argument("--host-note", default="", help="free text recorded in figures.json, e.g. the GPU model")
     ap.add_argument("--only", default="", help="comma-separated subset of: " + ",".join(STEPS))
     ap.add_argument("--inspect-models", default="", metavar="DIR",
-                    help="inspect step: the server's --models dir (a SCRATCH registry with models/rf-detr); "
-                         "the step writes two deliberately wrong copies of rf-detr there and removes them after")
+                    help="inspect and preprocessing steps: the server's --models dir (a SCRATCH registry with "
+                         "models/rf-detr and models/rf-detr-nano); they write temporary manifest copies there "
+                         "(two deliberately wrong rf-detr, one letterboxed rf-detr-nano) and remove them after")
     ap.add_argument("--inspect-eval-max", type=int, default=200, metavar="N",
                     help="inspect step: COCO val images for tier C (default 200; 50 was too noisy: the "
                          "correct manifest measured -1.45 mAP there, +0.34 on 200)")

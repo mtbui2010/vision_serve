@@ -89,8 +89,8 @@ Only modes that a served architecture actually uses exist, and each reproduces i
 recipe exactly (rounding included).
 
 <figure markdown="span">
-  ![One photo, prepared for four different models — real tensors from /api/preprocess](../assets/img/preprocess-modes-177015.jpg){ loading=lazy }
-  <figcaption>One photo, prepared for four different models — real tensors from /api/preprocess<br/><code>rf-detr + rf-detr-nano + clip + mobile-sam</code> · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+  ![One photo, prepared for five models — real tensors from /api/preprocess](../assets/img/preprocess-modes-177015.jpg){ loading=lazy }
+  <figcaption>One photo, prepared for five models — real tensors from /api/preprocess<br/><code>rf-detr + rf-detr-nano-letterbox + clip + depth-anything-v2 + mobile-sam</code> · the letterbox panel is an illustration: a scratch copy of rf-detr-nano set to letterbox (rf-detr-nano itself squashes, as RF-DETR is trained) · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
 | Mode | What it does | Tensor size | Default filter | Used by |
@@ -263,7 +263,7 @@ format is `[x, y, w, h]`, top-left corner plus size, everywhere.
 
 <figure markdown="span">
   ![The same detection in the model's input space and in the original photo](../assets/img/bbox-mapping-177015.jpg){ loading=lazy }
-  <figcaption>The same detection in the model's input space and in the original photo<br/><code>rf-detr-nano</code> · 17 ms on gpu:0 · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+  <figcaption>The same detection in the model's input space and in the original photo<br/><code>rf-detr-nano</code> (squash: scale_x 0.6, scale_y 0.8, no padding) · 29 ms on gpu:0 · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
 ```go title="internal/vision/geom/geom.go"
