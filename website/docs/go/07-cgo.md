@@ -225,7 +225,7 @@ is exactly why each `engine.Session` pins its worker with `runtime.LockOSThread(
     scheduler sends a signal (`SIGURG`) to preempt long-running goroutines; arriving during a C
     call it aborted the process under load. `main()` therefore re-executes the binary once with
     `GODEBUG=asyncpreemptoff=1`, which turns that preemption signal off
-    ([main.go#L42-L65](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L42-L65)).
+    ([main.go#L51-L74](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L51-L74)).
     You do not need to do anything about it; it explains the odd re-exec you may see in a
     debugger.
 

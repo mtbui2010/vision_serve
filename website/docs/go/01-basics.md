@@ -20,11 +20,12 @@ package in `internal/vision/nms/` is imported as `visionserve/internal/vision/nm
 A package named `main` with a function `main()` becomes a program. VisionServe has
 exactly one:
 
-```go title="cmd/visionserve/main.go (lines 1-40, trimmed)"
+```go title="cmd/visionserve/main.go (lines 1-49, trimmed)"
 // Command visionserve is the lightweight binary (server + CLI) for VisionServe.
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -43,13 +44,14 @@ import (
 func main() {
 	ensureSignalSafe()
 	if err := cli.Execute(os.Args); err != nil {
+		// ... a command with its own exit status (visionserve check) exits with it
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 ```
 
-[main.go#L1-L40 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L1-L40)
+[main.go#L1-L49 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L1-L49)
 
 Things to notice:
 

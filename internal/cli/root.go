@@ -26,6 +26,9 @@ Usage:
   visionserve pull <folder>         validate a local model folder (manifest.yaml + .onnx) + install it into the registry
   visionserve convert <fmt> <ckpt>  convert a PyTorch/RF-DETR/HuggingFace/TensorFlow checkpoint to ONNX + install it
                                     (runs the converter image via Docker; see: visionserve convert --help)
+  visionserve check <model> --images DIR
+                                    does the served model behave like your training pipeline? verdict +
+                                    likely causes (needs a running server; see: visionserve check --help)
   visionserve version               print the version
 
 Common flags:
@@ -71,6 +74,8 @@ func Execute(args []string) error {
 		return runPull(args[2:])
 	case "convert":
 		return runConvert(args[2:])
+	case "check":
+		return runCheck(args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("visionserve %s\n", Version)
 		for _, line := range epStatus() {
