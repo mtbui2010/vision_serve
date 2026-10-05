@@ -19,6 +19,9 @@ visionserve pull    MODEL [--models DIR] [--force]
 visionserve ps      [--addr ...]               # models loaded in a running server
 visionserve rm      MODEL [--addr ...]         # unload a model from a running server
 visionserve convert ...                        # convert a checkpoint to ONNX (Docker image)
+visionserve check   MODEL --images DIR [--labels FILE] [--reference SCRIPT.py | --checkpoint PATH]
+                    [--server URL] [--models DIR] [--report FILE.html] [--json]
+                                               # does the served model behave like training? (Docker image)
 visionserve version
 ```
 
@@ -29,6 +32,11 @@ visionserve version
 | `--preload` | Load these models at start-up instead of on first use. |
 | `--idle-unload-seconds` | Override every model's idle timeout. `0` = never unload, `-1` = each manifest's own value (300 s by default). |
 | `--tensorrt` | Try TensorRT before CUDA for every model whose chain uses CUDA. See [Model files and ONNX Runtime](../concepts/onnx.md#cpu-or-gpu-execution-providers). |
+
+`check` needs a running server (`--server`, default `$VISIONSERVE_HOST` or
+`http://localhost:11435`) and prints a `PASS`, `WARN` or `FAIL` verdict first; it exits `0` for
+PASS or WARN, `1` for FAIL and `2` for a usage or setup error. See
+[Inspect and verify a model](../guides/inspect.md#quick-way-visionserve-check).
 
 `run` takes the options of `POST /api/predict` as flags named after the form fields
 (`box_threshold` → `--box-threshold`; meanings in the [option table](../clients/python.md#every-option-at-a-glance)).
@@ -54,7 +62,8 @@ The source of truth for flags is `visionserve help` and
 | `VISIONSERVE_MAX_QUEUE` | auto | Requests per model, running + waiting, before new ones get `503`. Auto = `max(32, 2 × the model's sessions)`; `0` = unbounded. |
 | `VISIONSERVE_POOL_THREADS` | auto | CPU threads per session of a session pool. `0` = ONNX Runtime's default. |
 | `VISIONSERVE_VERIFY` | off | `strict` = cross-check every model's licence against the audited provenance ledger and enforce the SHA-256 / source pins. |
-| `VISIONSERVE_CONVERT_IMAGE` | built-in | Docker image used by `visionserve convert`. |
+| `VISIONSERVE_CONVERT_IMAGE` | built-in | Docker image used by `visionserve convert` and `visionserve check`. |
+| `VISIONSERVE_HOST` | `http://localhost:11435` | Server that `visionserve check` (and the converter's verification) talks to (`--server` wins). |
 | `VISIONSERVE_ORIGINS` | none (no CORS) | Web origins allowed to call the API from a browser, comma-separated, e.g. `http://localhost:5173,https://app.example.com` (like Ollama's `OLLAMA_ORIGINS`). The server then answers their CORS preflight and adds `Access-Control-Allow-Origin`; other origins get no CORS headers. `*` allows every origin and is logged as a warning: the API has no authentication, so any page a user opens could use it. Unset, pages can only call the server from their own origin (or through a proxy). |
 
 ## Per model: the manifest

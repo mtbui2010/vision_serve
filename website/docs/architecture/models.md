@@ -196,7 +196,7 @@ which pulls the package in so its `init()` runs:
 	_ "visionserve/internal/models/textalign"
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L12-L31)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L13-L32)
 
 `models.Register` panics on a duplicate name. That is the one deliberate panic: it can only
 happen at program start, as a programming mistake, never while serving a request.

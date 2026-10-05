@@ -6,6 +6,75 @@ model file is not what the manifest says, the photo is prepared differently, or 
 are decoded differently. This page shows how to look at each of them, with commands and outputs
 from real runs on this repository's models.
 
+## Quick way: visionserve check
+
+One command runs the checks of this page on a model you already serve and tells you, in plain
+words, whether it behaves like your training pipeline:
+
+```console
+$ visionserve serve --models ./models          # in another terminal: check needs a running server
+$ visionserve check rf-detr --images ./photos [--labels val.json] [--checkpoint best.pth] [--report check.html]
+```
+
+It runs in the converter image, like `visionserve convert` (Docker), and talks to the server at
+`--server` (default `http://localhost:11435`). With no server it stops with exit code 2 and the
+`visionserve serve` command to start one. What it checks:
+
+| Check | Runs when | Compares |
+|---|---|---|
+| Preprocessing (B1) | always | `/api/preprocess` with a reference preprocessing of your `--images`: your `--reference SCRIPT.py`, else the `--checkpoint`'s own pipeline, else the architecture's known recipe (RF-DETR: squash + ImageNet mean/std, what the `rfdetr` package does), else what the manifest declares (then it checks only the server's code, and says so) |
+| Outputs (B2) | `--checkpoint` or `--reference` | `/api/predict` with the original model on the same photos |
+| Accuracy (C) | `--labels` | mAP (COCO json) or top-1 (folder per class, or a CSV `image,label`); served vs the original model, or the served number alone |
+
+The first line is the verdict, then one row per check with the likely cause and the fix of each
+FAIL or WARN, next steps, and the detailed tier table of section 3. A real run (CPU, 5 COCO
+photos) on a copy of the `rf-detr` manifest with `letterbox: true`, the mistake of
+[section 3](#tier-b1-catching-a-preprocessing-mistake); the scratch registry's path is shortened
+to `…/reg`:
+
+```console
+$ visionserve check rf-detr-lb --images ./photos --models ./reg --server http://127.0.0.1:11720 --report check.html
+FAIL: rf-detr-lb does not see photos the way it was trained: the server letterboxes (shrinks the photo and adds bars) while training stretches the whole photo to 560x560.
+
+Summary: rf-detr-lb (detection, rf-detr) on http://127.0.0.1:11720, 5 photo(s) from …/photos
+  check                        status  what we found
+  Preprocessing (B1)           FAIL    The model sees a different picture than in training: average
+                                       difference 59.0 gray levels (out of 255) over 5 photos, where
+                                       more than 8 costs accuracy. Reference: the rfdetr package's
+                                       preprocessing.
+                                       Likely cause: the server letterboxes (shrinks the photo and
+                                         adds bars) while training stretches the whole photo to
+                                         560x560.
+                                       Fix: in …/reg/rf-detr-lb/manifest.yaml set
+                                         `input.letterbox: false` (unless the model really was trained
+                                         letterboxed).
+  Outputs vs original (B2)     SKIP    Not compared: no reference model was given. Pass --checkpoint
+                                       PATH (the checkpoint the ONNX was exported from) or
+                                       --reference SCRIPT.py to compare the served outputs with the
+                                       original model.
+  Accuracy on your labels (C)  SKIP    Not measured: pass --labels (a COCO json for detection; a
+                                       folder per class or a CSV `image,label` for classification).
+
+Next steps
+  1. In …/reg/rf-detr-lb/manifest.yaml set `input.letterbox: false` (unless the model really was trained letterboxed).
+  2. Restart `visionserve serve` (it reads a manifest once), then re-run this check.
+  ...
+```
+
+The correct `rf-detr` manifest on the same photos gives `PASS: rf-detr behaves like its training
+pipeline on 5 photos (preprocessing within 0.4 gray levels)`, and with `--labels` on 200 COCO
+val2017 photos it adds the served mAP, 47.6. With `--checkpoint`, B2 and C compare against the
+original model. On the official `rf-detr-nano.pth` and 200 COCO val2017 photos (CPU), the shipped
+`rf-detr-nano` manifest, which letterboxes, failed: B1 46.6 gray levels, B2 31 of 36 boxes matched,
+C mAP 40.92 served against 44.09 for `rfdetr` itself. A copy with `letterbox: false` passed all
+three: 0.4 gray levels, 38 of 38 boxes, mAP 43.80 against 44.09.
+
+`--report check.html` writes the same verdict as one self-contained page (no network access when
+opened): the summary, what the model sees next to the reference with a heatmap of the difference,
+the boxes of both models on the photos where they disagree most, and the details. `--json` prints
+one object, `{"verdict", "reason", "summary", "details"}`, for scripts. The exit code is 0 for
+PASS or WARN, 1 for FAIL, 2 for a usage or setup error.
+
 ```mermaid
 flowchart LR
     P["your photo"] --> PRE["preprocess<br/>(manifest: size, resize mode, mean/std)"]
@@ -406,7 +475,8 @@ The VisionServe server always feeds RGB, so a BGR mismatch is fixed on the train
 re-exporting; the other two are one-line manifest fixes.
 
 !!! tip "Run the tiers on a model you already serve"
-    The converter runs the tiers as part of a conversion. The functions behind them
+    The converter runs the tiers as part of a conversion; `visionserve check`
+    ([above](#quick-way-visionserve-check)) runs them on any installed model. The functions behind them
     (`tier_b1`, `tier_b2`, `tier_c` in `visionserve.convert.verify` / `.evaluate`) also work on
     any installed model; the `inspect` step of
     [`website/tools/figures.py`](https://github.com/mtbui2010/vision_serve/blob/main/website/tools/figures.py),
