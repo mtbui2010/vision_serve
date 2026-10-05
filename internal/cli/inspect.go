@@ -315,6 +315,10 @@ type runtimeDetails struct {
 	TensorRT          string           `json:"tensorrt"` // "off", "on", "requested, library missing", "n/a"
 	IdleUnloadSeconds int              `json:"idle_unload_seconds"`
 	Sessions          []sessionDetails `json:"sessions"`
+	// The client-resize hint GET /api/models publishes (lifecycle.UsefulSide); null = SDKs send
+	// full-resolution images.
+	MaxUsefulSide      *int `json:"max_useful_side"`
+	MaxUsefulShortSide *int `json:"max_useful_short_side"`
 }
 
 type sessionDetails struct {
@@ -550,6 +554,11 @@ func modelCard(reg *registry.Registry, name string, o inspectOptions) *clireport
 	}
 	if plan.Providers != nil {
 		d.Runtime = runtimeFacts(plan, rel)
+		if u := lifecycle.UsefulSide(man); u.Long > 0 {
+			d.Runtime.MaxUsefulSide = &u.Long
+		} else if u.Short > 0 {
+			d.Runtime.MaxUsefulShortSide = &u.Short
+		}
 	}
 
 	// --image.

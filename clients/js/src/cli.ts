@@ -66,6 +66,10 @@ predict options:
   --point <x,y[,l]> SAM point prompt(s); label 1=fg 0=bg (multiple separated by ';')
   --min-size <pct>  drop objects whose bbox area is below pct% of the image (client-side)
   --max-size <pct>  drop objects whose bbox area is above pct% of the image (client-side)
+  --resize <mode>   client-side resizing: auto (default; needs the optional 'sharp' package
+                    in Node, else the image is sent as is), off, or a longest side N in pixels
+  --no-jpeg         send a shrunk image as PNG instead of JPEG
+  --jpeg-quality <q> JPEG quality 1..100 of a shrunk image (default 90)
   --save            save an annotated SVG: <stem>.js.<model>.<task>.svg
   --save-as <path>  save the annotated SVG to this exact path (implies --save)
   --compact         print result JSON on a single line (default: pretty)
@@ -233,10 +237,14 @@ async function cmdPredict(client: Client, positionals: string[], values: Values)
 
   // --- Inference: time ONLY the predict() round-trip (excludes SVG + save). ---
   const t0 = performance.now();
+  const resizeFlag = values.resize as string | undefined;
   let res = await client.predict(model, bytes, {
     prompt: values.prompt as string | undefined,
     box: parseBoxes(values.box as string | undefined),
     point: parsePoints(values.point as string | undefined),
+    resize: resizeFlag == null ? undefined : resizeFlag === "auto" || resizeFlag === "off" ? resizeFlag : Number(resizeFlag),
+    jpeg: values["no-jpeg"] ? false : undefined,
+    jpegQuality: values["jpeg-quality"] != null ? Number(values["jpeg-quality"]) : undefined,
   });
   const clientMs = performance.now() - t0;
   const serverMs = res.durationMs;
@@ -387,6 +395,9 @@ async function main(argv: string[]): Promise<number> {
         point: { type: "string" },
         "min-size": { type: "string" },
         "max-size": { type: "string" },
+        resize: { type: "string" },
+        "no-jpeg": { type: "boolean" },
+        "jpeg-quality": { type: "string" },
         save: { type: "boolean" },
         "save-as": { type: "string" },
         compact: { type: "boolean" },
@@ -405,7 +416,7 @@ async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parsed as { values: Values; positionals: string[] };
 
   if (values.version) {
-    process.stdout.write("visionserve-client 0.1.3\n");
+    process.stdout.write("visionserve-client 0.1.4\n");
     return 0;
   }
   const command = positionals[0];

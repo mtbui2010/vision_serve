@@ -56,7 +56,14 @@ files:
 runtime:
   prefer: [cuda, cpu]
   threads: {decoder: 2}        # optional: CPU threads for one role's sessions
+  max_useful_side: 0           # optional: SDKs never shrink photos for this model
 ```
+
+`runtime.max_useful_side` overrides the size hint `GET /api/models` gives the SDKs, which shrink a
+large photo before uploading it ([client-side resizing](../clients/python.md#client-side-resizing-on-by-default)):
+`0` means always send the full photo, `N` lets them shrink it to a longer side of `N` pixels.
+Without it the hint comes from the model's preprocessing (2 × its input size), or is "never" for
+models whose output needs the full photo (masks, OCR, grasping, templates).
 
 ## What the registry checks
 
@@ -70,6 +77,7 @@ any manifest that breaks a rule:
 - `preprocess:` fields must make sense for the chosen `resize` mode, and must agree with the older
   `input.*` spelling if both are given.
 - `runtime.threads` keys must be roles from `files:`, values whole numbers ≥ 0.
+- `runtime.max_useful_side` must be a whole number ≥ 0.
 - SHA-256 pins are checked when the model loads (the weights may not be downloaded at scan time).
 
 !!! code "Where in the code"

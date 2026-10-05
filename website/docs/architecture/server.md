@@ -71,7 +71,7 @@ installed at all.
 | Route | What it does |
 |---|---|
 | `GET /api/health` | `{"status":"ok"}` |
-| `GET /api/models` | every manifest in the registry with its state: `not_downloaded`, `available` or `loaded` |
+| `GET /api/models` | every manifest in the registry with its state (`not_downloaded`, `available` or `loaded`) and its client-resize hint (`max_useful_side` / `max_useful_short_side`, from `lifecycle.UsefulSide`; [reference](../reference/api.md#get-apimodels)) |
 | `POST /api/load`, `POST /api/unload` | `{"model": "..."}`: load or unload now instead of waiting for the first request or the idle timer |
 | `POST /api/predict` | the main endpoint: image (+ optional prompt and options) in, unified `Result` out |
 | `POST /api/infer_tensor` | an already-preprocessed float32 tensor in, `Result` out (simple models only) |

@@ -290,6 +290,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="for grasp results, draw at most N grasps per object (<=0 = all; default: %(default)s)",
     )
     p.add_argument(
+        "--resize",
+        type=_resize_arg,
+        default=None,
+        metavar="auto|off|N",
+        help="client-side resizing before upload: 'auto' (default) shrinks an image larger than "
+        "the model can use to the server's hint for it and maps results back; 'off' sends the "
+        "file as it is; N shrinks to a longer side of N pixels for any model",
+    )
+    p.add_argument(
+        "--no-jpeg",
+        dest="jpeg",
+        action="store_const",
+        const=False,
+        default=None,
+        help="send a shrunk (or re-encoded) image as lossless PNG instead of JPEG",
+    )
+    p.add_argument(
+        "--jpeg-quality",
+        type=int,
+        default=None,
+        metavar="Q",
+        help="JPEG quality 1..100 of a shrunk image (default: 90)",
+    )
+    p.add_argument(
         "--compact",
         action="store_true",
         help="print the result JSON on a single line (default: pretty-printed)",
@@ -438,6 +462,9 @@ def cmd_predict(client: Client, args: argparse.Namespace) -> int:
         crop_temp=args.crop_temp,
         template_name=args.template_name,
         depth=depth,
+        resize=args.resize,
+        jpeg=args.jpeg,
+        jpeg_quality=args.jpeg_quality,
     )
     client_ms = (time.perf_counter() - t0) * 1000.0
     server_ms = res.duration_ms
@@ -487,19 +514,43 @@ def cmd_predict(client: Client, args: argparse.Namespace) -> int:
     if not args.quiet:
         counts = _summary_counts(res_out)
         device = res.device or "?"
-        summary = "predict: model=%s task=%s device=%s  client=%.1fms server=%.1fms  %s" % (
+        summary = "predict: model=%s task=%s device=%s  client=%.1fms server=%.1fms  %s%s" % (
             res.model or args.model,
             res.task or "?",
             device,
             client_ms,
             server_ms,
             counts,
+            _upload_note(res),
         )
         print(summary, file=sys.stderr)
         if saved_path:
             print("saved: %s" % saved_path, file=sys.stderr)
 
     return 0
+
+
+def _resize_arg(value: str):
+    """--resize: 'auto', 'off' or a positive int."""
+    from .resize import check_resize
+
+    try:
+        return check_resize(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc))
+
+
+def _upload_note(res: Result) -> str:
+    """'  sent 1493x1120 of 4000x3000 as JPEG q90' when the client shrank the image, or why it
+    did not although it was larger than the hint (the loopback rule)."""
+    cr = res.client_resize
+    if cr is None:
+        return ""
+    if not cr.resized:
+        return "  sent as is (%s)" % cr.reason
+    fmt = "JPEG q%d" % cr.jpeg_quality if cr.jpeg_quality is not None else "PNG"
+    return "  sent %dx%d of %dx%d as %s" % (cr.sent_width, cr.sent_height, cr.original_width,
+                                           cr.original_height, fmt)
 
 
 def _summary_counts(res: Result) -> str:
@@ -557,8 +608,9 @@ def cmd_health(client: Client, args: argparse.Namespace) -> int:
     return 0
 
 
-def _model_to_dict(m: ModelInfo) -> Dict[str, str]:
-    return {"name": m.name, "task": m.task, "license": m.license, "state": m.state}
+def _model_to_dict(m: ModelInfo) -> Dict[str, object]:
+    return {"name": m.name, "task": m.task, "license": m.license, "state": m.state,
+            "max_useful_side": m.max_useful_side, "max_useful_short_side": m.max_useful_short_side}
 
 
 def _print_models_table(models: Sequence[ModelInfo]) -> None:

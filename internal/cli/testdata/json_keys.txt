@@ -94,6 +94,8 @@ inspect-model .details.preprocess.std
 inspect-model .details.preprocess.width
 inspect-model .details.runtime
 inspect-model .details.runtime.idle_unload_seconds
+inspect-model .details.runtime.max_useful_short_side
+inspect-model .details.runtime.max_useful_side
 inspect-model .details.runtime.providers
 inspect-model .details.runtime.sessions
 inspect-model .details.runtime.sessions[].path
@@ -242,6 +244,8 @@ import .details.card.preprocess.std
 import .details.card.preprocess.width
 import .details.card.runtime
 import .details.card.runtime.idle_unload_seconds
+import .details.card.runtime.max_useful_short_side
+import .details.card.runtime.max_useful_side
 import .details.card.runtime.providers
 import .details.card.runtime.sessions
 import .details.card.runtime.sessions[].path

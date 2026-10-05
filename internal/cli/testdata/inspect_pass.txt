@@ -47,6 +47,7 @@ Runtime
   TensorRT       off (opt in with --tensorrt or VISIONSERVE_TENSORRT=1)
   Session model  model.onnx, 1 session, ONNX Runtime default threads
   Unloads        after 300 s without requests
+  Client resize  SDKs shrink images to a shorter side of 16 px (max_useful_short_side)
 
 Next steps
   visionserve run demo-cls photo.jpg   # predict, JSON on stdout (--save draws the result)

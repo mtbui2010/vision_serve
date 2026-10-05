@@ -78,7 +78,7 @@ serves every task without sending empty `"masks": []` to a detection client.
 The manifest parser uses the same trick with `yaml:"..."` tags. Nested YAML maps become
 nested structs, which can be written inline:
 
-```go title="internal/registry/manifest.go (lines 123-242, trimmed)"
+```go title="internal/registry/manifest.go (lines 123-247, trimmed)"
 type Manifest struct {
 	Name      string `yaml:"name"`
 	Task      string `yaml:"task"`
@@ -100,7 +100,7 @@ type Manifest struct {
 }
 ```
 
-[manifest.go#L123-L242 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L123-L242)
+[manifest.go#L123-L247 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L123-L247)
 
 So this manifest fragment fills `m.Input.Normalize.Mean`:
 
@@ -114,7 +114,7 @@ input:
 Reading the file is then two calls. Note `&m`: the decoder needs the *address* of `m` so
 it can write into it (more on pointers below):
 
-```go title="internal/registry/manifest.go (lines 250-259)"
+```go title="internal/registry/manifest.go (lines 255-264)"
 // LoadManifest reads + parses + validates a manifest.yaml file.
 func LoadManifest(path string) (*Manifest, error) {
 	raw, err := os.ReadFile(path)
@@ -127,7 +127,7 @@ func LoadManifest(path string) (*Manifest, error) {
 	}
 ```
 
-[manifest.go#L250-L259 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L250-L259)
+[manifest.go#L255-L264 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L255-L264)
 
 !!! tip "Unknown YAML keys are ignored, with a warning"
     `yaml.Unmarshal` does not fail on a misspelt key (`idle_unload_second:`); it simply leaves
@@ -136,7 +136,7 @@ func LoadManifest(path string) (*Manifest, error) {
     `unknown key(s) ignored, check for a typo: runtime.idle_unload_second (line 14)`. When a
     manifest "does nothing", look for that warning, or compare its keys with the tags above. The
     tag `yaml:"-"` (used on `dir` at
-    [L232-L233](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L232-L233))
+    [L237-L238](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L237-L238))
     means "never read this field from YAML".
 
 ## Zero values: empty means default
@@ -206,7 +206,7 @@ bugs a type checker in Python would only catch with `Literal[...]` or an `Enum`.
 A named type can even control how it is decoded. `wholeNumber` refuses `1.5` where an
 integer is expected, because yaml.v3 would otherwise truncate it silently:
 
-```go title="internal/registry/manifest.go (lines 426-440)"
+```go title="internal/registry/manifest.go (lines 434-448)"
 // wholeNumber is an int that refuses a YAML float: yaml.v3 truncates `1.5` into an int field
 // silently, and a thread count of 1 written as 1.5 should be an error, not a guess.
 type wholeNumber int
@@ -224,7 +224,7 @@ func (w *wholeNumber) UnmarshalYAML(n *yaml.Node) error {
 }
 ```
 
-[manifest.go#L426-L440 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L426-L440)
+[manifest.go#L434-L448 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L434-L448)
 
 This is the Go equivalent of a pydantic validator. yaml.v3 sees the method and calls it.
 
@@ -242,7 +242,7 @@ In Python every object is passed by reference, so `self.license = ...` always ch
 original. In Go a value receiver changes only its copy. `validate` must write the
 canonical license back, so it takes a pointer:
 
-```go title="internal/registry/manifest.go (lines 285-291)"
+```go title="internal/registry/manifest.go (lines 290-296)"
 	// License: required + must be in the permissive allowlist (case-insensitive match,
 	// stored back in canonical SPDX form so later == comparisons see one spelling).
 	canonLicense, ok := canonicalLicense(m.License)
@@ -252,7 +252,7 @@ canonical license back, so it takes a pointer:
 	m.License = canonLicense
 ```
 
-[manifest.go#L285-L291 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L285-L291)
+[manifest.go#L290-L296 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L290-L296)
 
 `preprocess.Spec`, `preprocess.Meta` and `engine.Tensor` use value receivers: they are
 plain data, and `Tensor` only holds slice *headers* (pointer + length), so copying it does

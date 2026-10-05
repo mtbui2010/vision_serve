@@ -10,10 +10,11 @@ from __future__ import annotations
 import array
 import base64
 import dataclasses
+import math
 import sys
 from collections.abc import Sequence as _SequenceABC
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 class FloatArray(_SequenceABC):
@@ -164,6 +165,9 @@ class Mask:
     rle: str
     bbox: List[float]
     conf: float
+    # (width, height) the RLE was encoded at when the client shrank the image before uploading it
+    # (Client(resize=...)); None = the original size. Not part of the wire format.
+    _rle_size: Optional[Tuple[int, int]] = field(default=None, compare=False, repr=False)
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "Mask":
@@ -193,6 +197,11 @@ class Mask:
             width:  ORIGINAL image width (W) the mask was encoded against.
             height: ORIGINAL image height (H) the mask was encoded against.
 
+        When the client shrank the image before uploading it (``Client(resize=...)``, see
+        :attr:`Result.client_resize`), the RLE covers the image that was SENT; pass the ORIGINAL
+        size anyway: the mask is decoded at the sent size and scaled to ``(height, width)`` by
+        nearest neighbour. Passing the sent size returns the mask as received.
+
         Returns:
             ``numpy.ndarray`` of dtype ``bool`` and shape ``(height, width)``.
 
@@ -207,6 +216,15 @@ class Mask:
                 "Mask.to_ndarray() requires numpy. Install with: "
                 "pip install 'visionserve[images]'"
             ) from e
+
+        if self._rle_size is not None and tuple(self._rle_size) != (int(width), int(height)):
+            sw, sh = self._rle_size
+            small = dataclasses.replace(self, _rle_size=None).to_ndarray(sw, sh)
+            # Nearest neighbour, pixel centres: original pixel i samples sent pixel
+            # floor((i + 0.5) * sent / original).
+            ys = np.minimum(((np.arange(int(height)) + 0.5) * sh / float(height)).astype(np.int64), sh - 1)
+            xs = np.minimum(((np.arange(int(width)) + 0.5) * sw / float(width)).astype(np.int64), sw - 1)
+            return small[ys[:, None], xs[None, :]]
 
         total = int(width) * int(height)
         counts = np.array(self.rle.split(), dtype=np.int64) if self.rle.strip() else np.zeros(0, np.int64)
@@ -348,6 +366,12 @@ class Result:
                         requested with ``--tensorrt`` but ``libnvinfer.so.10`` is missing,
                         so the request ran on CUDA); empty otherwise.
 
+        client_resize:  what the client did to the image before uploading it — a
+                        :class:`~visionserve.resize.ClientResize` (original and sent size, JPEG
+                        quality) — or ``None`` when the original bytes were sent. Coordinates
+                        above are ALWAYS in original-image pixels either way. Client-side only
+                        (not in :meth:`to_json`, ignored by ``==``).
+
     The depth map of a ``midas`` / ``depth-anything-v2`` result is RELATIVE inverse depth
     (disparity) min-max normalised to ``[0, 1]`` per image — larger = closer, no units — at
     the MODEL's resolution (``depth_width x depth_height``), not the image's.
@@ -366,6 +390,7 @@ class Result:
     duration_ms: float = 0.0
     device: str = ""
     hint: str = ""
+    client_resize: Optional[Any] = field(default=None, compare=False)
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "Result":
@@ -637,12 +662,20 @@ class Result:
 
 @dataclass
 class ModelInfo:
-    """An entry from ``GET /api/models``."""
+    """An entry from ``GET /api/models``.
+
+    ``max_useful_side`` / ``max_useful_short_side`` are the server's client-resize hint: the
+    longest LONGER side / SHORTER side worth uploading for this model (it resizes to its own
+    input anyway). At most one is set; both ``None`` = send full resolution (masks, OCR,
+    templates, ..., or a server that predates the hint). :class:`Client` applies it by default.
+    """
 
     name: str
     task: str
     license: str
     state: str  # "not_downloaded" | "available" | "loaded"
+    max_useful_side: Optional[int] = None
+    max_useful_short_side: Optional[int] = None
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "ModelInfo":
@@ -651,7 +684,18 @@ class ModelInfo:
             task=str(d.get("task", "")),
             license=str(d.get("license", "")),
             state=str(d.get("state", "")),
+            max_useful_side=_positive_int(d.get("max_useful_side")),
+            max_useful_short_side=_positive_int(d.get("max_useful_short_side")),
         )
+
+
+def _positive_int(v: Any) -> Optional[int]:
+    """A positive integer hint, or None (null, absent, 0, or not an integer)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+        return None
+    if float(v) != int(v) or int(v) <= 0:
+        return None
+    return int(v)
 
 
 def _is_loaded(info: ModelInfo) -> bool:

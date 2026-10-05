@@ -13,6 +13,7 @@ to `predict()` uses `node:fs` and is Node-only; in the browser pass bytes or a `
 - [Install](#install)
 - [Usage](#usage)
   - [Image inputs](#image-inputs)
+  - [Client-side resizing (on by default)](#client-side-resizing-on-by-default)
   - [Prompt options](#prompt-options-opts)
   - [Detection](#detection)
   - [Segmentation](#segmentation)
@@ -71,6 +72,35 @@ const res3 = await client.predict("rf-detr", blob);
 ```
 
 `ArrayBuffer` is also accepted and behaves identically to `Uint8Array`.
+
+### Client-side resizing (on by default)
+
+A model resizes every photo to its own small input (RF-DETR: 560 × 560), so most of a
+12-megapixel upload is thrown away on the server. By default (`resize: "auto"`) the client
+shrinks a photo larger than the model can use to the size the server advertises for that model
+(`GET /api/models`: `max_useful_side` / `max_useful_short_side`, 2 × the model's input; fetched
+once and cached), uploads it as JPEG (`jpeg: true`, `jpegQuality: 90`), and maps every box,
+mask and grasp back to the **original** photo's pixels. `res.clientResize` says what was sent
+and why (`reason`; `null` = the bytes you passed, untouched). Only a shrunk photo is
+re-encoded. Models whose output needs the full photo (masks, OCR, grasping, templates) have no
+hint and always get it. With the server on this machine (`localhost`, 127.0.0.0/8, `::1`) a
+photo is shrunk only when that at least halves its sides (the loopback rule: on localhost a
+mild shrink costs more to decode than it saves).
+
+```ts
+new Client(host, { resize: "off" });                 // send every photo as given
+new Client(host, { resize: 1280, jpeg: false });     // longer side 1280 px, PNG
+await client.predict("rf-detr", "photo.jpg", { resize: "off" });   // per call
+```
+
+Decoding needs a codec, and the SDK ships none: in a **browser** it uses `createImageBitmap` +
+`OffscreenCanvas`; in **Node** it uses [`sharp`](https://www.npmjs.com/package/sharp) if your
+application has installed it (`npm install sharp`; it is never installed by this package; it
+shrinks JPEGs on load), and otherwise sends photos exactly as given (no error, no warning: results are the same, the upload
+is larger). Pass `codec: null` to disable resizing, or your own `ImageCodec`. The browser's JPEG
+encoder subsamples colour (4:2:0); the Python SDK and `sharp` use 4:4:4. The measured effect on
+bytes, latency and accuracy is in the
+[Python docs](../../website/docs/clients/python.md#client-side-resizing-on-by-default).
 
 ### Detection
 
@@ -229,7 +259,8 @@ class Result {
 
 `Mask.toMask(width, height)` decodes the column-major RLE into a row-major `Uint8Array`
 (`1` = inside the mask); `Mask.toMask2D(width, height)` returns a `boolean[][]`. Pass the
-**original** image width/height the mask was produced against.
+**original** image width/height; when the client shrank the photo, the mask is decoded at the
+sent size (`mask.rleSize`) and scaled up (nearest neighbour).
 
 ## CLI
 
@@ -275,6 +306,8 @@ npx visionserve --help
 | `--box x,y,w,h` | SAM box prompt(s) in **original** image pixels; multiple separated by `;` |
 | `--point x,y[,l]` | SAM point prompt(s); label `1`=fg, `0`=bg; multiple separated by `;` |
 | `--min-size PCT` / `--max-size PCT` | Drop objects whose bbox area is below/above PCT% of the image (applied **client-side**; requires a PNG/JPEG so the image size can be read) |
+| `--resize auto\|off\|N` | Client-side resizing (default `auto`; needs `sharp` in Node, else the file is sent as is) |
+| `--no-jpeg` / `--jpeg-quality Q` | Send a shrunk photo as PNG / JPEG quality (default 90) |
 | `--save` | Save an annotated SVG with an auto name `<stem>.js.<model>.<task>.svg` |
 | `--save-as PATH` | Save the annotated SVG to this exact path |
 | `--compact` | Print result JSON on a single line (default: pretty) |
@@ -430,7 +463,7 @@ What `toSVG` draws per task:
 
 ```ts
 await client.health();      // { status: "ok" }
-await client.listModels();  // ModelInfo[]  (name, task, license, state)
+await client.listModels();  // ModelInfo[]  (name, task, license, state, maxUsefulSide, maxUsefulShortSide)
 await client.ps();          // only loaded models
 await client.load("rf-detr");
 await client.unload("rf-detr");
@@ -473,6 +506,20 @@ npm run typecheck  # tsc --noEmit
 ```
 
 ## Changelog
+
+### 0.1.4
+
+- **Client-side resizing, on by default** (a user decision: it changes what is uploaded). With
+  `resize: "auto"` the client shrinks a photo larger than the model can use to the server's
+  hint (`GET /api/models`: `max_useful_side` / `max_useful_short_side`), sends it as JPEG
+  (`jpeg: true`, `jpegQuality: 90`) and maps boxes, masks and grasps back to original pixels;
+  `Result.clientResize` records it, with a `reason`. Only shrunk photos are re-encoded. With
+  a loopback `host`, only a shrink to half the sides or less is done (`isLoopback`). `resize: "off"` restores the old uploads exactly; also
+  per call (`predict(..., { resize, jpeg, jpegQuality })`) and in the CLI (`--resize`,
+  `--no-jpeg`, `--jpeg-quality`). It needs a codec: the browser's, or `sharp` in Node when
+  installed (optional; otherwise photos are sent as given). New exports: `ClientResize`,
+  `ImageCodec`, `browserCodec`, `sharpCodec`, `probeHeader`, `targetSize`, `isLoopback`.
+- `ModelInfo.maxUsefulSide` / `maxUsefulShortSide`; `Mask.rleSize`.
 
 ### 0.1.3
 

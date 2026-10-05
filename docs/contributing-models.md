@@ -347,6 +347,15 @@ sha256sum /tmp/pulltest/my-model/model.onnx      # must match the manifest pin
   back to the original image, clamp, IoU) and `internal/vision/mask` (threshold → bitmap +
   bbox, the one column-major RLE encoder, PyTorch-bilinear / nearest upsampling, min-max
   normalisation).
+- **Client-side resizing is opt-in per architecture.** The SDKs shrink a large photo before
+  uploading it only when `GET /api/models` gives the model a hint, and an architecture gets one
+  only by calling `models.RegisterUsefulSide(arch, fn)` in `init()` (see
+  `internal/models/usefulside.go`; a plain model with a fixed-size `preprocess.Arch` registers
+  `models.ResolvedUsefulSide(arch)`). Register only when the result cannot depend on pixels
+  beyond 2 × the model's input: never for models that return full-resolution masks, read text,
+  align the photo with another input (depth), crop the ORIGINAL photo (crop namers) or compare it
+  with templates. Not registering is always correct: photos then go up at full resolution. Add
+  the model to `TestUsefulSideShippedManifests` (`internal/lifecycle/usefulside_test.go`).
 - Running a session is **not** the model's job for plain `Model`s — engine + lifecycle
   handle it; the model does pre/post only. `PipelineModel`s orchestrate via `Runner`, but
   lifecycle still owns and frees the sessions.

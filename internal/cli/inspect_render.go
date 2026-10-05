@@ -198,6 +198,14 @@ func modelSections(man *registry.Manifest, d inspectDetails) []clireport.Section
 			idle = fmt.Sprintf("after %d s without requests", rt.IdleUnloadSeconds)
 		}
 		rows = append(rows, clireport.Field{Label: "Unloads", Value: idle})
+		resize := "never: SDKs send full-resolution images"
+		switch {
+		case rt.MaxUsefulSide != nil:
+			resize = fmt.Sprintf("SDKs shrink images to a longer side of %d px (max_useful_side)", *rt.MaxUsefulSide)
+		case rt.MaxUsefulShortSide != nil:
+			resize = fmt.Sprintf("SDKs shrink images to a shorter side of %d px (max_useful_short_side)", *rt.MaxUsefulShortSide)
+		}
+		rows = append(rows, clireport.Field{Label: "Client resize", Value: resize})
 		secs = append(secs, clireport.Section{Title: "Runtime", Rows: rows})
 	}
 	return secs
