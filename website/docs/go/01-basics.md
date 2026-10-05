@@ -43,8 +43,8 @@ import (
 func main() {
 	ensureSignalSafe()
 	if err := cli.Execute(os.Args); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
+		fmt.Fprint(os.Stderr, cli.ErrorText(err)) // "error: ...\n"; "" after a printed FAIL report
+		os.Exit(cli.ExitCode(err))                // 1, or inspect/import's 1 = FAIL, 2 = usage error
 	}
 }
 ```
@@ -56,7 +56,7 @@ Things to notice:
 - The import block lists the standard library first (`fmt`, `os`), then this module's
   packages. `goimports` sorts them for you.
 - You call a package's function with its last path element: `cli.Execute(...)`,
-  `fmt.Fprintln(...)`.
+  `fmt.Fprint(...)`.
 - `_ "visionserve/internal/models/classification"` is a **blank import**: "load this
   package for its side effects, I will not call it by name". Chapter 3 shows the side
   effect (model registration).

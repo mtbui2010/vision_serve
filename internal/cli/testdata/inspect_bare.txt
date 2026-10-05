@@ -1,0 +1,27 @@
+WARN: my net.onnx has no manifest: VisionServe cannot serve it until it is imported (command below)
+
+  File        $ROOT/my net.onnx
+  Size        585 B
+  Parameters  112
+  Inputs      pixels [d0,3,8,8] float32
+  Outputs     logits [d0,4] float32
+  Looks like  classification
+
+Findings
+  WARN  my net.onnx has no manifest: VisionServe cannot serve it until it is imported (command below)
+
+ONNX file my net.onnx
+  Format      ONNX IR 8, opset ai.onnx 17
+  Producer    onnxtest 1.0
+  Graph       0 nodes, 2 weight tensors
+  Parameters  112
+  Weights     448 B of weights inside the file
+       NAME    TYPE     SHAPE
+  in   pixels  float32  [d0,3,8,8]
+  out  logits  float32  [d0,4]
+  dynamic dims (any size at run time): d0
+
+Next steps
+  visionserve import '$ROOT/my net.onnx' --name my-net --task classification --license LICENSE-ID
+  #   --license: the licence of the ORIGINAL model (Apache-2.0, MIT, BSD-3-Clause or BSD-2-Clause) — check it, "it is on HuggingFace" says nothing
+  #   import prints every value it assumed (input size, resize, mean/std) so you can correct it

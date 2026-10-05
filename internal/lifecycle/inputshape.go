@@ -152,6 +152,28 @@ func checkInputShape(man *registry.Manifest, base models.Base) error {
 // judgeInputShape is checkInputShape; skipped says why nothing was judged ("" = it was), for the
 // test that runs it over every shipped manifest.
 func judgeInputShape(man *registry.Manifest, base models.Base) (skipped string, err error) {
+	fit := JudgeInputShape(man, base)
+	return fit.Skipped, fit.Err
+}
+
+// InputFit is the input-shape check's verdict together with what it compared, for tools that show
+// it (`visionserve inspect`, `visionserve import`). Load refuses exactly when Err is set.
+type InputFit struct {
+	// File and Input are the ONNX file and graph input judged ("" when skipped before one was
+	// chosen). Graph is that input's declared dims (-1 = dynamic); Produced is the shape the
+	// model's preprocessing produces (-1 = varies with the image size; nil when not probed).
+	File, Input     string
+	Graph, Produced []int64
+	// Skipped says why nothing was judged ("" = judged); Err is the *InputShapeError of a
+	// preprocessing that cannot feed the graph.
+	Skipped string
+	Err     error
+}
+
+// JudgeInputShape runs the load-time input-shape check (checkInputShape) on a built model and
+// reports what it compared. It reads the file header and preprocesses three small images; it
+// creates no session.
+func JudgeInputShape(man *registry.Manifest, base models.Base) InputFit {
 	var (
 		file, input string
 		pre         func(image.Image) (engine.Tensor, error)
@@ -163,21 +185,21 @@ func judgeInputShape(man *registry.Manifest, base models.Base) (skipped string, 
 	case models.PipelineModel:
 		ep, ok := mdl.(models.ExplainPreprocessor)
 		if !ok || man.Explain == nil || man.Explain.Role == "" {
-			return "pipeline model without an explain role", nil
+			return InputFit{Skipped: "pipeline model without an explain role"}
 		}
 		path, ok := man.FilesAbs()[man.Explain.Role]
 		if !ok {
-			return "explain role not in files", nil // reported by the explain session itself
+			return InputFit{Skipped: "explain role not in files"} // reported by the explain session itself
 		}
 		file = path
 		pre = func(img image.Image) (engine.Tensor, error) { t, _, err := ep.ExplainPreprocess(img); return t, err }
 	default:
-		return "neither Model nor PipelineModel", nil
+		return InputFit{Skipped: "neither Model nor PipelineModel"}
 	}
 
 	ins, _, err := engine.InspectHeader(file)
 	if err != nil || len(ins) == 0 {
-		return "header unreadable or no inputs", nil
+		return InputFit{File: file, Skipped: "header unreadable or no inputs"}
 	}
 	var graph *engine.IOInfo
 	switch {
@@ -192,22 +214,25 @@ func judgeInputShape(man *registry.Manifest, base models.Base) (skipped string, 
 	}
 	if graph == nil || graph.Shape == nil {
 		// An ambiguous binding, an input name the graph lacks (the session reports it), or unknown rank.
-		return fmt.Sprintf("no unambiguous input (InputName %q, %d graph inputs)", input, len(ins)), nil
+		return InputFit{File: file, Skipped: fmt.Sprintf("no unambiguous input (InputName %q, %d graph inputs)", input, len(ins))}
 	}
 
+	fit := InputFit{File: file, Input: graph.Name, Graph: graph.Shape}
 	produced, ok := probeShape(pre)
 	if !ok {
-		return "the probes could not be preprocessed", nil
+		fit.Skipped = "the probes could not be preprocessed"
+		return fit
 	}
+	fit.Produced = produced
 	if !shapeFits(produced, graph.Shape) {
 		spec, _ := man.PreprocessSpec()
-		return "", &InputShapeError{
+		fit.Err = &InputShapeError{
 			Model: man.Name, File: file, Input: graph.Name,
 			Graph: graph.Shape, Produced: produced,
 			Width: spec.Width, Height: spec.Height, Layout: string(spec.Layout),
 		}
 	}
-	return "", nil
+	return fit
 }
 
 // probeShape preprocesses every shapeProbes image and returns the tensor shape, with -1 on each

@@ -1,0 +1,54 @@
+PASS: demo-cls is ready to serve: its preprocessing makes a [1,3,8,8] tensor and model.onnx accepts it
+
+  Model           demo-cls
+  Task            classification
+  Architecture    efficientnet
+  Licence         Apache-2.0 (allowed)
+  Files           1 ONNX file, 603 B in all (with labels and side files)
+  Parameters      112
+  Input           photo → squash 8×8, ImageNet mean/std → tensor [1,3,8,8]
+  Fits the graph  yes (model.onnx input "pixels" is [d0,3,8,8])
+  Outputs         logits [d0,4]
+  Runs on         cuda → cpu (first one available on this machine)
+
+Model
+  Licence    Apache-2.0 — on the permissive allowlist (Apache-2.0, BSD-2-Clause, BSD-3-Clause, MIT)
+  Directory  $ROOT/models/demo-cls
+  Labels     labels.txt (4 classes); the model outputs 4 class scores
+
+Files
+  ROLE    FILE        SIZE   SHA256
+  model   model.onnx  585 B  pinned, matches (995128ad9bd3…)
+  labels  labels.txt  18 B   not pinned
+
+ONNX file model.onnx
+  Roles       model
+  Format      ONNX IR 8, opset ai.onnx 17
+  Producer    onnxtest 1.0
+  Graph       0 nodes, 2 weight tensors
+  Parameters  112
+  Weights     448 B of weights inside the file
+       NAME    TYPE     SHAPE
+  in   pixels  float32  [d0,3,8,8]
+  out  logits  float32  [d0,4]
+  dynamic dims (any size at run time): d0
+
+Preprocessing (what the model's code applies)
+  Resize       squash to 8×8 (bilinear): the whole photo, aspect ratio not kept
+  Normalise    pixels/255, then (x - mean) / std with mean [0.485, 0.456, 0.406], std [0.229, 0.224, 0.225] (ImageNet mean/std)
+  Layout       NCHW
+  Produces     [1,3,8,8] float32
+  Example      a 640×360 photo becomes [1,3,8,8]: x scaled ×0.0125, y ×0.02222, then shifted by +0,+0 (the model's own code, run now)
+  Graph takes  model.onnx input "pixels" [d0,3,8,8]
+  Fits         yes: every fixed dimension matches
+
+Runtime
+  Providers      cuda → cpu (each session takes the first one this machine has)
+  TensorRT       off (opt in with --tensorrt or VISIONSERVE_TENSORRT=1)
+  Session model  model.onnx, 1 session, ONNX Runtime default threads
+  Unloads        after 300 s without requests
+
+Next steps
+  visionserve run demo-cls photo.jpg   # predict, JSON on stdout (--save draws the result)
+  visionserve inspect demo-cls --image photo.jpg   # see the exact tensor the model gets
+  edit $ROOT/models/demo-cls/manifest.yaml   # format: docs/manifest-spec.md
