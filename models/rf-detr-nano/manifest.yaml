@@ -18,10 +18,13 @@ input:
   width: 384
   height: 384
   layout: NCHW
-  # Intentionally left as letterbox: the squash fix (BUGS_TO_FIX.md #1) was measured for the
-  # 560/512 rfdetr-trained checkpoints only; this upstream nano export was never measured
-  # either way, so it is not flipped blind.
-  letterbox: true
+  # Squash, as RF-DETR is trained (square_resize_div_64) — BUGS_TO_FIX.md #1. Measured
+  # 2026-10-05 (CPU, ORT 1.26) with `visionserve check rf-detr-nano --checkpoint
+  # ~/.roboflow/models/rf-detr-nano.pth --images <200 COCO val2017> --labels <their instances
+  # json>` against the official checkpoint run by rfdetr itself (mAP 44.09 at conf 0.5):
+  #   letterbox: true   B1 46.6 gray levels, B2 31/36 boxes, mAP 40.92 (-3.16)  FAIL
+  #   letterbox: false  B1  0.4 gray levels, B2 38/38 boxes, mAP 43.80 (-0.29)  PASS
+  letterbox: false
   normalize:
     mean: [0.485, 0.456, 0.406]
     std: [0.229, 0.224, 0.225]

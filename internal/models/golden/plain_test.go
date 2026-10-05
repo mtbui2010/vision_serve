@@ -62,10 +62,14 @@ func TestGoldenRFDETR(t *testing.T) {
 		name string
 		cfg  models.Config
 	}{
-		// models/rf-detr/manifest.yaml (squash 560) and models/rf-detr-nano (letterbox 384).
+		// models/rf-detr/manifest.yaml (squash 560) and models/rf-detr-nano (squash 384 since
+		// 2026-10-05, BUGS_TO_FIX.md #1), plus the letterbox branch at 384: the case formerly named
+		// "nano384lb", values unchanged.
 		{"base560", models.Config{Name: "rf-detr", Width: 560, Height: 560, Mean: mean, Std: std,
 			BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300, Labels: coco91}},
-		{"nano384lb", models.Config{Name: "rf-detr-nano", Width: 384, Height: 384, Letterbox: true, Mean: mean, Std: std,
+		{"nano384", models.Config{Name: "rf-detr-nano", Width: 384, Height: 384, Mean: mean, Std: std,
+			BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300, Labels: coco91}},
+		{"lb384", models.Config{Name: "rf-detr-lb", Width: 384, Height: 384, Letterbox: true, Mean: mean, Std: std,
 			BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300, Labels: coco91}},
 		{"xyxy512max7", models.Config{Name: "x", Width: 512, Height: 512, Mean: mean, Std: std,
 			BoxFormat: "xyxy", ConfThresh: 0.3, MaxDet: 7, Labels: []string{"a", "b", "c"}}},

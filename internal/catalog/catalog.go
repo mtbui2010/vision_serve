@@ -291,10 +291,14 @@ var builtin = []Entry{
 				SHA256:        "3fcbba0f68bad4939fdf1c38f432783b95691e2869af3be369780aa5be67abb2",
 			},
 		},
+		// Letterbox false = squash, like every RF-DETR (BUGS_TO_FIX.md #1): `visionserve check`
+		// against the official rf-detr-nano.pth on 200 COCO val2017 photos measured letterbox mAP
+		// 40.92 vs 44.09 (rfdetr), squash 43.80 (2026-10-05). An unedited manifest from an older
+		// pull is regenerated on re-pull.
 		InputWidth:        384,
 		InputHeight:       384,
 		InputLayout:       "NCHW",
-		Letterbox:         true,
+		Letterbox:         false,
 		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
 		PostprocessType:   "detr",
 		BoxFormat:         "cxcywh",
