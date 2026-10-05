@@ -9,6 +9,19 @@
 
 import { ModelInfo, Result } from "./types.js";
 import { filterBySize as _filterBySize, type SizeFilterOptions } from "./filter.js";
+import {
+  checkQuality,
+  checkResize,
+  defaultCodec,
+  mapResult,
+  prepareUpload,
+  scaleBoxes,
+  scalePoints,
+  scaleRoi,
+  type ClientResize,
+  type ImageCodec,
+  type ResizeOption,
+} from "./resize.js";
 
 /** Accepted image inputs for {@link Client.predict}. */
 export type ImageInput = string | Uint8Array | ArrayBuffer | Blob;
@@ -81,6 +94,12 @@ export interface PredictOptions {
   cropTemp?: number | null;
   /** `template_name`: `instance_detection` models: a set registered via `POST /api/templates`. */
   templateName?: string | null;
+  /** Client-side resizing for this call (see {@link ClientOptions.resize}); default: the client's. */
+  resize?: ResizeOption | null;
+  /** JPEG for this call (see {@link ClientOptions.jpeg}); default: the client's. */
+  jpeg?: boolean | null;
+  /** JPEG quality for this call (see {@link ClientOptions.jpegQuality}); default: the client's. */
+  jpegQuality?: number | null;
 }
 
 /** Number options and the server field each one is sent as. */
@@ -99,7 +118,10 @@ const NUMBER_FIELDS = {
 /** Options the server reads with Atoi: `"2.5"` would silently become 0 (= default / off). */
 const INT_FIELDS = { gridSize: "grid_size", dilate: "dilate" } as const;
 const STRING_FIELDS = { method: "method", templateName: "template_name" } as const;
-const OTHER_OPTIONS = ["prompt", "box", "point", "roi", "depth", "depthDtype", "depthWidth", "depthHeight"];
+const OTHER_OPTIONS = [
+  "prompt", "box", "point", "roi", "depth", "depthDtype", "depthWidth", "depthHeight",
+  "resize", "jpeg", "jpegQuality", // client-side only: never sent
+];
 const KNOWN_OPTIONS = new Set<string>([
   ...Object.keys(NUMBER_FIELDS),
   ...Object.keys(INT_FIELDS),
@@ -118,6 +140,27 @@ export interface ClientOptions {
    * exact float32 values. Default `false`. A server that predates the option ignores it.
    */
   base64Arrays?: boolean;
+  /**
+   * Client-side resizing of `predict()` uploads — ON by default. `"auto"`: shrink an image larger
+   * than the model can use to the server's hint for that model (`GET /api/models`, fetched once
+   * and cached), e.g. a 12 MP photo to ~1.7 MP for RF-DETR; masks, OCR, grasping and template
+   * models (no hint) always get the full image. `"off"`: send every image exactly as given. A
+   * number `N`: shrink to a longer side of `N` pixels for any model. Results are always mapped
+   * back to ORIGINAL pixels; `Result.clientResize` says what was done. Needs a codec (see
+   * `codec`): without one, images are sent as given.
+   */
+  resize?: ResizeOption;
+  /** Encode a shrunk or re-encoded image as JPEG (default `true`) instead of PNG; a JPEG that needs no shrinking is always sent untouched. */
+  jpeg?: boolean;
+  /** JPEG quality 1..100 (default 90). */
+  jpegQuality?: number;
+  /**
+   * Image codec for client-side resizing. Default: the browser's (`createImageBitmap` +
+   * `OffscreenCanvas`), else `sharp` when your application has it installed, else none (no
+   * resizing, no warning). `null` disables resizing; pass your own {@link ImageCodec} to plug
+   * another decoder in.
+   */
+  codec?: ImageCodec | null;
 }
 
 /** Raised when the server returns a non-2xx response or transport fails. */
@@ -137,10 +180,19 @@ export class VisionServeError extends Error {
   }
 }
 
+/** How long an unknown model name waits before it triggers another `GET /api/models` (ms). */
+const HINT_REFRESH_MS = 5_000;
+
 export class Client {
   readonly host: string;
   readonly timeoutMs: number;
   readonly base64Arrays: boolean;
+  readonly resize: ResizeOption;
+  readonly jpeg: boolean;
+  readonly jpegQuality: number;
+  private readonly codecOption: ImageCodec | null | undefined;
+  private hints = new Map<string, [number | null, number | null]>();
+  private hintsFetchedAt = Number.NEGATIVE_INFINITY;
 
   /**
    * @param host base URL of the server, e.g. `http://127.0.0.1:11435`.
@@ -149,6 +201,12 @@ export class Client {
     this.host = host.replace(/\/+$/, "");
     this.timeoutMs = opts.timeoutMs ?? 120_000;
     this.base64Arrays = Boolean(opts.base64Arrays);
+    // ON by default — a user decision (2026-10-05) that overrides the "output-changing behaviour
+    // is opt-in" rule for this feature; the measured cost is in the docs.
+    this.resize = checkResize(opts.resize ?? "auto");
+    this.jpeg = opts.jpeg ?? true;
+    this.jpegQuality = checkQuality(opts.jpegQuality ?? 90);
+    this.codecOption = opts.codec;
   }
 
   // ------------------------------------------------------------------ //
@@ -162,8 +220,31 @@ export class Client {
 
   /** `GET /api/models` -> list of {@link ModelInfo}. */
   async listModels(): Promise<ModelInfo[]> {
-    const data = (await this.getJSON("/api/models")) as unknown[] | null;
-    return (data ?? []).map((x) => ModelInfo.fromJSON(x as Record<string, unknown>));
+    const data = (await this.getJSON("/api/models")) as unknown;
+    const infos = (Array.isArray(data) ? data : [])
+      .filter((x): x is Record<string, unknown> => x != null && typeof x === "object")
+      .map((x) => ModelInfo.fromJSON(x));
+    this.hints = new Map(infos.map((m) => [m.name, [m.maxUsefulSide, m.maxUsefulShortSide]]));
+    this.hintsFetchedAt = Date.now();
+    return infos;
+  }
+
+  /**
+   * The server's client-resize hint for `model`: `[maxUsefulSide, maxUsefulShortSide]`
+   * (`[null, null]` = none). One `GET /api/models`, cached; an unknown name refreshes it at most
+   * every few seconds. A failed listing means no hint (the image is sent as given).
+   */
+  async usefulSide(model: string): Promise<[number | null, number | null]> {
+    const known = this.hints.get(model);
+    if (known) return known;
+    if (Date.now() - this.hintsFetchedAt > HINT_REFRESH_MS) {
+      try {
+        await this.listModels();
+      } catch {
+        this.hintsFetchedAt = Date.now();
+      }
+    }
+    return this.hints.get(model) ?? [null, null];
   }
 
   /** `POST /api/load` -> `{ model, state }`. */
@@ -191,14 +272,50 @@ export class Client {
    * @throws TypeError / Error for an unknown option or a malformed value, before anything is sent.
    */
   async predict(model: string, image: ImageInput, opts: PredictOptions = {}): Promise<Result> {
-    const form = buildPredictForm(model, opts, this.base64Arrays);
-    const { blob, filename } = await toBlob(image);
-    form.append("image", blob, filename);
+    buildPredictForm(model, opts, this.base64Arrays); // validate every option before any work
+    const { bytes, filename } = await toBytes(image);
+    const cr = await this.prepare(model, bytes, opts);
+    let sendOpts = opts;
+    if (cr.clientResize?.resized) {
+      const c = cr.clientResize;
+      sendOpts = {
+        ...opts,
+        box: opts.box != null ? scaleBoxes(normalizeList(opts.box), c) : opts.box,
+        point: opts.point != null ? scalePoints(normalizeList(opts.point), c) : opts.point,
+        roi: opts.roi != null ? scaleRoi(opts.roi, c) : opts.roi,
+      };
+    }
+    const form = buildPredictForm(model, sendOpts, this.base64Arrays);
+    const name = cr.clientResize ? (cr.clientResize.jpegQuality != null ? "image.jpg" : "image.png") : filename;
+    form.append("image", bytesBlob(cr.bytes), name);
     const depth = depthBlob(opts);
     if (depth) form.append("depth", depth, "depth.bin");
 
     const data = await this.request("POST", "/api/predict", form);
-    return Result.fromJSON((data ?? {}) as Record<string, unknown>);
+    const result = Result.fromJSON((data ?? {}) as Record<string, unknown>);
+    return cr.clientResize ? mapResult(result, cr.clientResize) : result;
+  }
+
+  /** The upload for `bytes` under this client's (and this call's) resize settings. */
+  private async prepare(
+    model: string,
+    bytes: Uint8Array,
+    opts: PredictOptions,
+  ): Promise<{ bytes: Uint8Array; clientResize: ClientResize | null }> {
+    const mode = opts.resize != null ? checkResize(opts.resize) : this.resize;
+    const jpeg = opts.jpeg ?? this.jpeg;
+    const quality = opts.jpegQuality != null ? checkQuality(opts.jpegQuality) : this.jpegQuality;
+    // Pixel quantities tied to the full image (or templates): always full resolution.
+    const fullRes = opts.depth != null || Boolean(opts.dilate) || opts.gripperMin != null
+      || opts.gripperMax != null || opts.templateName != null;
+    if (mode === "off" || fullRes) return { bytes, clientResize: null };
+    const codec = this.codecOption === undefined ? await defaultCodec() : this.codecOption;
+    if (!codec) return { bytes, clientResize: null };
+    let maxSide: number | null = null;
+    let maxShortSide: number | null = null;
+    if (mode === "auto") [maxSide, maxShortSide] = await this.usefulSide(model);
+    else maxSide = mode;
+    return prepareUpload(bytes, { maxSide, maxShortSide, jpeg, quality, roi: opts.roi ?? null, codec });
   }
 
   /** Filter detections/masks by bounding-box size. */
@@ -383,26 +500,26 @@ function depthBlob(opts: PredictOptions): Blob | null {
 // ---------------------------------------------------------------------- //
 // Image encoding
 // ---------------------------------------------------------------------- //
-async function toBlob(image: ImageInput): Promise<{ blob: Blob; filename: string }> {
-  // BlobPart's lib typings pin Uint8Array to a plain ArrayBuffer backing store; our
-  // bytes may be backed by ArrayBufferLike (Node Buffer, SharedArrayBuffer), so we
-  // funnel everything through this cast in one place.
-  const bytesBlob = (b: Uint8Array | ArrayBuffer) =>
-    new Blob([b as unknown as BlobPart], { type: "application/octet-stream" });
+// BlobPart's lib typings pin Uint8Array to a plain ArrayBuffer backing store; our bytes may be
+// backed by ArrayBufferLike (Node Buffer, SharedArrayBuffer), so everything goes through this
+// cast in one place.
+function bytesBlob(b: Uint8Array | ArrayBuffer): Blob {
+  return new Blob([b as unknown as BlobPart], { type: "application/octet-stream" });
+}
 
+async function toBytes(image: ImageInput): Promise<{ bytes: Uint8Array; filename: string }> {
   if (typeof image === "string") {
     // File path — read via node:fs (lazy import so browsers can still use bytes/Blob).
     const { readFile } = await import("node:fs/promises");
     const path = await import("node:path");
     const buf = await readFile(image);
-    return { blob: bytesBlob(buf), filename: path.basename(image) };
+    return { bytes: new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength), filename: path.basename(image) };
   }
   if (image instanceof Blob) {
-    return { blob: image, filename: "image.png" };
+    return { bytes: new Uint8Array(await image.arrayBuffer()), filename: "image.png" };
   }
-  if (image instanceof Uint8Array || image instanceof ArrayBuffer) {
-    return { blob: bytesBlob(image), filename: "image.png" };
-  }
+  if (image instanceof Uint8Array) return { bytes: image, filename: "image.png" };
+  if (image instanceof ArrayBuffer) return { bytes: new Uint8Array(image), filename: "image.png" };
   throw new TypeError("unsupported image type; expected path string, Uint8Array, ArrayBuffer, or Blob");
 }
 

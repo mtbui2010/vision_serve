@@ -125,8 +125,8 @@ A mask's `rle` is a list of run lengths over the photo's `H × W` pixels read **
 column** (top to bottom, then the next column to the right), starting with a run of background:
 `"0 273920"` above is "0 background pixels, then 273 920 mask pixels", the whole 640 × 428 photo.
 The decoders in the SDKs are a few lines:
-[`Mask.to_ndarray`](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L184-L226)
+[`Mask.to_ndarray`](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L188-L244)
 (Python) and
-[`Mask.toMask`](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/types.ts#L74-L98)
+[`Mask.toMask`](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/types.ts#L86-L122)
 (TypeScript). The format is explained in
 [Shared vision library](../architecture/vision.md).

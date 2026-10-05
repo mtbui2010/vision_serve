@@ -12,3 +12,5 @@ export type { Task, ModelState } from "./types.js";
 export { filterBySize, getDepthAtDetection } from "./filter.js";
 export type { SizeFilterOptions, DepthAtDetectionOptions, DepthMode } from "./filter.js";
 export { toSVG } from "./visualize.js";
+export { ClientResize, browserCodec, sharpCodec, probeHeader, targetSize } from "./resize.js";
+export type { ImageCodec, ImageProbe, ResizeOption } from "./resize.js";

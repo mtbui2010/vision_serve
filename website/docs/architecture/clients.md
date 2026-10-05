@@ -54,19 +54,45 @@ that unlock array and PIL inputs, mask decoding and drawing.
         timeout: float = 120,
         *,
         base64_arrays: bool = False,
+        resize: ResizeOption = "auto",
+        jpeg: bool = True,
+        jpeg_quality: int = 90,
     ):
         self.host = host.rstrip("/")
         self.timeout = timeout
         # Opt-in: the default keeps Result.depth_map / embeddings plain lists, as they always were.
         self.base64_arrays = bool(base64_arrays)
+        # ON by default — a user decision (2026-10-05) that overrides the "output-changing
+        # behaviour is opt-in" rule for this feature; the measured cost is in the docs.
+        self.resize = _resize.check_resize(resize)
+        self.jpeg = bool(jpeg)
+        self.jpeg_quality = _resize.check_quality(jpeg_quality)
+        # ...
+        self._hints_lock = threading.Lock()
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L63-L73)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L81-L102)
 
 `Client.predict(model, image, ...)` accepts a file path, encoded bytes, a `PIL.Image` or a
-`numpy` array (PIL and arrays are encoded to lossless PNG, so the server sees exactly your
-pixels). Prompts and options become multipart form fields: boxes as `"x,y,w,h"` joined by `;`,
-points as `"x,y[,label]"`, numbers without a trailing `.0`.
+`numpy` array. Prompts and options become multipart form fields: boxes as `"x,y,w,h"` joined by
+`;`, points as `"x,y[,label]"`, numbers without a trailing `.0`.
+
+### Client-side resizing (on by default)
+
+Both SDKs shrink a photo larger than the model can use before uploading it
+(`visionserve/resize.py`, `clients/js/src/resize.ts`). The server decides how far: `GET
+/api/models` carries a per-model hint, `max_useful_side` (bounds the longer side) or
+`max_useful_short_side` (the shorter side), derived from the architecture's preprocessing
+(`lifecycle.UsefulSide`, `models.RegisterUsefulSide`) or set by the manifest's
+`runtime.max_useful_side`. A model without a hint (masks, OCR, grasping, templates, crop
+namers) gets every photo exactly as before. The SDK fetches the list once, decodes and shrinks
+the photo (EXIF rotation first, JPEG 4:4:4 at quality 90), scales `box` / `point` / `roi` into
+the sent photo and maps every returned box, mask and grasp back, so callers still see original
+pixels; `Result.client_resize` records what was done. A JPEG that needs no shrinking is sent
+byte for byte. The JS SDK has no image decoder of its own: it uses the browser's
+(`createImageBitmap` + `OffscreenCanvas`) or `sharp` when the application has it, else sends
+photos as they are. The measured effect (bytes, latency, mAP) is in
+[Clients › Python](../clients/python.md#client-side-resizing-on-by-default).
 
 ```bash
 pip install visionserve            # SDK + client CLI
@@ -98,7 +124,7 @@ and answer 503 without receiving megabytes for nothing (see [HTTP server](server
         _write_file("image", image_bytes, filename)
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L575-L595)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L714-L734)
 
 Other calls mirror the HTTP routes: `health()`, `list_models()`, `load()`, `unload()`, `ps()`,
 and `preprocess()` / `tokenize()`, which return the exact tensors the server would feed the
@@ -123,7 +149,7 @@ by column. `Mask.to_ndarray` undoes that encoding:
         return flat.reshape((height, width), order="F")
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L220-L226)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L238-L244)
 
 `Result` also has client-side helpers that never touch the server: `filter_by_size`,
 `filter_by_conf`, `sort_by_conf`, `top_k`, `nms`, `filter_grasps`, `group_by_class`,
@@ -151,7 +177,7 @@ callers never see base64.
             embeddings = [[float(v) for v in row] for row in (d.get("embeddings") or [])]
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L375-L383)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L400-L408)
 
 With numpy installed, the decoded arrays are `FloatArray` objects: read-only, list-like
 (`len`, indexing, iteration, `==` with a list) and handed to numpy without a copy. They are not
@@ -180,21 +206,30 @@ default) is not listening.
     this.host = host.replace(/\/+$/, "");
     this.timeoutMs = opts.timeoutMs ?? 120_000;
     this.base64Arrays = Boolean(opts.base64Arrays);
+    // ...
+    this.resize = checkResize(opts.resize ?? "auto");
+    this.jpeg = opts.jpeg ?? true;
+    this.jpegQuality = checkQuality(opts.jpegQuality ?? 90);
+    this.codecOption = opts.codec;
   }
   // ...
   async predict(model: string, image: ImageInput, opts: PredictOptions = {}): Promise<Result> {
-    const form = buildPredictForm(model, opts, this.base64Arrays);
-    const { blob, filename } = await toBlob(image);
-    form.append("image", blob, filename);
+    buildPredictForm(model, opts, this.base64Arrays); // validate every option before any work
+    const { bytes, filename } = await toBytes(image);
+    const cr = await this.prepare(model, bytes, opts);
+    // ... (box / point / roi scaled into the sent photo when it was shrunk)
+    const form = buildPredictForm(model, sendOpts, this.base64Arrays);
+    // ...
+    form.append("image", bytesBlob(cr.bytes), name);
     const depth = depthBlob(opts);
     if (depth) form.append("depth", depth, "depth.bin");
 
     const data = await this.request("POST", "/api/predict", form);
-    return Result.fromJSON((data ?? {}) as Record<string, unknown>);
-  }
+    const result = Result.fromJSON((data ?? {}) as Record<string, unknown>);
+    return cr.clientResize ? mapResult(result, cr.clientResize) : result;
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/client.ts#L148-L202)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/client.ts#L200-L296)
 
 The JS `predict` takes the same options as the Python one, in camelCase (`boxThreshold` is sent
 as `box_threshold`), and normalises prompts with the same rule; both SDKs run the shared cases in

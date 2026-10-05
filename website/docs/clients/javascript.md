@@ -31,6 +31,10 @@ const arrays = new Client("http://127.0.0.1:11435", { base64Arrays: true });
 | `host` (1st) | `string` | `"http://127.0.0.1:11435"` | Base URL; trailing `/` removed. Prefer `127.0.0.1` to `localhost` ([why](index.md#connect)). |
 | `opts.timeoutMs` | `number`, milliseconds | `120000` | Abort a request that takes longer (the whole request, reading the answer included); you get a `VisionServeError` without a status. |
 | `opts.base64Arrays` | `boolean` | `false` | Ask for depth maps and embeddings as base64 float32 ([below](#base64arrays)). |
+| `opts.resize` | `"auto"`, `"off"` or `number` | `"auto"` | Shrink a photo larger than the model can use before uploading it ([below](#client-side-resizing-on-by-default)); a number is a longest side in pixels. |
+| `opts.jpeg` | `boolean` | `true` | Send a shrunk photo as JPEG (else PNG). |
+| `opts.jpegQuality` | `number` 1–100 | `90` | Its JPEG quality. |
+| `opts.codec` | `ImageCodec` or `null` | the browser's, else `sharp` if installed, else none | What decodes and shrinks photos; `null` turns resizing off. |
 
 ## `predict(model, image, opts)`
 
@@ -252,8 +256,9 @@ same float32 values: true
 ### Images
 
 A file path (`string`, Node only, read with `node:fs`), encoded bytes (`Uint8Array`, a Node
-`Buffer`, `ArrayBuffer`) or a `Blob` / `File`. They are sent unchanged: there is no pixel-array
-input, so encode raw frames to JPEG or PNG first. The server applies the EXIF orientation of a
+`Buffer`, `ArrayBuffer`) or a `Blob` / `File`. They are sent unchanged unless client-side
+resizing shrinks or re-encodes them (next section); there is no pixel-array input, so encode raw
+frames to JPEG or PNG first. The server applies the EXIF orientation of a
 JPEG, as described for [Python](python.md#images).
 
 ```ts
@@ -266,6 +271,33 @@ console.log("blob", (await client.predict("rf-detr", new Blob([bytes]))).detecti
 bytes 7
 blob 7
 ```
+
+### Client-side resizing (on by default)
+
+The same feature as in the [Python SDK](python.md#client-side-resizing-on-by-default), with the
+same rules and defaults: with `resize: "auto"` the client fetches the per-model size hints of
+`GET /api/models` once, shrinks a photo larger than its model can use (measured on the region
+when `roi` is given), sends it as JPEG at `jpegQuality` 90, scales `box`, `point` and a pixel
+`roi` into the sent photo, and maps every box, mask and grasp back. `res.clientResize` says what
+was sent (`null`: your bytes, untouched); a mask decodes at your photo's size with
+`toMask(width, height)` either way. Models without a hint, a JPEG already small enough, and
+requests with `depth`, `dilate`, `gripperMin` / `gripperMax` or `templateName` go out
+unchanged. `resize`, `jpeg` and `jpegQuality` are also `predict` options for one call.
+
+The SDK has no image decoder of its own, so the work needs a codec:
+
+| Where | Codec | Notes |
+|---|---|---|
+| browser, web worker | `createImageBitmap` + `OffscreenCanvas` (built in) | EXIF-rotated like the server. The canvas JPEG encoder chooses its own colour subsampling (usually 4:2:0), which the [Python measurements](python.md#client-side-resizing-on-by-default) show costs an embedding model more than 4:4:4; transparent pixels become black. Use `jpeg: false` or `resize: "off"` where that matters. |
+| Node with `sharp` installed by your application | `sharp` (libvips) | Lanczos-3 resize, JPEG 4:4:4. `sharp` is not a dependency of this package. |
+| Node without `sharp` | none | Photos are sent exactly as given, without an error or a warning: the results are the same, the upload is larger. |
+
+`codec: null` disables it; `codec: myCodec` plugs in your own (an object with
+`probe(bytes)` and `transcode(bytes, width, height, { jpeg, quality })`). The examples on this
+page ran in Node without `sharp`, so they upload the files unchanged; the size hint and the
+mapping are tested with a stand-in codec in `clients/js/tests/resize.test.ts`, and the decision
+rules (target size, ROI region) run the same shared cases as Python
+(`clients/testdata/client_resize.json`).
 
 ## Result
 
@@ -282,6 +314,7 @@ blob 7
 | `classifications` | `Classification[]`: `cls`, `conf` |
 | `depthMap`, `depthWidth`, `depthHeight` | `number[]` (row-major, the model's resolution), `number`, `number` |
 | `embeddings` | `number[][]` |
+| `clientResize` | `ClientResize` or `null`: `originalWidth/Height`, `sentWidth/Height`, `jpegQuality` (`null` = PNG), `resized` (client side only) |
 
 Helpers, all client side and returning a new `Result`: `filterByConf(min, max)`,
 `sortByConf(desc)`, `topK(k)`, `nms(iou)`, `groupByClass()`. Module functions:
@@ -430,8 +463,9 @@ Without either, the request fails with "failed to reach VisionServe … Failed t
 `npm install -g visionserve` (or `npx visionserve`) installs a `visionserve` command with the same
 commands as the [Python one](python.md#the-python-command-line-client): `predict` (alias `run`),
 `list` (`models`, `ls`), `ps`, `load`, `unload` (`rm`), `health`, with `--host`, `--timeout`
-(seconds) and `--version`. `predict` takes `--prompt`, `--box`, `--point`, and `--min-size` /
-`--max-size` in percent, which this CLI applies **on the client** after the answer arrives; the
+(seconds) and `--version`. `predict` takes `--prompt`, `--box`, `--point`, `--min-size` /
+`--max-size` in percent, which this CLI applies **on the client** after the answer arrives, and
+`--resize auto|off|N`, `--no-jpeg`, `--jpeg-quality Q` (resizing needs `sharp` in Node); the
 other options are only in the SDK (the Python CLI has a flag for each). `--save` writes an SVG
 (`<stem>.js.<model>.<task>.svg`), `--save-as PATH` names it, `--compact` and `--quiet` as in
 Python.

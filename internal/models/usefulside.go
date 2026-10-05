@@ -9,8 +9,8 @@ import (
 // UsefulSideFactor is the safety margin of the client-side resize hint: a client may shrink an
 // image until the model's own resize still DOWN-scales it by at least this factor on every axis,
 // so the model keeps resampling from more pixels than it keeps. 2 leaves the antialiased resize
-// a full octave of real detail; measured on RF-DETR it costs no mAP (docs/clients, "Client-side
-// resizing").
+// a full octave of real detail: measured through the Python SDK on 500 COCO val images upscaled
+// 4x, RF-DETR lost 0.02 mAP (website/docs/clients/python.md, "Client-side resizing").
 const UsefulSideFactor = 2
 
 // UsefulSide says how far a client may shrink an image before uploading it without changing what
