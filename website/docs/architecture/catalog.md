@@ -437,7 +437,10 @@ command; the allowlist lives in these two places only.
 !!! tip "No restart after a pull"
     When a request names a model the server does not know, the lifecycle manager rescans the
     registry (at most once per second) before giving up. A freshly pulled model is therefore
-    usable on the next request.
+    usable on the next request. `GET /api/models` rescans too: at once when a model folder was
+    added, removed or swapped since its last scan (the registry folder's modification time or its
+    list of folders changed), otherwise at most once per second. So a model is listed right after
+    `pull`, `convert` or `import` installs it.
 
 !!! note "Unpinned and unverified entries"
     A few entries have no pin (NanoSAM on Google Drive, the PaddleOCR keys file) and one is

@@ -26,6 +26,39 @@ type Registry struct {
 
 	refreshMu   sync.Mutex
 	lastRefresh time.Time // last Refresh that rescanned (see Refresh)
+	lastRoot    rootState // the root directory as that rescan saw it
+}
+
+// rootState is what an install changes in the root directory: its mtime (an install renames a
+// staging directory into root; a --force swap renames the old one aside) and the names of its
+// model directories (in case two changes land within one tick of a coarse filesystem clock).
+type rootState struct {
+	ok    bool
+	mtime time.Time
+	names string
+}
+
+func (r *Registry) statRoot() rootState {
+	fi, err := os.Stat(r.root)
+	if err != nil {
+		return rootState{}
+	}
+	entries, err := os.ReadDir(r.root)
+	if err != nil {
+		return rootState{}
+	}
+	var b strings.Builder
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+			b.WriteString(e.Name())
+			b.WriteByte(0)
+		}
+	}
+	return rootState{ok: true, mtime: fi.ModTime(), names: b.String()}
+}
+
+func (s rootState) changedFrom(prev rootState) bool {
+	return s.ok && (!prev.ok || !s.mtime.Equal(prev.mtime) || s.names != prev.names)
 }
 
 // New creates a registry pointing at the root directory that holds the models.
@@ -81,25 +114,32 @@ func (r *Registry) Scan() ([]error, error) {
 	return warns, nil
 }
 
-// Get returns the Entry for a model name.
-// Refresh rescans the directory when the last Refresh rescan is at least minInterval old, and
-// reports whether it did. A server lists models with it, so a model installed while the server
-// runs (pull, convert, import, a copied folder) shows up in the list at once — a client that
-// checks the list before its first request no longer misses it. The interval bounds the cost
-// (a ReadDir and one YAML parse per model) when a client polls the list.
+// Refresh rescans the directory when the root directory changed since the last Refresh rescan
+// (a model directory was added, removed or swapped: install, pull, convert, import, a copied
+// folder), or else when that rescan is at least minInterval old, and reports whether it did. A
+// server lists models with it, so a model installed while the server runs shows up in the list
+// at once, even right after the previous listing — a converter that installs and then checks
+// the list no longer misses it. The interval bounds the cost (a ReadDir and one YAML parse per
+// model) when a client polls an unchanged list; a manifest edited inside an existing model
+// directory does not change the root, so it waits for the interval.
+//
+// A Refresh that returns has seen a scan at least as new as the root it observed: the rescan
+// runs under the refresh lock, so a concurrent caller never lists the registry from before it.
 func (r *Registry) Refresh(minInterval time.Duration) bool {
 	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
 	now := time.Now()
-	if !r.lastRefresh.IsZero() && now.Sub(r.lastRefresh) < minInterval {
-		r.refreshMu.Unlock()
+	root := r.statRoot()
+	recent := !r.lastRefresh.IsZero() && now.Sub(r.lastRefresh) < minInterval
+	if recent && !root.changedFrom(r.lastRoot) {
 		return false
 	}
-	r.lastRefresh = now
-	r.refreshMu.Unlock()
-	r.Scan() //nolint:errcheck // scan problems are per-manifest warnings, reported at startup
+	r.lastRefresh, r.lastRoot = now, root // observed BEFORE the scan: a change during it rescans next time
+	r.Scan()                              //nolint:errcheck // scan problems are per-manifest warnings, reported at startup
 	return true
 }
 
+// Get returns the Entry for a model name.
 func (r *Registry) Get(name string) (*Entry, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
