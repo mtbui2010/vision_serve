@@ -97,6 +97,47 @@ pipeline, same 200 images:
 Flipped in `models/rt-detr/manifest.yaml` and the catalog entry (which cannot be pulled anyway).
 Separate commit, so it can be dropped if the stand-in weights are not considered enough evidence.
 
+**Audit 2026-10-05: `visionserve check` on every shipped detection / classification / depth /
+embedding model with a reference available locally.** CPU server (ORT 1.26) on a scratch registry
+holding the repo's manifests and weights; B1/B2 on 8 COCO val2017 CC BY photos (the ids in
+`website/docs/assets/img/CREDITS.md`), C on the 200-image COCO subset above. B1 is the mean
+difference in gray levels against the reference preprocessing (more than 8 costs accuracy).
+
+| model | reference | B1 | B2 | C mAP served / ref | verdict | action |
+|---|---|---:|---|---|---|---|
+| `rf-detr-nano` (was letterbox) | `rf-detr-nano.pth` | 50.0 | 36/41 boxes | 40.92 / 44.09 | FAIL | **fixed** (squash) |
+| `rf-detr-nano` (squash) | `rf-detr-nano.pth` | 0.38 | 42/42 | 43.80 / 44.09 | PASS | — |
+| `rf-detr` | `rf-detr-base.pth` | 0.41 | 41/41 | 47.62 / 47.78 | PASS | — |
+| `rfdetr-small` | `rf-detr-small.pth` | 0.40 | 44/44 | 47.45 / 47.85 | PASS | — |
+| `rfdetr-small-qf` | `rf-detr-small.pth` | 0.40 | 44/44 | — | PASS | — |
+| `rfdetr-small-etri`, `-etri-qf`, `-etri-probe` | rfdetr recipe (fine-tuned checkpoint not local) | 0.40 | — | — | PASS (B1 only) | — |
+| `rt-detr` (was letterbox + ImageNet) | rtdetr_r50vd stand-in | 78.5 | 11/40 | 7.16 / 50.40 | FAIL | **fixed** (squash, no mean/std) |
+| `rt-detr` (now) | rtdetr_r50vd stand-in | 0.23 | 43/43 | 50.34 / 50.40 | PASS | — |
+| `depth-anything-v2` | Depth-Anything-V2-Small-hf | 0.27 | Pearson r ≥ 0.9994 | — | PASS | — |
+| `clip` | `CLIPImageProcessor` (openai/clip-vit-base-patch32) | 0.24 | cosine ≥ 0.9990 | — | PASS | — |
+| `siglip-image`, `-fp16` | `SiglipImageProcessor` (google/siglip-base-patch16-224) | 0.24 | cosine ≥ 0.9995 | — | PASS | — |
+| `efficientnet-b0` | timm eval transform (crop_pct 0.875, bicubic) | **40.5** | top-1 agrees 4/8 | not measured | FAIL | reported, not fixed |
+| `mobilenet-v3` | torchvision `IMAGENET1K_V1.transforms()` (resize 256, crop 224) | **39.9** | top-1 agrees 3/8 | not measured | FAIL | reported, not fixed |
+| `midas` | manifest only (no reference) | 0.22 | — | — | server code only | — |
+| `scrfd` | manifest only (no reference) | 22137 | — | — | false FAIL (check bug) | reported |
+
+- **Classifiers.** The two ONNX files come from timm (`conv_stem`/`blocks` initializers) and
+  torchvision (`features.N.block`); both eval transforms resize then centre-crop, the manifests
+  squash the whole photo. The reference scripts load no weights (B2 runs the installed ONNX on
+  both tensors), and there is no labelled ImageNet set here for C, so the cost is not measured:
+  not fixed. Fix candidate: `crop: center` with the right resize ratio, after a top-1 run.
+- **`scrfd`: a bug in `check`, not in the manifest.** `check.py` builds its manifest reference with
+  the generic `spec_from_manifest`, which reads SCRFD's legacy `letterbox: true` as a centred
+  letterbox and its 0..255 mean/std as 0..1 units; Go resolves both per architecture
+  (`top_left_pad`, `NoRescale`). The report then tells the user to set a field that is already
+  set. Fix: resolve the architecture's legacy rules on the Python side too (shared fixture).
+- **Not run:** `paddle-ocr` (no reference), `owlvit-base`, `grounding-dino(-fixed)` and the
+  open-vocab pipelines (`check --checkpoint` takes HF object detection only for task
+  `detection`), the text towers, the grasp and segmentation models.
+- **`grasp-rfdetr`** still letterboxes its RF-DETR stage, which serves the same
+  `rf-detr-base-real` weights as `rf-detr` (squash, PASS above). Same candidate as before; `check`
+  cannot run a grasp model, so its grasp outputs still need their own check before flipping.
+
 **#2.** Confirming sweep on the router after #1, rescored entry, `crop_temp` per request:
 
 | T | 0.02 | 0.03 | 0.05 | 0.07 | 0.1 |
