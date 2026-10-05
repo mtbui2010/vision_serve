@@ -78,11 +78,11 @@ to measure the cold load through the server too.
 
 !!! tip "Large photos: the client can shrink them for you"
     The model shrinks every photo to its own input size (384 × 384 here) anyway, so uploading a
-    12-megapixel photo mostly sends pixels the model throws away. Recent Python and JavaScript
-    SDKs shrink a large photo before uploading it, by default, and map the answer back to your
-    photo's pixels. See [Clients: Python](../clients/python.md) for the `resize` option. (If the
-    page has no such option yet, that SDK change lands in a later release.) `bench` itself sends
-    your photos as they are, so it measures the upload of the size you give it.
+    12-megapixel photo mostly sends pixels the model throws away. The Python (0.2.0+) and
+    JavaScript (0.1.4+) SDKs shrink a large photo before uploading it, by default, and map the
+    answer back to your photo's pixels; see
+    [Client-side resizing](../clients/python.md#client-side-resizing-on-by-default). `bench`
+    itself sends your photos as they are, so it measures the upload of the size you give it.
 
 ## If it says WARN or FAIL
 

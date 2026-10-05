@@ -314,9 +314,9 @@ panorama keeps its rows. A model whose output needs the full photo gets no hint:
 
 | Hint | Models (shipped manifests) |
 |---|---|
-| `max_useful_short_side` 1120 / 1024 / 1600 | `rf-detr` / `rfdetr-small*` / `grounding-dino`, `grounding-dino-fixed` |
+| `max_useful_short_side` 1120 / 1024 / 768 / 1280 / 1600 | `rf-detr` / `rfdetr-small*` / `rf-detr-nano` / `rt-detr` / `grounding-dino`, `grounding-dino-fixed` |
 | `max_useful_short_side` 448 / 512 | `clip`, `siglip-image*`, `efficientnet-b0`, `mobilenet-v3` / `midas` |
-| `max_useful_side` 768 / 1280 | `rf-detr-nano` / `rt-detr`, `scrfd` |
+| `max_useful_side` 1280 | `scrfd` |
 | none: always the full photo | SAM family and every model that returns masks (`mobile-sam`, `nano-sam`, `efficient-sam`, `sam2`, `grounded-sam`, `gdino-siglip-sam`, `rfdetr-gdino-sam*`, `background`), `paddle-ocr`, grasp models, `owlv2_base_patch16` (templates), the crop-naming pipelines (`rfdetr-gdino*`, `rfdetr-textalign*`, `rfdetr-dualhead-dec1`, `gdino-siglip`), `depth-anything-v2` (its tensor follows the photo's aspect ratio), text towers |
 
 A manifest can override it with [`runtime.max_useful_side`](../reference/manifest.md) (`0` =
@@ -1097,7 +1097,7 @@ print(c.tokenize("clip-text", "a photo of a dog")[0, :8])
 ```
 
 ```text
-[ModelInfo(name='rf-detr', task='detection', license='Apache-2.0', state='loaded', max_useful_side=None, max_useful_short_side=1120), ModelInfo(name='rf-detr-nano', task='detection', license='Apache-2.0', state='available', max_useful_side=768, max_useful_short_side=None)]
+[ModelInfo(name='rf-detr', task='detection', license='Apache-2.0', state='loaded', max_useful_side=None, max_useful_short_side=1120), ModelInfo(name='rf-detr-nano', task='detection', license='Apache-2.0', state='available', max_useful_side=None, max_useful_short_side=768)]
 {'model': 'midas', 'state': 'unloaded'} {'model': 'midas', 'state': 'loaded'}
 ['background', 'clip', 'clip-text', 'gdino-siglip', 'grasp-gd']
 PreprocessResult(model='rf-detr', inputs={'input': (1, 3, 560, 560)}, meta={'orig_width': 640, 'orig_height': 426, 'scale_x': 0.875, 'scale_y': 1.3145539906103287, 'pad_x': 0, 'pad_y': 0})

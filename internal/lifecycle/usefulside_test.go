@@ -21,16 +21,17 @@ func TestUsefulSideShippedManifests(t *testing.T) {
 	short := func(n int) models.UsefulSide { return models.UsefulSide{Short: n} }
 	never := models.UsefulSide{}
 	want := map[string]models.UsefulSide{
-		// Detectors on a fixed input: squash fills both axes (shorter side), letterbox and
-		// SCRFD's top-left pad fit inside it (longer side). 2 × the input side.
+		// Detectors on a fixed input: squash fills both axes (shorter side), SCRFD's top-left
+		// pad fits inside it (longer side). 2 × the input side. (rf-detr-nano and rt-detr squash
+		// since the 2026-10-05 check audit.)
 		"rf-detr":                 short(1120),
-		"rf-detr-nano":            long(768),
+		"rf-detr-nano":            short(768),
 		"rfdetr-small":            short(1024),
 		"rfdetr-small-etri":       short(1024),
 		"rfdetr-small-etri-probe": short(1024),
 		"rfdetr-small-etri-qf":    short(1024),
 		"rfdetr-small-qf":         short(1024),
-		"rt-detr":                 long(1280),
+		"rt-detr":                 short(1280),
 		"scrfd":                   long(1280),
 		"grounding-dino":          short(1600),
 		"grounding-dino-fixed":    short(1600),
