@@ -35,6 +35,7 @@ type archSpec struct {
 	Height     int       `json:"height"`
 	MultipleOf int       `json:"multiple_of"`
 	NoUpscale  bool      `json:"no_upscale"`
+	CropPct    float32   `json:"crop_pct"`
 	Resample   string    `json:"resample"`
 	Mean       []float32 `json:"mean"`
 	Std        []float32 `json:"std"`
@@ -58,7 +59,8 @@ func (w archSpec) equal(s preprocess.Spec) bool {
 	}
 	rescale := w.Rescale == nil || *w.Rescale
 	return string(s.Resize) == w.Resize && s.Width == w.Width && s.Height == w.Height &&
-		s.MultipleOf == w.MultipleOf && s.NoUpscale == w.NoUpscale && string(s.Resample) == w.Resample &&
+		s.MultipleOf == w.MultipleOf && s.NoUpscale == w.NoUpscale && s.CropPct == w.CropPct &&
+		string(s.Resample) == w.Resample &&
 		same(s.Mean, w.Mean) && same(s.Std, w.Std) && s.NoRescale != rescale && string(s.Layout) == w.Layout &&
 		s.PadValue == w.Pad && s.Legacy == w.Legacy
 }

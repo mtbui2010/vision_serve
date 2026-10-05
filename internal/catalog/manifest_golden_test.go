@@ -225,7 +225,8 @@ func TestPullRegeneratesLegacyGeneratedManifest(t *testing.T) {
 // composed entry (own Files and VirtualFiles) or runtime.threads. (HFSubdir only changes
 // SourceURL(), which the legacy renderer calls too.)
 func postLegacy(e Entry) bool {
-	return (len(e.Files) > 0 && len(e.VirtualFiles) > 0) || len(e.RuntimeThreads) > 0
+	return (len(e.Files) > 0 && len(e.VirtualFiles) > 0) || len(e.RuntimeThreads) > 0 ||
+		e.Resize != "" || e.CropPct != 0 || e.Resample != ""
 }
 
 // render is RenderManifest for tests: a rendering error fails the test.

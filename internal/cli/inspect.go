@@ -277,6 +277,7 @@ type preprocessDetails struct {
 	Width      int       `json:"width"`
 	Height     int       `json:"height"`
 	MultipleOf int       `json:"multiple_of,omitempty"`
+	CropPct    float32   `json:"crop_pct,omitempty"` // center_crop: kept fraction of the resized short side
 	Resample   string    `json:"resample"`
 	Mean       []float32 `json:"mean"`
 	Std        []float32 `json:"std"`
@@ -700,7 +701,7 @@ func outputClasses(arch string, outs []engine.IOFacts) int {
 }
 
 func preprocessFacts(s preprocess.Spec, fit lifecycle.InputFit, rel func(string) string) *preprocessDetails {
-	p := &preprocessDetails{Resize: string(s.Resize), Width: s.Width, Height: s.Height, MultipleOf: s.MultipleOf,
+	p := &preprocessDetails{Resize: string(s.Resize), Width: s.Width, Height: s.Height, MultipleOf: s.MultipleOf, CropPct: s.CropPct,
 		Mean: s.Mean, Std: s.Std, Rescale: !s.NoRescale, Layout: string(s.Layout), Pad: s.PadValue,
 		Produces: fit.Produced, GraphInput: fit.Input, GraphShape: fit.Graph, NotChecked: fit.Skipped}
 	if p.Resize == "" {

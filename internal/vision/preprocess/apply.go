@@ -47,7 +47,7 @@ func (s Spec) Apply(img image.Image) (engine.Tensor, Meta, error) {
 		return s.render(r, 0, 0, nw, nh, W, H, px, py, pixelPad), meta, nil
 
 	case CenterCrop:
-		rw, rh, offX, offY := CoverSize(ow, oh, W, H)
+		rw, rh, offX, offY := CenterCropSize(ow, oh, W, H, s.CropPct)
 		r := imaging.Resize(img, rw, rh, s.Filter())
 		meta.ScaleX, meta.ScaleY = float64(rw)/float64(ow), float64(rh)/float64(oh)
 		meta.PadX, meta.PadY = -offX, -offY

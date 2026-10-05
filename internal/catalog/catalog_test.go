@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"visionserve/internal/registry"
+	"visionserve/internal/vision/preprocess"
 )
 
 // A composed entry points INTO its dependencies' directories ("../grounding-dino/<file>"). Those
@@ -214,6 +215,41 @@ func TestRFDETRDetectorsSquashAndOldManifestsAreRegenerated(t *testing.T) {
 			if !isUneditedGenerated(content) {
 				t.Errorf("%s %s: an old generated manifest is not recognised as generated; "+
 					"re-pull would keep letterbox: true", name, kind)
+			}
+			if content == render(t, e) {
+				t.Errorf("%s %s: old and new renderings are identical", name, kind)
+			}
+		}
+	}
+}
+
+// The ImageNet classifiers are fed as their weights are evaluated: short side to 256, centred 224
+// crop (crop_pct 0.875), timm bicubic / torchvision bilinear — squashed they scored 1.60 / 3.74
+// top-1 lower (BUGS_TO_FIX.md #1 audit). The rendered manifest must resolve to that through the
+// registry, and a squash manifest an older pull generated must count as unedited generated output
+// so a plain re-pull replaces it.
+func TestClassifiersCenterCropAndOldManifestsAreRegenerated(t *testing.T) {
+	for name, resample := range map[string]preprocess.Resample{"efficientnet-b0": preprocess.Bicubic, "mobilenet-v3": preprocess.Bilinear} {
+		e, ok := Lookup(name)
+		if !ok {
+			t.Fatalf("%s not in the catalog", name)
+		}
+		m := loadRendered(t, filepath.Join(t.TempDir(), name, "manifest.yaml"), render(t, e))
+		s, err := m.PreprocessSpec()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if s.Resize != preprocess.CenterCrop || s.CropPct != 0.875 || s.Resample != resample || s.Width != 224 {
+			t.Errorf("%s renders %+v; want center_crop 224, crop_pct 0.875, %s", name, s, resample)
+		}
+		old := e
+		old.Resize, old.CropPct, old.Resample = "", 0, ""
+		for kind, content := range map[string]string{"hashed header": render(t, old), "legacy": legacyRenderManifest(old)} {
+			if strings.Contains(content, "crop_pct") {
+				t.Fatalf("%s %s: precondition: the old rendering squashes:\n%s", name, kind, content)
+			}
+			if !isUneditedGenerated(content) {
+				t.Errorf("%s %s: an old generated manifest is not recognised as generated; re-pull would keep the squash", name, kind)
 			}
 			if content == render(t, e) {
 				t.Errorf("%s %s: old and new renderings are identical", name, kind)

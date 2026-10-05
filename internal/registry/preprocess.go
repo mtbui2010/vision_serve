@@ -18,6 +18,7 @@ import (
 //	  size: 640              # or width: / height:
 //	  multiple_of: 14        # keep_aspect: round sides; long_side_pad: pad sides up to it
 //	  no_upscale: true       # long_side / long_side_pad: never enlarge
+//	  crop_pct: 0.875        # center_crop: keep this fraction of the resized short side (timm)
 //	  resample: bilinear     # bilinear | bicubic (default: the mode's)
 //	  mean: [0.485, 0.456, 0.406]
 //	  std:  [0.229, 0.224, 0.225]
@@ -31,6 +32,7 @@ type PreprocessBlock struct {
 	Height     int       `yaml:"height,omitempty"`
 	MultipleOf int       `yaml:"multiple_of,omitempty"`
 	NoUpscale  bool      `yaml:"no_upscale,omitempty"`
+	CropPct    float32   `yaml:"crop_pct,omitempty"`
 	Resample   string    `yaml:"resample,omitempty"`
 	Mean       []float32 `yaml:"mean,omitempty"`
 	Std        []float32 `yaml:"std,omitempty"`
@@ -207,6 +209,7 @@ func (m *Manifest) PreprocessSpec() (preprocess.Spec, error) {
 	}
 
 	s.NoUpscale = b.NoUpscale
+	s.CropPct = b.CropPct
 	s.Resample = preprocess.Resample(strings.ToLower(strings.TrimSpace(b.Resample)))
 	if b.Rescale != nil {
 		s.NoRescale = !*b.Rescale

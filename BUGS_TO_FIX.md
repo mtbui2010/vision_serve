@@ -116,19 +116,47 @@ difference in gray levels against the reference preprocessing (more than 8 costs
 | `depth-anything-v2` | Depth-Anything-V2-Small-hf | 0.27 | Pearson r ≥ 0.9994 | — | PASS | — |
 | `clip` | `CLIPImageProcessor` (openai/clip-vit-base-patch32) | 0.24 | cosine ≥ 0.9990 | — | PASS | — |
 | `siglip-image`, `-fp16` | `SiglipImageProcessor` (google/siglip-base-patch16-224) | 0.24 | cosine ≥ 0.9995 | — | PASS | — |
-| `efficientnet-b0` | timm eval transform (crop_pct 0.875, bicubic) | **40.5** | top-1 agrees 4/8 | not measured | FAIL | reported, not fixed |
-| `mobilenet-v3` | torchvision `IMAGENET1K_V1.transforms()` (resize 256, crop 224) | **39.9** | top-1 agrees 3/8 | not measured | FAIL | reported, not fixed |
+| `efficientnet-b0` (was squash) | timm eval transform (crop_pct 0.875, bicubic) | **40.5** | top-1 agrees 4/8 | top-1 80.20 / 81.80 (500 img); 77.44 served on 5000 | FAIL | **fixed** (`center_crop`, `crop_pct: 0.875`, bicubic) |
+| `efficientnet-b0` (now) | same | 0.24 | 8/8 | 81.80 / 81.80; 79.04 served on 5000 (timm 78.84) | PASS | — |
+| `mobilenet-v3` (was squash) | torchvision `IMAGENET1K_V1.transforms()` (resize 256, crop 224) | **39.9** | top-1 agrees 3/8 (2/8 now) | 70.60 / 74.80 (500 img); 68.08 served on 5000 | FAIL | **fixed** (`center_crop`, `crop_pct: 0.875`, bilinear) |
+| `mobilenet-v3` (now) | same | 0.22 | 7/8 (a near tie, \|Δprob\| ≤ 0.016) | 75.00 / 74.80; 71.82 served on 5000 (torchvision 71.86) | WARN (B2) | — |
 | `midas` | manifest only (no reference) | 0.22 | — | — | server code only | — |
 | `scrfd` | manifest only (no reference) | 22137 | — | — | false FAIL (check bug) | **fixed** in `check` |
 | `scrfd` (check fixed) | manifest, resolved per architecture | 0.18 | — | — | PASS | — |
 | `grasp-rfdetr` (was letterbox) | served detections vs COCO GT (`check` cannot run grasp) | — | — | 45.50 (`rf-detr` 47.77) | FAIL | **fixed** (squash) |
 | `grasp-rfdetr` (squash) | same | — | — | 47.77 (= `rf-detr`) | PASS | — |
 
-- **Classifiers.** The two ONNX files come from timm (`conv_stem`/`blocks` initializers) and
-  torchvision (`features.N.block`); both eval transforms resize then centre-crop, the manifests
-  squash the whole photo. The reference scripts load no weights (B2 runs the installed ONNX on
-  both tensors), and there is no labelled ImageNet set here for C, so the cost is not measured:
-  not fixed. Fix candidate: `crop: center` with the right resize ratio, after a top-1 run.
+- **Classifiers: fixed.** Origin verified on weights, not names: the `efficientnet-b0` ONNX
+  matches timm `efficientnet_b0.ra_in1k` (and torchvision's `efficientnet_b0` IMAGENET1K_V1, the
+  same tensors) to 4.8e-6 on a random input, `mobilenet-v3` matches torchvision
+  `mobilenet_v3_small` IMAGENET1K_V1 to 7.2e-6. Both are evaluated by resizing the short side to
+  256 and keeping the centred 224 (timm: crop_pct 0.875, bicubic; torchvision: bilinear); the
+  manifests squashed the whole photo. Measured on the local ImageNet-1k val subset
+  (`/mnt/nas/huggingface/trung_w6/imagenet_val`, made by `eval/accuracy/prep_imagenet_val.py`: 5000
+  images, classes 0-99 × 50, stored with the short side at 256), served on CPU (ORT 1.26):
+
+  | top-1 / top-5, 5000 images | `efficientnet-b0` | `mobilenet-v3` |
+  |---|---:|---:|
+  | served, squash (as shipped) | 77.44 / 93.44 | 68.08 / 86.72 |
+  | served, `center_crop` + `crop_pct: 0.875` (now) | **79.04 / 94.74** | **71.82 / 89.44** |
+  | original framework (timm / torchvision transform + model) | 78.84 | 71.86 |
+  | in-process ONNX, squash / centre crop at crop_pct 1 / crop_pct 0.875 | 77.26 / 78.04 / 78.84 | 68.02 / 70.88 / 71.86 |
+
+  Paired: the crop gets 228 images right that squash gets wrong and loses 148 (efficientnet,
+  z = 4.1); 394 vs 207 (mobilenet, z = 7.6). `center_crop` alone (short side to 224, CLIP's
+  rule) recovers about half, so the change needed a new `preprocess.crop_pct` (timm's
+  vocabulary; Go `Spec.CropPct` / `CenterCropSize`, Python `spec.center_crop_size`, both in the
+  geometry and resolution corpora) and `center_crop` among the classification architecture's
+  modes (a legacy `input.crop: center` on a classifier, ignored until now, is honoured). Caveat:
+  this subset is stored at 256, so the resize to 256 is nearly a no-op and bicubic vs bilinear
+  cannot be told apart here; each manifest declares its own framework's filter. B1 on these
+  ImageNet files is 1.51 gray levels (PASS): torchvision rounds a half-pixel crop offset to even,
+  this mode floors it (HF's rule), a one-pixel shift on some photos with no accuracy cost (C
+  identical). Served latency (warm, median of 20, the COCO #564133 photo): +1.2 ms on GPU for
+  efficientnet (bicubic to 256 instead of bilinear to 224), none measurable for mobilenet.
+  Manifests, catalog entries (they now render a `preprocess:` block; an unedited old manifest is
+  regenerated on re-pull: `TestClassifiersCenterCropAndOldManifestsAreRegenerated`), Go golden
+  `classification.json` (+2 crop cases, the existing 60 records unchanged), gallery figure.
 - **`scrfd`: a bug in `check`, not in the manifest — fixed.** `check.py` built its manifest
   reference with the generic `spec_from_manifest`, which read SCRFD's legacy `letterbox: true` as a
   centred letterbox and its 0..255 mean/std as 0..1 units; Go resolves both per architecture

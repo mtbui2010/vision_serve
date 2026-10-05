@@ -53,12 +53,30 @@
       "error": ["rtdetr", "does not support resize", "keep_aspect"]
     },
     {
-      "name": "efficientnet legacy crop center: never honoured, squash",
+      "name": "efficientnet legacy crop center: honoured (center_crop since the 2026-10 audit)",
       "architecture": "efficientnet",
       "input": {"width": 224, "height": 224, "crop": "center",
                 "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
-      "spec": {"resize": "squash", "width": 224, "height": 224, "layout": "NCHW",
+      "spec": {"resize": "center_crop", "width": 224, "height": 224, "layout": "NCHW",
                "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225], "legacy": true}
+    },
+    {
+      "name": "efficientnet block center_crop crop_pct 0.875 bicubic (the shipped manifest)",
+      "architecture": "efficientnet",
+      "input": {"width": 224, "height": 224, "layout": "NCHW", "letterbox": false,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "preprocess": {"resize": "center_crop", "crop_pct": 0.875, "resample": "bicubic"},
+      "spec": {"resize": "center_crop", "width": 224, "height": 224, "crop_pct": 0.875, "resample": "bicubic",
+               "layout": "NCHW", "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
+    },
+    {
+      "name": "mobilenet-v3 block center_crop crop_pct 0.875 bilinear (the shipped manifest)",
+      "architecture": "mobilenet-v3",
+      "input": {"width": 224, "height": 224, "layout": "NCHW", "letterbox": false,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "preprocess": {"resize": "center_crop", "crop_pct": 0.875, "resample": "bilinear"},
+      "spec": {"resize": "center_crop", "width": 224, "height": 224, "crop_pct": 0.875, "resample": "bilinear",
+               "layout": "NCHW", "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
     },
     {
       "name": "mobilenet-v3 legacy letterbox: never honoured, squash",
@@ -70,7 +88,7 @@
       "name": "efficientnet block letterbox: refused",
       "architecture": "efficientnet",
       "preprocess": {"resize": "letterbox", "size": 224},
-      "error": ["classification", "does not support resize", "letterbox"]
+      "error": ["classification", "does not support resize", "letterbox", "squash, center_crop"]
     },
     {
       "name": "clip legacy crop center without normalize: CLIP's mean/std",

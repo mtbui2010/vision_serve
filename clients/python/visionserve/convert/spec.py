@@ -46,6 +46,7 @@ class Spec:
     height: int = 0
     multiple_of: int = 0
     no_upscale: bool = False
+    crop_pct: float = 0.0  # center_crop: kept fraction of the resized short side (timm); 0 = 1
     resample: str = ""
     mean: Optional[List[float]] = None
     std: Optional[List[float]] = None
@@ -66,6 +67,8 @@ class Spec:
             d["multiple_of"] = int(self.multiple_of)
         if self.no_upscale:
             d["no_upscale"] = True
+        if self.crop_pct:
+            d["crop_pct"] = float(self.crop_pct)
         if self.resample:
             d["resample"] = self.resample
         if self.mean is not None and self.std is not None:
@@ -222,6 +225,8 @@ def spec_from_manifest(doc: dict) -> Spec:
         s.layout = legacy_layout
 
     s.no_upscale = bool(_yaml_bool(pre.get("no_upscale"), "preprocess.no_upscale"))
+    if pre.get("crop_pct") is not None:
+        s.crop_pct = float(np.float32(pre["crop_pct"]))
     s.resample = str(pre.get("resample") or "").strip().lower()
     rescale = _yaml_bool(pre.get("rescale"), "preprocess.rescale")
     if rescale is not None:
@@ -244,13 +249,18 @@ def validate(s: Spec) -> None:
         raise SpecError(f'preprocess: layout "{s.layout}" is invalid (NCHW, NHWC or HWC)')
     if s.resample not in ("", "bilinear", "bicubic"):
         raise SpecError(f'preprocess: resample "{s.resample}" is invalid (bilinear or bicubic)')
-    if not all(math.isfinite(v) for v in list(s.mean or []) + list(s.std or []) + [s.pad]):
-        raise SpecError(f"preprocess: mean, std and pad must be finite numbers (got mean {s.mean}, "
-                        f"std {s.std}, pad {s.pad})")
+    if not all(math.isfinite(v) for v in list(s.mean or []) + list(s.std or []) + [s.pad, s.crop_pct]):
+        raise SpecError(f"preprocess: mean, std, pad and crop_pct must be finite numbers (got mean {s.mean}, "
+                        f"std {s.std}, pad {s.pad}, crop_pct {s.crop_pct})")
     if s.legacy:
         return
     if s.multiple_of > 0 and s.resize not in ("keep_aspect", "long_side_pad"):
         raise SpecError(f"preprocess: multiple_of applies to keep_aspect and long_side_pad, not {s.resize}")
+    if s.crop_pct != 0 and s.resize != "center_crop":
+        raise SpecError(f"preprocess: crop_pct applies to center_crop, not {s.resize}")
+    if s.crop_pct < 0 or s.crop_pct > 1:
+        raise SpecError(f"preprocess: crop_pct must be in (0, 1] (the kept fraction of the resized short side), "
+                        f"got {s.crop_pct:g}")
     if s.no_upscale and s.resize not in ("long_side", "long_side_pad"):
         raise SpecError(f"preprocess: no_upscale applies to long_side and long_side_pad, not {s.resize}")
     if s.resize == "none" and s.resample:
@@ -286,8 +296,8 @@ class Arch:
 ARCHS = {
     "rf-detr": Arch("rfdetr", ("squash", "letterbox")),
     "rt-detr": Arch("rtdetr", ("squash", "letterbox")),
-    "efficientnet": Arch("classification", ("squash",)),
-    "mobilenet-v3": Arch("classification", ("squash",)),
+    "efficientnet": Arch("classification", ("squash", "center_crop")),
+    "mobilenet-v3": Arch("classification", ("squash", "center_crop")),
     "clip": Arch("clip", ("squash", "center_crop")),
     "midas": Arch("depth", ("squash", "keep_aspect")),
     "depth-anything-v2": Arch("depth", ("squash", "keep_aspect")),
@@ -391,6 +401,17 @@ def cover_size(w: int, h: int, W: int, H: int):
     return rw, rh, (rw - W) // 2, (rh - H) // 2
 
 
+def center_crop_size(w: int, h: int, W: int, H: int, crop_pct: float = 0.0):
+    """vision/preprocess.CenterCropSize: cover floor(W/crop_pct) x floor(H/crop_pct) (timm's
+    math.floor(size / crop_pct)), keep the centred W x H; crop_pct <= 0 or >= 1 is cover_size."""
+    sw, sh = W, H
+    p = float(np.float32(crop_pct))
+    if 0 < p < 1:
+        sw, sh = int(math.floor(W / p + 1e-4)), int(math.floor(H / p + 1e-4))
+    rw, rh, _, _ = cover_size(w, h, sw, sh)
+    return rw, rh, (rw - W) // 2, (rh - H) // 2
+
+
 def dpt_keep_aspect_size(w: int, h: int, tw: int, th: int, multiple: int = 1):
     """(new_w, new_h) for keep_aspect — vision/preprocess.DPTKeepAspectSize, which is HF's DPT
     get_resize_output_image_size(keep_aspect_ratio=True): both axes take whichever of tw/w, th/h is
@@ -489,7 +510,7 @@ def apply_spec(pil, spec: Spec):
         x = np.asarray(img.resize((nw, nh), rs), np.float32)
         meta = _meta(ow, oh, nw / ow, nh / oh)
     elif mode == "center_crop":
-        rw, rh, ox, oy = cover_size(ow, oh, W, H)
+        rw, rh, ox, oy = center_crop_size(ow, oh, W, H, spec.crop_pct)
         x = np.asarray(img.resize((rw, rh), rs).crop((ox, oy, ox + W, oy + H)), np.float32)
         meta = _meta(ow, oh, rw / ow, rh / oh, -ox, -oy)
     elif mode in ("letterbox", "top_left_pad"):
@@ -533,7 +554,7 @@ def spec_meta(spec: Spec, ow: int, oh: int) -> dict:
         nw, nh = dpt_keep_aspect_size(ow, oh, W, H, spec.multiple_of)
         return _meta(ow, oh, nw / ow, nh / oh)
     if mode == "center_crop":
-        rw, rh, ox, oy = cover_size(ow, oh, W, H)
+        rw, rh, ox, oy = center_crop_size(ow, oh, W, H, spec.crop_pct)
         return _meta(ow, oh, rw / ow, rh / oh, -ox, -oy)
     if mode == "letterbox":
         _, _, s, px, py = letterbox_size(ow, oh, W, H)
@@ -555,6 +576,8 @@ def describe(spec: Spec) -> str:
     if mode == "keep_aspect":
         return f"keep-aspect {_filter_name(spec)} (multiple of {spec.multiple_of or 1}) around"
     if mode == "center_crop":
+        if spec.crop_pct and spec.crop_pct < 1:
+            return f"centre crop {_filter_name(spec)} (crop_pct {spec.crop_pct:g})"
         return f"centre crop {_filter_name(spec)}"
     return f"{mode.replace('_', ' ')} {_filter_name(spec)}"
 

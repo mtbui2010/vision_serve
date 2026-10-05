@@ -20,9 +20,9 @@ from the server's `/api/preprocess` endpoint and turned back into pictures:
 
 | Mode (`resize:`) | What it does | Used by |
 |---|---|---|
-| `squash` | Stretch to W×H, ignoring the aspect ratio. | RF-DETR, GroundingDINO, SAM 2, classifiers |
+| `squash` | Stretch to W×H, ignoring the aspect ratio. | RF-DETR, GroundingDINO, SAM 2 |
 | `letterbox` | Shrink to fit, keep the aspect ratio, pad the rest (centred). | DETR-family models that were trained that way (manifest option) |
-| `center_crop` | Resize the short side, then cut out the centre. | CLIP |
+| `center_crop` | Resize the short side, then cut out the centre; with `crop_pct` the short side is first resized a little larger (256 for a 224 crop at 0.875). | CLIP; the ImageNet classifiers (`crop_pct: 0.875`) |
 | `keep_aspect` | Resize keeping the aspect ratio, sides rounded to a multiple (e.g. 14). | Depth-Anything |
 | `long_side` / `long_side_pad` | Longest side to the target; `_pad` also pads the bottom/right. | MobileSAM / NanoSAM, PaddleOCR |
 | `top_left_pad` | Fit and keep the aspect ratio, image at the top-left corner, pad the rest. | SCRFD (faces) |

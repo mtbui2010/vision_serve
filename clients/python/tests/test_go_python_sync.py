@@ -182,7 +182,7 @@ GO_PREPROCESS = ROOT / "internal" / "vision" / "preprocess" / "spec.go"
 def _canonical(s) -> dict:
     import numpy as np
     return {"resize": s.resize, "width": s.width, "height": s.height, "multiple_of": s.multiple_of,
-            "no_upscale": s.no_upscale, "resample": s.resample,
+            "no_upscale": s.no_upscale, "crop_pct": float(np.float32(s.crop_pct)), "resample": s.resample,
             "mean": [float(np.float32(v)) for v in (s.mean or [])],
             "std": [float(np.float32(v)) for v in (s.std or [])],
             "rescale": s.rescale, "layout": s.layout, "pad": float(np.float32(s.pad)), "legacy": s.legacy}
@@ -210,9 +210,10 @@ def test_preprocess_resolution_corpus():
             for sub in c["error"]:
                 assert sub in str(e.value), f"{c['name']}: {e.value!r} does not name {sub!r}"
             continue
-        want = {"resize": "", "width": 0, "height": 0, "multiple_of": 0, "no_upscale": False, "resample": "",
-                "mean": [], "std": [], "rescale": True, "layout": "", "pad": 0.0, "legacy": False}
+        want = {"resize": "", "width": 0, "height": 0, "multiple_of": 0, "no_upscale": False, "crop_pct": 0.0,
+                "resample": "", "mean": [], "std": [], "rescale": True, "layout": "", "pad": 0.0, "legacy": False}
         want.update(c["spec"])
+        want["crop_pct"] = float(np.float32(want["crop_pct"]))
         want["mean"] = [float(np.float32(v)) for v in want["mean"]]
         want["std"] = [float(np.float32(v)) for v in want["std"]]
         assert _canonical(spec.spec_from_manifest(doc)) == want, c["name"]
@@ -261,9 +262,10 @@ def test_arch_resolution_corpus():
         if c.get("fixed_by_export"):
             assert got is None, c["name"]
             continue
-        want = {"resize": "", "width": 0, "height": 0, "multiple_of": 0, "no_upscale": False, "resample": "",
-                "mean": [], "std": [], "rescale": True, "layout": "", "pad": 0.0, "legacy": False}
+        want = {"resize": "", "width": 0, "height": 0, "multiple_of": 0, "no_upscale": False, "crop_pct": 0.0,
+                "resample": "", "mean": [], "std": [], "rescale": True, "layout": "", "pad": 0.0, "legacy": False}
         want.update(c["spec"])
+        want["crop_pct"] = float(np.float32(want["crop_pct"]))
         want["mean"] = [float(np.float32(v)) for v in want["mean"]]
         want["std"] = [float(np.float32(v)) for v in want["std"]]
         assert _canonical(got) == want, c["name"]

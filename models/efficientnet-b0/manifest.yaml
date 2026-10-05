@@ -15,6 +15,18 @@ input:
     mean: [0.485, 0.456, 0.406]
     std:  [0.229, 0.224, 0.225]
 
+# Fed as timm evaluates these weights (efficientnet_b0.ra_in1k; torchvision's efficientnet_b0
+# IMAGENET1K_V1 is the same tensors): resize the short side to 256 (224 / crop_pct 0.875),
+# bicubic, keep the centred 224x224. Squashing the whole photo cost top-1 — measured 2026-10-05,
+# served (CPU, ORT 1.26), 5000 ImageNet-1k val images (classes 0-99, 50 each):
+#   squash (as shipped until then)  top-1 77.44, top-5 93.44
+#   center_crop, crop_pct 0.875     top-1 79.04, top-5 94.74   (timm 78.84 with timm's own transform)
+# BUGS_TO_FIX.md #1, audit.
+preprocess:
+  resize: center_crop
+  crop_pct: 0.875
+  resample: bicubic
+
 postprocess:
   type: classification
   max_detections: 5
