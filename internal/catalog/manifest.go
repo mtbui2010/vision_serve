@@ -112,6 +112,7 @@ type manifestDoc struct {
 	Files        map[string]string `yaml:"files,omitempty"`
 	ModelFile    string            `yaml:"model_file,omitempty"`
 	Input        inputDoc          `yaml:"input"`
+	Preprocess   *preprocessDoc    `yaml:"preprocess,omitempty"`
 	Postprocess  postprocessDoc    `yaml:"postprocess,omitempty"`
 	Grasp        graspDoc          `yaml:"grasp,omitempty"`
 	Explain      *explainDoc       `yaml:"explain,omitempty"`
@@ -131,6 +132,14 @@ type inputDoc struct {
 	KeepAspect bool          `yaml:"keep_aspect,omitempty"`
 	MultipleOf int           `yaml:"multiple_of,omitempty"`
 	Normalize  *normalizeDoc `yaml:"normalize,omitempty"`
+}
+
+// preprocessDoc is the part of the manifest's `preprocess:` block an entry can set (registry
+// PreprocessBlock); everything else stays in input.*.
+type preprocessDoc struct {
+	Resize   string  `yaml:"resize,omitempty"`
+	CropPct  float32 `yaml:"crop_pct,omitempty"`
+	Resample string  `yaml:"resample,omitempty"`
 }
 
 type normalizeDoc struct {
@@ -206,6 +215,9 @@ func (e Entry) manifestDoc() manifestDoc {
 	if e.Normalize != nil {
 		d.Input.Normalize = &normalizeDoc{Mean: e.Normalize.Mean, Std: e.Normalize.Std}
 	}
+	if e.Resize != "" || e.CropPct != 0 || e.Resample != "" {
+		d.Preprocess = &preprocessDoc{Resize: e.Resize, CropPct: e.CropPct, Resample: e.Resample}
+	}
 	d.Postprocess = postprocessDoc{
 		Type: e.PostprocessType, BoxFormat: e.BoxFormat, ConfThreshold: e.ConfThreshold,
 		TextThreshold: e.TextThreshold, MaxDetections: e.MaxDetections,
@@ -229,7 +241,7 @@ func (e Entry) composed() bool { return len(e.VirtualFiles) > 0 && len(e.Files) 
 
 // blockKeys are the top-level keys the generated file sets off with a blank line, for reading.
 var blockKeys = map[string]bool{
-	"files": true, "input": true, "postprocess": true, "grasp": true, "explain": true,
+	"files": true, "input": true, "preprocess": true, "postprocess": true, "grasp": true, "explain": true,
 	"instance": true, "labels": true, "runtime": true,
 }
 

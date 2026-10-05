@@ -20,6 +20,7 @@ type specRec struct {
 	Height     int       `json:"height"`
 	MultipleOf int       `json:"multiple_of"`
 	NoUpscale  bool      `json:"no_upscale"`
+	CropPct    float32   `json:"crop_pct"`
 	Resample   string    `json:"resample"`
 	Mean       []float32 `json:"mean"`
 	Std        []float32 `json:"std"`
@@ -74,7 +75,8 @@ func checkSpec(t *testing.T, name string, got preprocess.Spec, want *specRec) {
 	t.Helper()
 	rescale := want.Rescale == nil || *want.Rescale
 	if string(got.Resize) != want.Resize || got.Width != want.Width || got.Height != want.Height ||
-		got.MultipleOf != want.MultipleOf || got.NoUpscale != want.NoUpscale || string(got.Resample) != want.Resample ||
+		got.MultipleOf != want.MultipleOf || got.NoUpscale != want.NoUpscale || got.CropPct != want.CropPct ||
+		string(got.Resample) != want.Resample ||
 		!sameF32(got.Mean, want.Mean) || !sameF32(got.Std, want.Std) || got.NoRescale == rescale ||
 		string(got.Layout) != want.Layout || got.PadValue != want.Pad || got.Legacy != want.Legacy {
 		t.Errorf("%s:\n got  %+v\n want %+v (rescale %v)", name, got, *want, rescale)

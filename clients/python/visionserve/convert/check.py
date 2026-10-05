@@ -43,7 +43,8 @@ from .common import IMAGENET_MEAN, IMAGENET_STD, ConvertError, log
 from .constants import IMAGE_EXT, TEXT_ARCHS
 from .reference import ManifestReference, OnnxForward, Reference, UserReference, load_reference_script
 from .report import ERROR, FAIL, INFO, PASS, SKIP, WARN, Report, TierResult, parse_thresholds
-from .spec import PAD_MODES, SpecError, apply_spec, spec_from_legacy, spec_from_manifest
+from .spec import (ARCHS, PAD_MODES, SpecError, apply_spec, describe, resolve_arch, spec_from_legacy, spec_from_manifest,
+                   unit_normalisation)
 
 DEFAULT_URL = "http://localhost:11435"
 EXIT_OK, EXIT_FAIL, EXIT_SETUP = 0, 1, 2
@@ -115,13 +116,18 @@ def _default_models_dir() -> Path:
 class Installed:
     bundle: object          # common.Bundle describing the installed model as the server reads it
     doc: dict               # the parsed manifest
-    spec: object            # spec.Spec the server resolves
+    spec: object            # spec.Spec the server's model applies (spec.resolve_arch); None when
+    #                         the architecture's export fixes it (the input block is reference only)
     manifest_path: Path
     onnx_path: Optional[Path]
 
     @property
     def uses_block(self) -> bool:
         return isinstance(self.doc.get("preprocess"), dict)
+
+    @property
+    def fixed_by_export(self) -> bool:
+        return self.spec is None
 
 
 def find_manifest(models_dir: Path, name: str) -> Path:
@@ -165,20 +171,26 @@ def load_installed(models_dir: Path, name: str) -> Installed:
         doc = yaml.safe_load(mf.read_text()) or {}
     except yaml.YAMLError as e:
         raise SetupError(f"{mf}: not valid YAML: {e}")
+    arch = str(doc.get("architecture") or "")
     try:
-        spec = spec_from_manifest(doc)
+        declared = spec_from_manifest(doc)
+        # What the server's model really applies: the architecture reads legacy fields its own
+        # way (SCRFD's `letterbox: true` is a top-left pad in 0..255 units), exactly as Go.
+        spec = resolve_arch(declared, arch)
     except SpecError as e:
         raise SetupError(f"{mf}: {e}")
+    eff = spec or declared
+    mean, std = unit_normalisation(eff)  # the bundle's mean/std are in [0,1] units
     files = doc.get("files") if isinstance(doc.get("files"), dict) else {}
     rel = doc.get("model_file") or (files.get("model") or next(iter(files.values()), None) if files else None)
     onnx_path = (d / rel) if rel else None
     b = Bundle(name=str(doc.get("name") or name), task=str(doc.get("task") or ""),
-               architecture=str(doc.get("architecture") or ""), license=str(doc.get("license") or ""),
-               width=int(spec.width or 0), height=int(spec.height or 0),
-               onnx={"model": str(onnx_path)} if onnx_path else {}, layout=spec.layout or "NCHW",
-               letterbox=spec.resize in PAD_MODES, crop="center" if spec.resize == "center_crop" else None,
-               keep_aspect=spec.resize == "keep_aspect", multiple_of=int(spec.multiple_of or 0),
-               mean=spec.mean, std=spec.std, postprocess=dict(doc.get("postprocess") or {}),
+               architecture=arch, license=str(doc.get("license") or ""),
+               width=int(eff.width or 0), height=int(eff.height or 0),
+               onnx={"model": str(onnx_path)} if onnx_path else {}, layout=eff.layout or "NCHW",
+               letterbox=eff.resize in PAD_MODES, crop="center" if eff.resize == "center_crop" else None,
+               keep_aspect=eff.resize == "keep_aspect", multiple_of=int(eff.multiple_of or 0),
+               mean=mean, std=std, postprocess=dict(doc.get("postprocess") or {}),
                labels=_read_labels(d, doc.get("labels")))
     return Installed(b, doc, spec, mf, onnx_path if onnx_path and onnx_path.is_file() else None)
 
@@ -310,7 +322,7 @@ def _hf_reference(p: Path, b, conf: float) -> Reference:
 class CheckPlan:
     b1: Optional[Reference]
     b2: Optional[Reference]
-    b1_source: str           # user | checkpoint | recipe | manifest | none
+    b1_source: str           # user | checkpoint | recipe | manifest | fixed (by the export) | none
     b2_note: str = ""
 
 
@@ -341,6 +353,8 @@ def build_plan(args, inst: Installed, input_name: Optional[str], device: str, wo
     recipe = RECIPES.get(b.architecture)
     if recipe is not None and input_name:
         return CheckPlan(recipe(b.width, b.height, input_name), None, "recipe", note)
+    if inst.fixed_by_export:
+        return CheckPlan(None, None, "fixed", note)
     if input_name:
         return CheckPlan(SpecReference(b, input_name, inst.spec), None, "manifest", note)
     return CheckPlan(None, None, "none", note)
@@ -637,6 +651,10 @@ def run_check(args, inst: Installed, url: str, photos: list, workdir: Path) -> C
     if b.architecture in TEXT_ARCHS and plan.b1_source not in ("user", "checkpoint"):
         report.add(TierResult("B1", "token ids", SKIP, "a text model: pass --reference with your tokenizer to "
                               "compare token ids", model=name))
+    elif plan.b1 is None and plan.b1_source == "fixed":
+        report.add(TierResult("B1", "preprocessing", SKIP, f"{b.architecture}'s preprocessing is fixed by its "
+                              "export (the manifest's input block is reference only): pass --reference with your "
+                              "preprocessing to compare", model=name))
     elif plan.b1 is None:
         report.add(TierResult("B1", "preprocessing", SKIP, "the model's ONNX file has no float image input to "
                               "compare", model=name))
@@ -780,6 +798,42 @@ _PRIORITY = ["shape", "letterbox_server", "letterbox_reference", "crop", "flip",
              "scale_inv255", "normalisation", "spatial", "resample"]
 
 
+def _same_norm(inst: Installed, mean, std, tol: float = 1e-3) -> bool:
+    """The model already normalises with this mean/std ([0,1] units, as the bundle holds them)."""
+    b = inst.bundle
+    m, s = b.mean or [0.0] * 3, b.std or [1.0] * 3
+    return (len(m) == len(mean) == 3 and len(s) == len(std) == 3 and
+            np.allclose(np.asarray(m, np.float64), np.asarray(mean, np.float64), atol=tol) and
+            np.allclose(np.asarray(s, np.float64), np.asarray(std, np.float64), rtol=10 * tol, atol=0.0))
+
+
+_GEOMETRY = {"squash": "stretches the photo", "letterbox": "letterboxes it (centred)",
+             "top_left_pad": "pastes it at the top-left of a padded canvas", "center_crop": "keeps only its centre",
+             "keep_aspect": "keeps its aspect ratio without padding", "long_side": "scales its long side, no padding",
+             "long_side_pad": "scales its long side and pads bottom/right", "none": "feeds it at its own size"}
+
+
+def _server_geometry(inst: Installed) -> str:
+    """What the server does to the photo's geometry, in words (stretches it, unless resolved otherwise)."""
+    mode = (inst.spec.resize if inst.spec is not None else "") or "squash"
+    return _GEOMETRY.get(mode, "stretches the photo")
+
+
+def _already_set(inst: Installed, setting: str, wanted: Optional[str]) -> str:
+    """The fix when the manifest already says what a fix would set: never tell the user to set a
+    value that is set. Says how the architecture serves it, and whether it can serve `wanted`."""
+    arch = inst.bundle.architecture or "this architecture"
+    served = (f"serves {describe(inst.spec)}" if inst.spec is not None else
+              "uses the preprocessing its export fixes")
+    msg = f"{setting} is already set in {inst.manifest_path}, and {arch} {served} from it"
+    a = ARCHS.get(inst.bundle.architecture)
+    if wanted and a is not None and wanted not in a.modes:
+        return (msg + f"; {arch} cannot serve {wanted.replace('_', ' ')} (it serves "
+                f"{', '.join(m.replace('_', ' ') for m in a.modes)}), so check that the reference really is "
+                "how this model is fed")
+    return msg + "; compare the two pictures in --report to find what else differs"
+
+
 def causes_for(codes: Dict[str, int], run: CheckRun) -> List[dict]:
     """[{code, cause, fix}] for B1's diagnosis codes, most decisive first. Fixes name the manifest
     field in the style the manifest already uses (a `preprocess:` block or the legacy input.*)."""
@@ -789,20 +843,31 @@ def causes_for(codes: Dict[str, int], run: CheckRun) -> List[dict]:
     W, H = inst.bundle.width, inst.bundle.height
     # "training" when the reference knows how the model was trained; else just "the reference"
     who = "training" if run.plan and run.plan.b1_source in ("recipe", "checkpoint", "user") else "the reference"
+    try:
+        declared = spec_from_manifest(inst.doc)
+    except SpecError:
+        declared = None
     out = []
     for code in sorted(codes, key=lambda c: _PRIORITY.index(c) if c in _PRIORITY else 99):
         if code == "letterbox_server":
             cause = (f"the server letterboxes (shrinks the photo and adds bars) while {who} stretches the "
                      f"whole photo to {W}x{H}")
-            fix = (f"in {mf} set `preprocess.resize: squash`" if block else
-                   f"in {mf} set `input.letterbox: false`") + " (unless the model really was trained letterboxed)"
+            setting = "`preprocess.resize: squash`" if block else "`input.letterbox: false`"
+            fix = f"in {mf} set {setting} (unless the model really was trained letterboxed)"
+            if declared is not None and declared.resize == "squash":
+                fix = _already_set(inst, setting, "squash")
         elif code == "letterbox_reference":
-            cause = f"{who} letterboxes (keeps the aspect ratio and pads) while the server stretches the photo"
-            fix = (f"in {mf} set `preprocess.resize: letterbox`" if block else
-                   f"in {mf} set `input.letterbox: true`")
+            cause = f"{who} letterboxes (keeps the aspect ratio and pads) while the server {_server_geometry(inst)}"
+            setting = "`preprocess.resize: letterbox`" if block else "`input.letterbox: true`"
+            fix = f"in {mf} set {setting}"
+            if declared is not None and declared.resize == "letterbox":
+                fix = _already_set(inst, setting, "letterbox")
         elif code == "crop":
             cause = f"{who} uses only the centre of the photo (a centre crop) while the server keeps all of it"
-            fix = (f"in {mf} set `preprocess.resize: center_crop`" if block else f"in {mf} set `input.crop: center`")
+            setting = "`preprocess.resize: center_crop`" if block else "`input.crop: center`"
+            fix = f"in {mf} set {setting}"
+            if declared is not None and declared.resize == "center_crop":
+                fix = _already_set(inst, setting, "center_crop")
         elif code == "flip":
             cause = "the reference is mirrored left-right compared with the server"
             fix = "check your reference script: a random horizontal flip is probably still on"
@@ -814,6 +879,8 @@ def causes_for(codes: Dict[str, int], run: CheckRun) -> List[dict]:
             cause = f"{who} uses 0-255 pixel values while the server divides by 255 (0-1)"
             fix = (f"if the model expects 0-255 pixels, set mean [0, 0, 0] and std [0.00392157, 0.00392157, "
                    f"0.00392157] in {mf}; otherwise your reference skips the /255 (ToTensor)")
+            if _same_norm(inst, [0.0] * 3, [1.0 / 255] * 3):
+                fix = _already_set(inst, "0-255 pixels (mean 0, std 1/255)", None)
         elif code == "scale_inv255":
             cause = "the reference values are 255 times smaller than the server's (divided by 255 twice?)"
             fix = f"check the std in {mf} (1/255 values mean raw pixels) and the reference's /255"
@@ -827,6 +894,8 @@ def causes_for(codes: Dict[str, int], run: CheckRun) -> List[dict]:
                          f"{_fmt_list(inst.bundle.mean or [0, 0, 0])}, std {_fmt_list(inst.bundle.std or [1, 1, 1])}")
                 field = "`preprocess.mean` / `preprocess.std`" if block else "`input.normalize.mean` / `std`"
                 fix = f"in {mf} set {field} to {_fmt_list(m)} / {_fmt_list(s)}"
+                if _same_norm(inst, m, s):
+                    fix = _already_set(inst, f"{field} {_fmt_list(m)} / {_fmt_list(s)}", None)
             else:
                 cause = "the colours are normalised with a different mean/std than the manifest declares"
                 fix = f"set the mean/std in {mf} to the values your training transform uses"
@@ -842,6 +911,10 @@ def causes_for(codes: Dict[str, int], run: CheckRun) -> List[dict]:
         elif code == "resample":
             cause = "small resize-filter or JPEG-decoder differences (Go vs PIL/torchvision interpolate differently)"
             fix = "usually nothing to fix; if outputs (B2) or accuracy (C) suffer, try `preprocess.resample: bicubic`"
+            eff = inst.spec
+            if eff is not None and (eff.resample or ("bicubic" if eff.resize in ("center_crop", "keep_aspect")
+                                                     else "bilinear")) == "bicubic":
+                fix = "usually nothing to fix: the server already resizes bicubic, as PIL's BICUBIC"
         else:
             continue
         out.append({"code": code, "cause": cause, "fix": fix, "images": int(codes[code])})
@@ -1051,7 +1124,7 @@ def next_steps(verdict: str, rows: List[dict], run: CheckRun) -> List[str]:
     for r in rows:
         if r["status"] in (FAIL, WARN) and r.get("fix") and r["fix"] not in ("fix B1 first, then re-run",):
             out.append(r["fix"][0].upper() + r["fix"][1:] + ".")
-    if any(r["status"] == FAIL for r in rows) and any(".yaml" in s for s in out):
+    if any(r["status"] == FAIL for r in rows) and any(".yaml" in s and "is already set in" not in s for s in out):
         out.append("Restart `visionserve serve` (it reads a manifest once), then re-run this check.")
     st = {r["tier"]: r["status"] for r in rows}
     if st.get("B2") == SKIP and not (run.args.reference or run.args.checkpoint):

@@ -15,6 +15,18 @@ input:
     mean: [0.485, 0.456, 0.406]
     std:  [0.229, 0.224, 0.225]
 
+# Fed as torchvision evaluates these weights (MobileNet_V3_Small_Weights.IMAGENET1K_V1
+# .transforms()): resize the short side to 256 (224 / crop_pct 0.875), bilinear, keep the
+# centred 224x224. Squashing the whole photo cost top-1 — measured 2026-10-05, served (CPU,
+# ORT 1.26), 5000 ImageNet-1k val images (classes 0-99, 50 each):
+#   squash (as shipped until then)  top-1 68.08, top-5 86.72
+#   center_crop, crop_pct 0.875     top-1 71.82, top-5 89.44   (torchvision 71.86 with its own transform)
+# BUGS_TO_FIX.md #1, audit.
+preprocess:
+  resize: center_crop
+  crop_pct: 0.875
+  resample: bilinear
+
 postprocess:
   type: classification
   max_detections: 5

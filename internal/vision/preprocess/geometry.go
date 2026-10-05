@@ -47,6 +47,27 @@ func CoverSize(w, h, W, H int) (rw, rh, offX, offY int) {
 	return rw, rh, (rw - W) / 2, (rh - H) / 2
 }
 
+// CenterCropSize is the center_crop geometry with timm's crop_pct: the image is resized to cover
+// floor(W/pct)×floor(H/pct) (CoverSize: short side to its target, long side truncated) and the
+// centred W×H window is kept, offset floored. pct = 0.875 at 224 is timm's default eval transform
+// and torchvision's Resize(256) + CenterCrop(224); pct <= 0 or >= 1 is CoverSize itself (CLIP).
+// It returns the resized size and the crop offset in RESIZED pixels (input = orig*scale - off).
+func CenterCropSize(w, h, W, H int, pct float32) (rw, rh, offX, offY int) {
+	sw, sh := CropScaleSize(W, H, pct)
+	rw, rh, _, _ = CoverSize(w, h, sw, sh)
+	return rw, rh, (rw - W) / 2, (rh - H) / 2
+}
+
+// CropScaleSize is the size center_crop covers before cutting W×H out: timm's
+// math.floor(size / crop_pct) per side (W×H itself for pct <= 0 or >= 1). The 1e-4 keeps a ratio
+// such as 224/232 written as a float (0.9655172) from flooring 232 to 231.
+func CropScaleSize(W, H int, pct float32) (int, int) {
+	if pct <= 0 || pct >= 1 {
+		return W, H
+	}
+	return int(math.Floor(float64(W)/float64(pct) + 1e-4)), int(math.Floor(float64(H)/float64(pct) + 1e-4))
+}
+
 // DPTKeepAspectSize returns the size HuggingFace's DPTImageProcessor resizes a w×h image to when
 // keep_aspect_ratio is set (get_resize_output_image_size in transformers' image_processing_dpt.py),
 // for a target tw×th and ensure_multiple_of = multiple (<= 0 means 1):

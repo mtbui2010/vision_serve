@@ -33,6 +33,9 @@ var geometrySpecs = []map[string]any{
 	{"resize": "letterbox", "width": 640, "height": 480},
 	{"resize": "center_crop", "width": 224, "height": 224},
 	{"resize": "center_crop", "width": 336, "height": 224},
+	{"resize": "center_crop", "width": 224, "height": 224, "crop_pct": 0.875},
+	{"resize": "center_crop", "width": 224, "height": 224, "crop_pct": 0.9655172},
+	{"resize": "center_crop", "width": 320, "height": 240, "crop_pct": 0.9},
 	{"resize": "keep_aspect", "width": 518, "height": 518, "multiple_of": 14},
 	{"resize": "keep_aspect", "width": 384, "height": 512},
 	{"resize": "top_left_pad", "width": 640, "height": 640},
@@ -58,6 +61,9 @@ func specFromMap(m map[string]any) preprocess.Spec {
 	}
 	s := preprocess.Spec{Resize: preprocess.Mode(fmt.Sprint(m["resize"])), Width: num("width"), Height: num("height"),
 		MultipleOf: num("multiple_of")}
+	if v, ok := m["crop_pct"].(float64); ok {
+		s.CropPct = float32(v)
+	}
 	if v, ok := m["no_upscale"].(bool); ok {
 		s.NoUpscale = v
 	}

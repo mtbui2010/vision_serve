@@ -9,10 +9,13 @@ converter's tier B1 compares the server against the declared spec directly:
                            `preprocess:` block, the legacy input.* fields as aliases, a field
                            declared on both sides must agree (registry.Manifest.PreprocessSpec);
   spec_from_legacy(...)    the legacy fields alone (Spec.legacy = True);
+  resolve_arch(spec, arch) what that architecture's Go model applies for it (Arch.Resolve and
+                           the package's own rules: SCRFD's legacy letterbox + 0..255 units, …);
   apply_spec(pil, spec)    -> (tensor, meta), the geometry exactly as Go computes it.
 
-Both sides run the shared corpora internal/registry/testdata/preprocess_sync.json (resolution)
-and internal/vision/preprocess/testdata/geometry_sync.json (tensor shape + meta per mode); see
+Both sides run the shared corpora internal/registry/testdata/preprocess_sync.json (resolution),
+internal/vision/preprocess/testdata/arch_resolve_sync.json (per architecture) and
+internal/vision/preprocess/testdata/geometry_sync.json (tensor shape + meta per mode); see
 tests/test_go_python_sync.py. Pixels differ from Go only by the resampler (PIL vs imaging, the
 same filters), which is what B1 measures.
 
@@ -43,6 +46,7 @@ class Spec:
     height: int = 0
     multiple_of: int = 0
     no_upscale: bool = False
+    crop_pct: float = 0.0  # center_crop: kept fraction of the resized short side (timm); 0 = 1
     resample: str = ""
     mean: Optional[List[float]] = None
     std: Optional[List[float]] = None
@@ -63,6 +67,8 @@ class Spec:
             d["multiple_of"] = int(self.multiple_of)
         if self.no_upscale:
             d["no_upscale"] = True
+        if self.crop_pct:
+            d["crop_pct"] = float(self.crop_pct)
         if self.resample:
             d["resample"] = self.resample
         if self.mean is not None and self.std is not None:
@@ -219,6 +225,8 @@ def spec_from_manifest(doc: dict) -> Spec:
         s.layout = legacy_layout
 
     s.no_upscale = bool(_yaml_bool(pre.get("no_upscale"), "preprocess.no_upscale"))
+    if pre.get("crop_pct") is not None:
+        s.crop_pct = float(np.float32(pre["crop_pct"]))
     s.resample = str(pre.get("resample") or "").strip().lower()
     rescale = _yaml_bool(pre.get("rescale"), "preprocess.rescale")
     if rescale is not None:
@@ -241,13 +249,18 @@ def validate(s: Spec) -> None:
         raise SpecError(f'preprocess: layout "{s.layout}" is invalid (NCHW, NHWC or HWC)')
     if s.resample not in ("", "bilinear", "bicubic"):
         raise SpecError(f'preprocess: resample "{s.resample}" is invalid (bilinear or bicubic)')
-    if not all(math.isfinite(v) for v in list(s.mean or []) + list(s.std or []) + [s.pad]):
-        raise SpecError(f"preprocess: mean, std and pad must be finite numbers (got mean {s.mean}, "
-                        f"std {s.std}, pad {s.pad})")
+    if not all(math.isfinite(v) for v in list(s.mean or []) + list(s.std or []) + [s.pad, s.crop_pct]):
+        raise SpecError(f"preprocess: mean, std, pad and crop_pct must be finite numbers (got mean {s.mean}, "
+                        f"std {s.std}, pad {s.pad}, crop_pct {s.crop_pct})")
     if s.legacy:
         return
     if s.multiple_of > 0 and s.resize not in ("keep_aspect", "long_side_pad"):
         raise SpecError(f"preprocess: multiple_of applies to keep_aspect and long_side_pad, not {s.resize}")
+    if s.crop_pct != 0 and s.resize != "center_crop":
+        raise SpecError(f"preprocess: crop_pct applies to center_crop, not {s.resize}")
+    if s.crop_pct < 0 or s.crop_pct > 1:
+        raise SpecError(f"preprocess: crop_pct must be in (0, 1] (the kept fraction of the resized short side), "
+                        f"got {s.crop_pct:g}")
     if s.no_upscale and s.resize not in ("long_side", "long_side_pad"):
         raise SpecError(f"preprocess: no_upscale applies to long_side and long_side_pad, not {s.resize}")
     if s.resize == "none" and s.resample:
@@ -263,6 +276,101 @@ def validate(s: Spec) -> None:
         raise SpecError(f"preprocess: mean and std need 3 values each (RGB), got {len(s.mean)} and {len(s.std)}")
     if s.std and any(v == 0 or v != v for v in s.std):
         raise SpecError(f"preprocess: std values must be non-zero numbers, got {s.std}")
+
+
+# --------------------------------------------------------------------------------------------
+# Per-architecture resolution (preprocess.Arch.Resolve + each model package's spec())
+# --------------------------------------------------------------------------------------------
+
+@dataclasses.dataclass(frozen=True)
+class Arch:
+    """vision/preprocess.Arch: the modes an architecture serves (modes[0] is its default) and the
+    name its errors carry."""
+    name: str
+    modes: tuple
+
+
+# Registered architecture (manifest `architecture:`) -> its Arch, as the Go model packages declare
+# them (internal/models/<pkg>/preprocess.go). tests/test_go_python_sync.py checks the modes
+# against the Go source and every case of internal/vision/preprocess/testdata/arch_resolve_sync.json.
+ARCHS = {
+    "rf-detr": Arch("rfdetr", ("squash", "letterbox")),
+    "rt-detr": Arch("rtdetr", ("squash", "letterbox")),
+    "efficientnet": Arch("classification", ("squash", "center_crop")),
+    "mobilenet-v3": Arch("classification", ("squash", "center_crop")),
+    "clip": Arch("clip", ("squash", "center_crop")),
+    "midas": Arch("depth", ("squash", "keep_aspect")),
+    "depth-anything-v2": Arch("depth", ("squash", "keep_aspect")),
+    "scrfd": Arch("scrfd", ("top_left_pad",)),
+}
+
+# Architectures whose export fixes the preprocessing (preprocess.FixedByExport): a declared block
+# is refused, the legacy input.* fields are reference only.
+FIXED_BY_EXPORT = ("mobile-sam", "efficient-sam", "sam2", "nano-sam", "paddle-ocr")
+
+CLIP_MEAN = [0.48145466, 0.4578275, 0.40821073]  # internal/models/clip defaultMean / defaultStd
+CLIP_STD = [0.26862954, 0.26130258, 0.27577711]
+
+
+def resolve_arch(s: Spec, architecture: str) -> Optional[Spec]:
+    """The spec `architecture` really applies for the manifest's spec `s` (spec_from_manifest), as
+    the Go model does: its Arch.Resolve, after the package's own adjustments.
+
+      - a legacy spec keeps the architecture's historical reading: a mode it never honoured falls
+        back to its default (SCRFD's `letterbox: true` is its top-left pad; rf-detr ignores
+        `crop: center`), and input.layout is never read (NCHW);
+      - a declared block must use one of its modes ("" = the default), else SpecError;
+      - scrfd: a legacy normalize is in 0..255 units (rescale off); clip: CLIP's mean/std when
+        none is declared, 224 when no size is.
+
+    Returns None for an architecture whose export fixes the preprocessing (its input.* fields
+    are reference only; a declared block raises SpecError), and `s` unchanged for one that does
+    not resolve a manifest's preprocessing through an Arch (a pipeline, or a model the converter
+    generated with the generic default)."""
+    if architecture in FIXED_BY_EXPORT:
+        if not s.legacy:
+            raise SpecError(f"preprocess: {architecture}'s preprocessing is fixed by its export and does not "
+                            "read a preprocess: block — remove the block (see docs/manifest-spec.md)")
+        return None
+    a = ARCHS.get(architecture)
+    if a is None:
+        return s
+    s = dataclasses.replace(s, mean=None if s.mean is None else list(s.mean),
+                            std=None if s.std is None else list(s.std))
+    if architecture == "scrfd" and s.legacy and (s.mean or s.std):
+        s.rescale = False
+    if architecture == "clip":
+        s.width = s.width if s.width > 0 else 224
+        s.height = s.height if s.height > 0 else 224
+        s.mean = s.mean or list(CLIP_MEAN)
+        s.std = s.std or list(CLIP_STD)
+    if s.legacy:
+        if s.resize not in a.modes:
+            s.resize = a.modes[0]
+        s.layout = "NCHW"
+    else:
+        if not s.resize:
+            s.resize = a.modes[0]
+        if s.resize not in a.modes:
+            raise SpecError(f'preprocess: {a.name} does not support resize "{s.resize}" (supported: '
+                            f'{", ".join(a.modes)})')
+    try:
+        validate(s)
+    except SpecError as e:
+        raise SpecError(f"{a.name}: {e}") from None
+    return s
+
+
+def unit_normalisation(s: Spec):
+    """(mean, std) in [0,1] units giving the same tensor as the spec: v = (p/255 - mean) / std.
+    A spec with rescale off (mean/std in 0..255 units, or raw pixels) is converted; a rescaled one
+    is returned as declared (None when it declares none)."""
+    if s.rescale:
+        return s.mean, s.std
+    if not s.mean and not s.std:
+        return [0.0, 0.0, 0.0], [1.0 / 255] * 3  # raw 0..255: v = p
+    m, sd = _channels(s.mean, s.std, 255.0)
+    return [float(v) for v in m], [float(v) for v in sd]
 
 
 # --------------------------------------------------------------------------------------------
@@ -290,6 +398,17 @@ def cover_size(w: int, h: int, W: int, H: int):
     else:
         rw, rh = int(H * w / h), H
     rw, rh = max(rw, W), max(rh, H)
+    return rw, rh, (rw - W) // 2, (rh - H) // 2
+
+
+def center_crop_size(w: int, h: int, W: int, H: int, crop_pct: float = 0.0):
+    """vision/preprocess.CenterCropSize: cover floor(W/crop_pct) x floor(H/crop_pct) (timm's
+    math.floor(size / crop_pct)), keep the centred W x H; crop_pct <= 0 or >= 1 is cover_size."""
+    sw, sh = W, H
+    p = float(np.float32(crop_pct))
+    if 0 < p < 1:
+        sw, sh = int(math.floor(W / p + 1e-4)), int(math.floor(H / p + 1e-4))
+    rw, rh, _, _ = cover_size(w, h, sw, sh)
     return rw, rh, (rw - W) // 2, (rh - H) // 2
 
 
@@ -391,7 +510,7 @@ def apply_spec(pil, spec: Spec):
         x = np.asarray(img.resize((nw, nh), rs), np.float32)
         meta = _meta(ow, oh, nw / ow, nh / oh)
     elif mode == "center_crop":
-        rw, rh, ox, oy = cover_size(ow, oh, W, H)
+        rw, rh, ox, oy = center_crop_size(ow, oh, W, H, spec.crop_pct)
         x = np.asarray(img.resize((rw, rh), rs).crop((ox, oy, ox + W, oy + H)), np.float32)
         meta = _meta(ow, oh, rw / ow, rh / oh, -ox, -oy)
     elif mode in ("letterbox", "top_left_pad"):
@@ -435,7 +554,7 @@ def spec_meta(spec: Spec, ow: int, oh: int) -> dict:
         nw, nh = dpt_keep_aspect_size(ow, oh, W, H, spec.multiple_of)
         return _meta(ow, oh, nw / ow, nh / oh)
     if mode == "center_crop":
-        rw, rh, ox, oy = cover_size(ow, oh, W, H)
+        rw, rh, ox, oy = center_crop_size(ow, oh, W, H, spec.crop_pct)
         return _meta(ow, oh, rw / ow, rh / oh, -ox, -oy)
     if mode == "letterbox":
         _, _, s, px, py = letterbox_size(ow, oh, W, H)
@@ -457,6 +576,8 @@ def describe(spec: Spec) -> str:
     if mode == "keep_aspect":
         return f"keep-aspect {_filter_name(spec)} (multiple of {spec.multiple_of or 1}) around"
     if mode == "center_crop":
+        if spec.crop_pct and spec.crop_pct < 1:
+            return f"centre crop {_filter_name(spec)} (crop_pct {spec.crop_pct:g})"
         return f"centre crop {_filter_name(spec)}"
     return f"{mode.replace('_', ' ')} {_filter_name(spec)}"
 

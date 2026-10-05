@@ -1,4 +1,271 @@
 {
+ "efficientnet-b0-crop/err-batch": {
+  "err": "classification: expected batch size 1, got shape [2 1000]"
+ },
+ "efficientnet-b0-crop/err-none": {
+  "err": "classification: no output tensors returned by the model"
+ },
+ "efficientnet-b0-crop/post/sample810x1080": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_232",
+     "conf": 0.08271315693855286
+    },
+    {
+     "class": "class_61",
+     "conf": 0.0571088008582592
+    },
+    {
+     "class": "class_6",
+     "conf": 0.04973717778921127
+    },
+    {
+     "class": "class_556",
+     "conf": 0.039186105132102966
+    },
+    {
+     "class": "class_977",
+     "conf": 0.03769880160689354
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-b0-crop/post/synth640x480": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_801",
+     "conf": 0.5442293882369995
+    },
+    {
+     "class": "class_885",
+     "conf": 0.11147182434797287
+    },
+    {
+     "class": "class_385",
+     "conf": 0.0354132242500782
+    },
+    {
+     "class": "class_668",
+     "conf": 0.030748914927244186
+    },
+    {
+     "class": "class_271",
+     "conf": 0.019680749624967575
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-b0-crop/post/synth97x173": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_908",
+     "conf": 0.649515688419342
+    },
+    {
+     "class": "class_96",
+     "conf": 0.047902584075927734
+    },
+    {
+     "class": "class_259",
+     "conf": 0.027116967365145683
+    },
+    {
+     "class": "class_426",
+     "conf": 0.02573467046022415
+    },
+    {
+     "class": "class_866",
+     "conf": 0.021142948418855667
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-b0-crop/post1d/sample810x1080": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_232",
+     "conf": 0.08271315693855286
+    },
+    {
+     "class": "class_61",
+     "conf": 0.0571088008582592
+    },
+    {
+     "class": "class_6",
+     "conf": 0.04973717778921127
+    },
+    {
+     "class": "class_556",
+     "conf": 0.039186105132102966
+    },
+    {
+     "class": "class_977",
+     "conf": 0.03769880160689354
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-b0-crop/post1d/synth640x480": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_801",
+     "conf": 0.5442293882369995
+    },
+    {
+     "class": "class_885",
+     "conf": 0.11147182434797287
+    },
+    {
+     "class": "class_385",
+     "conf": 0.0354132242500782
+    },
+    {
+     "class": "class_668",
+     "conf": 0.030748914927244186
+    },
+    {
+     "class": "class_271",
+     "conf": 0.019680749624967575
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-b0-crop/post1d/synth97x173": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "class_908",
+     "conf": 0.649515688419342
+    },
+    {
+     "class": "class_96",
+     "conf": 0.047902584075927734
+    },
+    {
+     "class": "class_259",
+     "conf": 0.027116967365145683
+    },
+    {
+     "class": "class_426",
+     "conf": 0.02573467046022415
+    },
+    {
+     "class": "class_866",
+     "conf": 0.021142948418855667
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "efficientnet-b0-crop/pre/sample810x1080": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "85e801a4c7ee2f18f6fc600b",
+   "sum": -4687.313062185422,
+   "head": [
+    1.2556726,
+    1.4782944,
+    1.7351656,
+    1.8036647,
+    1.6152923,
+    1.1186745
+   ]
+  },
+  "meta": {
+   "OrigWidth": 810,
+   "OrigHeight": 1080,
+   "ScaleX": 0.3160493827160494,
+   "ScaleY": 0.31574074074074077,
+   "PadX": -16,
+   "PadY": -58
+  }
+ },
+ "efficientnet-b0-crop/pre/synth640x480": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "2c50e0b7908da41dd17233bb",
+   "sum": 31858.95352846617,
+   "head": [
+    -1.1931673,
+    -1.2959158,
+    -1.2616663,
+    -1.2616663,
+    -1.2787911,
+    -1.2787911
+   ]
+  },
+  "meta": {
+   "OrigWidth": 640,
+   "OrigHeight": 480,
+   "ScaleX": 0.5328125,
+   "ScaleY": 0.5333333333333333,
+   "PadX": -58,
+   "PadY": -16
+  }
+ },
+ "efficientnet-b0-crop/pre/synth97x173": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "6ce5206e81d185d62035fd20",
+   "sum": 32455.84901564615,
+   "head": [
+    -2.1007793,
+    -2.0494049,
+    -1.843908,
+    -1.6555357,
+    -1.6041614,
+    -1.6726604
+   ]
+  },
+  "meta": {
+   "OrigWidth": 97,
+   "OrigHeight": 173,
+   "ScaleX": 2.6391752577319587,
+   "ScaleY": 2.6358381502890174,
+   "PadX": -16,
+   "PadY": -116
+  }
+ },
  "efficientnet-nolabels/err-batch": {
   "err": "classification: expected batch size 1, got shape [2 1000]"
  },
@@ -264,6 +531,273 @@
    "ScaleY": 1.2947976878612717,
    "PadX": 0,
    "PadY": 0
+  }
+ },
+ "mobilenet-v3-crop/err-batch": {
+  "err": "classification: expected batch size 1, got shape [2 1000]"
+ },
+ "mobilenet-v3-crop/err-none": {
+  "err": "classification: no output tensors returned by the model"
+ },
+ "mobilenet-v3-crop/post/sample810x1080": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "Border collie",
+     "conf": 0.08271315693855286
+    },
+    {
+     "class": "boa constrictor",
+     "conf": 0.0571088008582592
+    },
+    {
+     "class": "stingray",
+     "conf": 0.04973717778921127
+    },
+    {
+     "class": "fire screen",
+     "conf": 0.039186105132102966
+    },
+    {
+     "class": "sandbar",
+     "conf": 0.03769880160689354
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3-crop/post/synth640x480": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "snorkel",
+     "conf": 0.5442293882369995
+    },
+    {
+     "class": "velvet",
+     "conf": 0.11147182434797287
+    },
+    {
+     "class": "Indian elephant",
+     "conf": 0.0354132242500782
+    },
+    {
+     "class": "mosque",
+     "conf": 0.030748914927244186
+    },
+    {
+     "class": "red wolf",
+     "conf": 0.019680749624967575
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3-crop/post/synth97x173": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "wing",
+     "conf": 0.649515688419342
+    },
+    {
+     "class": "toucan",
+     "conf": 0.047902584075927734
+    },
+    {
+     "class": "Pomeranian",
+     "conf": 0.027116967365145683
+    },
+    {
+     "class": "barometer",
+     "conf": 0.02573467046022415
+    },
+    {
+     "class": "tractor",
+     "conf": 0.021142948418855667
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3-crop/post1d/sample810x1080": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "Border collie",
+     "conf": 0.08271315693855286
+    },
+    {
+     "class": "boa constrictor",
+     "conf": 0.0571088008582592
+    },
+    {
+     "class": "stingray",
+     "conf": 0.04973717778921127
+    },
+    {
+     "class": "fire screen",
+     "conf": 0.039186105132102966
+    },
+    {
+     "class": "sandbar",
+     "conf": 0.03769880160689354
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3-crop/post1d/synth640x480": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "snorkel",
+     "conf": 0.5442293882369995
+    },
+    {
+     "class": "velvet",
+     "conf": 0.11147182434797287
+    },
+    {
+     "class": "Indian elephant",
+     "conf": 0.0354132242500782
+    },
+    {
+     "class": "mosque",
+     "conf": 0.030748914927244186
+    },
+    {
+     "class": "red wolf",
+     "conf": 0.019680749624967575
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3-crop/post1d/synth97x173": {
+  "result": {
+   "task": "classification",
+   "model": "",
+   "classifications": [
+    {
+     "class": "wing",
+     "conf": 0.649515688419342
+    },
+    {
+     "class": "toucan",
+     "conf": 0.047902584075927734
+    },
+    {
+     "class": "Pomeranian",
+     "conf": 0.027116967365145683
+    },
+    {
+     "class": "barometer",
+     "conf": 0.02573467046022415
+    },
+    {
+     "class": "tractor",
+     "conf": 0.021142948418855667
+    }
+   ],
+   "duration_ms": 0
+  }
+ },
+ "mobilenet-v3-crop/pre/sample810x1080": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "d03de306612d48aabd20bb61",
+   "sum": -4687.279375842772,
+   "head": [
+    1.2727973,
+    1.4782944,
+    1.7009162,
+    1.7009162,
+    1.5296686,
+    1.1529241
+   ]
+  },
+  "meta": {
+   "OrigWidth": 810,
+   "OrigHeight": 1080,
+   "ScaleX": 0.3160493827160494,
+   "ScaleY": 0.31574074074074077,
+   "PadX": -16,
+   "PadY": -58
+  }
+ },
+ "mobilenet-v3-crop/pre/synth640x480": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "fd418b7e04f1f623f02407b6",
+   "sum": 31890.60575587349,
+   "head": [
+    -1.2102921,
+    -1.2959158,
+    -1.2787911,
+    -1.2616663,
+    -1.2787911,
+    -1.2787911
+   ]
+  },
+  "meta": {
+   "OrigWidth": 640,
+   "OrigHeight": 480,
+   "ScaleX": 0.5328125,
+   "ScaleY": 0.5333333333333333,
+   "PadX": -58,
+   "PadY": -16
+  }
+ },
+ "mobilenet-v3-crop/pre/synth97x173": {
+  "tensor": {
+   "shape": [
+    1,
+    3,
+    224,
+    224
+   ],
+   "n": 150528,
+   "sha": "5225d43c7e0a0746ec29233d",
+   "sum": 32401.21206300566,
+   "head": [
+    -2.0665298,
+    -2.0322802,
+    -1.8610327,
+    -1.6897851,
+    -1.6555357,
+    -1.6726604
+   ]
+  },
+  "meta": {
+   "OrigWidth": 97,
+   "OrigHeight": 173,
+   "ScaleX": 2.6391752577319587,
+   "ScaleY": 2.6358381502890174,
+   "PadX": -16,
+   "PadY": -116
   }
  },
  "mobilenet-v3/err-batch": {

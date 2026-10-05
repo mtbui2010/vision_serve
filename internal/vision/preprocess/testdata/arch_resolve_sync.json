@@ -1,0 +1,242 @@
+{
+  "_doc": "How each architecture resolves a manifest's preprocessing: registry.Manifest.PreprocessSpec, then the model package's Arch.Resolve with its own adjustments (SCRFD's legacy normalize in 0..255 units, CLIP's default size and mean/std), or FixedByExport for architectures whose export fixes the preprocessing. Run by internal/vision/preprocess/arch_sync_test.go (models.New + ResolvedPreprocess) and clients/python/tests/test_go_python_sync.py (convert.spec.resolve_arch). `spec` is the resolved spec (absent fields: zero / empty, rescale defaults to true); `error` lists substrings the error must contain; `fixed_by_export: true` means the model loads and its input.* fields are reference only.",
+  "cases": [
+    {
+      "name": "rf-detr legacy letterbox: honoured",
+      "architecture": "rf-detr",
+      "input": {"width": 560, "height": 560, "letterbox": true,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "spec": {"resize": "letterbox", "width": 560, "height": 560, "layout": "NCHW",
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225], "legacy": true}
+    },
+    {
+      "name": "rf-detr legacy crop center: never honoured, squash",
+      "architecture": "rf-detr",
+      "input": {"width": 560, "height": 560, "crop": "center"},
+      "spec": {"resize": "squash", "width": 560, "height": 560, "layout": "NCHW", "legacy": true}
+    },
+    {
+      "name": "rf-detr legacy keep_aspect: never honoured, squash",
+      "architecture": "rf-detr",
+      "input": {"width": 518, "height": 518, "keep_aspect": true, "multiple_of": 14},
+      "spec": {"resize": "squash", "width": 518, "height": 518, "multiple_of": 14, "layout": "NCHW", "legacy": true}
+    },
+    {
+      "name": "rf-detr legacy layout NHWC: never read, NCHW",
+      "architecture": "rf-detr",
+      "input": {"width": 384, "height": 384, "layout": "NHWC", "letterbox": false},
+      "spec": {"resize": "squash", "width": 384, "height": 384, "layout": "NCHW", "legacy": true}
+    },
+    {
+      "name": "rf-detr block without resize: the default, squash",
+      "architecture": "rf-detr",
+      "preprocess": {"size": 512, "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]},
+      "spec": {"resize": "squash", "width": 512, "height": 512,
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
+    },
+    {
+      "name": "rf-detr block center_crop: refused",
+      "architecture": "rf-detr",
+      "preprocess": {"resize": "center_crop", "size": 560},
+      "error": ["rfdetr", "does not support resize", "center_crop", "squash, letterbox"]
+    },
+    {
+      "name": "rt-detr legacy letterbox: honoured",
+      "architecture": "rt-detr",
+      "input": {"width": 640, "height": 640, "letterbox": true},
+      "spec": {"resize": "letterbox", "width": 640, "height": 640, "layout": "NCHW", "legacy": true}
+    },
+    {
+      "name": "rt-detr block keep_aspect: refused",
+      "architecture": "rt-detr",
+      "preprocess": {"resize": "keep_aspect", "size": 640},
+      "error": ["rtdetr", "does not support resize", "keep_aspect"]
+    },
+    {
+      "name": "efficientnet legacy crop center: honoured (center_crop since the 2026-10 audit)",
+      "architecture": "efficientnet",
+      "input": {"width": 224, "height": 224, "crop": "center",
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "spec": {"resize": "center_crop", "width": 224, "height": 224, "layout": "NCHW",
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225], "legacy": true}
+    },
+    {
+      "name": "efficientnet block center_crop crop_pct 0.875 bicubic (the shipped manifest)",
+      "architecture": "efficientnet",
+      "input": {"width": 224, "height": 224, "layout": "NCHW", "letterbox": false,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "preprocess": {"resize": "center_crop", "crop_pct": 0.875, "resample": "bicubic"},
+      "spec": {"resize": "center_crop", "width": 224, "height": 224, "crop_pct": 0.875, "resample": "bicubic",
+               "layout": "NCHW", "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
+    },
+    {
+      "name": "mobilenet-v3 block center_crop crop_pct 0.875 bilinear (the shipped manifest)",
+      "architecture": "mobilenet-v3",
+      "input": {"width": 224, "height": 224, "layout": "NCHW", "letterbox": false,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "preprocess": {"resize": "center_crop", "crop_pct": 0.875, "resample": "bilinear"},
+      "spec": {"resize": "center_crop", "width": 224, "height": 224, "crop_pct": 0.875, "resample": "bilinear",
+               "layout": "NCHW", "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}
+    },
+    {
+      "name": "mobilenet-v3 legacy letterbox: never honoured, squash",
+      "architecture": "mobilenet-v3",
+      "input": {"width": 224, "height": 224, "letterbox": true},
+      "spec": {"resize": "squash", "width": 224, "height": 224, "layout": "NCHW", "legacy": true}
+    },
+    {
+      "name": "efficientnet block letterbox: refused",
+      "architecture": "efficientnet",
+      "preprocess": {"resize": "letterbox", "size": 224},
+      "error": ["classification", "does not support resize", "letterbox", "squash, center_crop"]
+    },
+    {
+      "name": "clip legacy crop center without normalize: CLIP's mean/std",
+      "architecture": "clip",
+      "input": {"width": 224, "height": 224, "crop": "center"},
+      "spec": {"resize": "center_crop", "width": 224, "height": 224, "layout": "NCHW",
+               "mean": [0.48145466, 0.4578275, 0.40821073], "std": [0.26862954, 0.26130258, 0.27577711],
+               "legacy": true}
+    },
+    {
+      "name": "clip legacy letterbox: never honoured, squash",
+      "architecture": "clip",
+      "input": {"width": 224, "height": 224, "letterbox": true,
+                "normalize": {"mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5]}},
+      "spec": {"resize": "squash", "width": 224, "height": 224, "layout": "NCHW",
+               "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5], "legacy": true}
+    },
+    {
+      "name": "clip block without mean/std: CLIP's",
+      "architecture": "clip",
+      "preprocess": {"resize": "center_crop", "size": 336},
+      "spec": {"resize": "center_crop", "width": 336, "height": 336,
+               "mean": [0.48145466, 0.4578275, 0.40821073], "std": [0.26862954, 0.26130258, 0.27577711]}
+    },
+    {
+      "name": "clip block keep_aspect: refused",
+      "architecture": "clip",
+      "preprocess": {"resize": "keep_aspect", "size": 224},
+      "error": ["clip", "does not support resize", "keep_aspect"]
+    },
+    {
+      "name": "midas legacy letterbox: never honoured, squash",
+      "architecture": "midas",
+      "input": {"width": 256, "height": 256, "letterbox": true,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "spec": {"resize": "squash", "width": 256, "height": 256, "layout": "NCHW",
+               "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225], "legacy": true}
+    },
+    {
+      "name": "midas legacy crop center: never honoured, squash",
+      "architecture": "midas",
+      "input": {"width": 256, "height": 256, "crop": "center"},
+      "spec": {"resize": "squash", "width": 256, "height": 256, "layout": "NCHW", "legacy": true}
+    },
+    {
+      "name": "depth-anything-v2 legacy keep_aspect: honoured",
+      "architecture": "depth-anything-v2",
+      "input": {"width": 518, "height": 518, "keep_aspect": true, "multiple_of": 14},
+      "spec": {"resize": "keep_aspect", "width": 518, "height": 518, "multiple_of": 14, "layout": "NCHW",
+               "legacy": true}
+    },
+    {
+      "name": "depth-anything-v2 block letterbox: refused",
+      "architecture": "depth-anything-v2",
+      "preprocess": {"resize": "letterbox", "size": 518},
+      "error": ["depth", "does not support resize", "letterbox", "squash, keep_aspect"]
+    },
+    {
+      "name": "scrfd legacy letterbox + 0..255 normalize: top-left pad, no rescale",
+      "architecture": "scrfd",
+      "input": {"width": 640, "height": 640, "layout": "NCHW", "letterbox": true,
+                "normalize": {"mean": [127.5, 127.5, 127.5], "std": [128.0, 128.0, 128.0]}},
+      "spec": {"resize": "top_left_pad", "width": 640, "height": 640, "layout": "NCHW",
+               "mean": [127.5, 127.5, 127.5], "std": [128.0, 128.0, 128.0], "rescale": false, "legacy": true}
+    },
+    {
+      "name": "scrfd legacy without letterbox or normalize: top-left pad, rescaled",
+      "architecture": "scrfd",
+      "input": {"width": 640, "height": 480},
+      "spec": {"resize": "top_left_pad", "width": 640, "height": 480, "layout": "NCHW", "legacy": true}
+    },
+    {
+      "name": "scrfd legacy std only: no rescale",
+      "architecture": "scrfd",
+      "input": {"width": 640, "height": 640, "letterbox": true, "normalize": {"std": [128.0, 128.0, 128.0]}},
+      "spec": {"resize": "top_left_pad", "width": 640, "height": 640, "layout": "NCHW",
+               "std": [128.0, 128.0, 128.0], "rescale": false, "legacy": true}
+    },
+    {
+      "name": "scrfd block: its own units",
+      "architecture": "scrfd",
+      "preprocess": {"resize": "top_left_pad", "size": 640, "mean": [127.5, 127.5, 127.5],
+                     "std": [128.0, 128.0, 128.0], "rescale": false},
+      "spec": {"resize": "top_left_pad", "width": 640, "height": 640,
+               "mean": [127.5, 127.5, 127.5], "std": [128.0, 128.0, 128.0], "rescale": false}
+    },
+    {
+      "name": "scrfd block without resize: top-left pad, rescaled as declared",
+      "architecture": "scrfd",
+      "preprocess": {"size": 640, "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5]},
+      "spec": {"resize": "top_left_pad", "width": 640, "height": 640,
+               "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5]}
+    },
+    {
+      "name": "scrfd block letterbox: refused",
+      "architecture": "scrfd",
+      "preprocess": {"resize": "letterbox", "size": 640},
+      "error": ["scrfd", "does not support resize", "letterbox", "top_left_pad"]
+    },
+    {
+      "name": "mobile-sam legacy input: fixed by the export",
+      "architecture": "mobile-sam",
+      "input": {"width": 1024, "height": 1024, "letterbox": true,
+                "normalize": {"mean": [123.675, 116.28, 103.53], "std": [58.395, 57.12, 57.375]}},
+      "fixed_by_export": true
+    },
+    {
+      "name": "efficient-sam legacy input: fixed by the export",
+      "architecture": "efficient-sam",
+      "input": {"width": 1024, "height": 1024},
+      "fixed_by_export": true
+    },
+    {
+      "name": "sam2 legacy input: fixed by the export",
+      "architecture": "sam2",
+      "input": {"width": 1024, "height": 1024, "letterbox": false,
+                "normalize": {"mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225]}},
+      "fixed_by_export": true
+    },
+    {
+      "name": "nano-sam legacy input: fixed by the export",
+      "architecture": "nano-sam",
+      "input": {"width": 1024, "height": 1024, "letterbox": true},
+      "fixed_by_export": true
+    },
+    {
+      "name": "paddle-ocr legacy input: fixed by the export",
+      "architecture": "paddle-ocr",
+      "input": {"width": 960, "height": 960, "crop": "center"},
+      "fixed_by_export": true
+    },
+    {
+      "name": "mobile-sam block: refused",
+      "architecture": "mobile-sam",
+      "preprocess": {"resize": "long_side", "size": 1024, "layout": "HWC", "rescale": false},
+      "error": ["mobile-sam", "fixed by its export", "remove the block"]
+    },
+    {
+      "name": "sam2 block: refused",
+      "architecture": "sam2",
+      "preprocess": {"resize": "squash", "size": 1024},
+      "error": ["sam2", "fixed by its export"]
+    },
+    {
+      "name": "paddle-ocr block: refused",
+      "architecture": "paddle-ocr",
+      "preprocess": {"resize": "long_side_pad", "size": 960, "multiple_of": 32, "no_upscale": true},
+      "error": ["paddle-ocr", "fixed by its export"]
+    }
+  ]
+}

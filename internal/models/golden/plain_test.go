@@ -7,6 +7,7 @@ import (
 
 	"visionserve/internal/engine"
 	"visionserve/internal/models"
+	"visionserve/internal/vision/preprocess"
 
 	_ "visionserve/internal/models/classification"
 	_ "visionserve/internal/models/clip"
@@ -257,11 +258,19 @@ func TestGoldenClassification(t *testing.T) {
 	mean := []float32{0.485, 0.456, 0.406}
 	std := []float32{0.229, 0.224, 0.225}
 	in1k := readLabels(t, "models/mobilenet-v3/imagenet1k.txt")
+	// The shipped manifests: resize the short side to 256, keep the centred 224 (crop_pct 0.875),
+	// as timm (bicubic) and torchvision (bilinear) evaluate these weights.
+	crop := func(resample preprocess.Resample) *preprocess.Spec {
+		return &preprocess.Spec{Resize: preprocess.CenterCrop, Width: 224, Height: 224, CropPct: 0.875,
+			Resample: resample, Mean: mean, Std: std}
+	}
 	for _, c := range []struct {
 		name, arch string
 		cfg        models.Config
 	}{
 		{"mobilenet-v3", "mobilenet-v3", models.Config{Name: "mobilenet-v3", Width: 224, Height: 224, Mean: mean, Std: std, MaxDet: 5, Labels: in1k}},
+		{"mobilenet-v3-crop", "mobilenet-v3", models.Config{Name: "mobilenet-v3", Width: 224, Height: 224, Mean: mean, Std: std, MaxDet: 5, Labels: in1k, Preprocess: crop(preprocess.Bilinear)}},
+		{"efficientnet-b0-crop", "efficientnet", models.Config{Name: "efficientnet-b0", Width: 224, Height: 224, Mean: mean, Std: std, Preprocess: crop(preprocess.Bicubic)}},
 		{"efficientnet-nolabels", "efficientnet", models.Config{Name: "efficientnet-b0", Width: 224, Height: 224, Mean: mean, Std: std}},
 		{"top50", "mobilenet-v3", models.Config{Name: "m", Width: 160, Height: 128, MaxDet: 50, Labels: in1k[:10]}},
 	} {

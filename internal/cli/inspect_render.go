@@ -11,6 +11,7 @@ import (
 	"visionserve/internal/cli/clireport"
 	"visionserve/internal/engine"
 	"visionserve/internal/registry"
+	"visionserve/internal/vision/preprocess"
 	"visionserve/pkg/api"
 )
 
@@ -314,7 +315,16 @@ func resizeText(p *preprocessDetails) string {
 	case "letterbox":
 		s += fmt.Sprintf(": aspect ratio kept, padded with gray %g", p.Pad)
 	case "center_crop":
-		s += ": short side resized, centre cut out"
+		if p.CropPct > 0 && p.CropPct < 1 {
+			sw, sh := preprocess.CropScaleSize(p.Width, p.Height, p.CropPct)
+			if sw == sh {
+				s += fmt.Sprintf(": short side resized to %d (crop_pct %g), centre cut out", sw, p.CropPct)
+			} else {
+				s += fmt.Sprintf(": photo resized to cover %d×%d (crop_pct %g), centre cut out", sw, sh, p.CropPct)
+			}
+		} else {
+			s += ": short side resized, centre cut out"
+		}
 	case "keep_aspect":
 		s += ": aspect ratio kept, size varies per photo"
 	case "top_left_pad":

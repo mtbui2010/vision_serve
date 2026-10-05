@@ -144,6 +144,21 @@ make pull MODEL=rf-detr-nano        # ~103 MB, 384×384 input, 57 ms GPU (srv-on
     (`rf-detr-nano-fp16`, …) copied its preprocessing: set `input.letterbox: false` in theirs too.
     Restart the server afterwards (it reads a manifest once).
 
+!!! note "Pulled `efficientnet-b0` or `mobilenet-v3` before 5 October 2026? Pull them again"
+    Their manifests stretched the whole photo to 224×224, while both are evaluated by resizing
+    the short side to 256 and keeping the centred 224×224. On 5000 ImageNet val photos that cost
+    1.6 and 3.7 top-1 (77.44 against 79.04, 68.08 against 71.82, served on CPU). Re-pull: an
+    unedited generated manifest is rewritten with a `preprocess:` block (`resize: center_crop`,
+    `crop_pct: 0.875`, `resample: bicubic` / `bilinear`). Serve it with this release or newer:
+    an older server that reads `preprocess:` blocks refuses `center_crop` for a classifier.
+
+!!! note "Pulled `grasp-rfdetr` before 5 October 2026? Pull it again"
+    Its detector stage letterboxed the photo, while `rf-detr` serves the same RF-DETR weights
+    squashed. On 200 COCO val2017 photos its detections scored mAP 45.50 letterboxed against
+    47.77 squashed (the same boxes as `rf-detr`), and 87.6% of its grasp centres land on a
+    ground-truth mask of their class instead of 86.1%. `visionserve pull grasp-rfdetr` rewrites
+    an unedited generated manifest as above; in one you edited, set `input.letterbox: false`.
+
 ### Key takeaways
 
 - **Fastest models (GPU):** CLIP (33 ms), MobileNetV3 (38 ms), EfficientNet-B0 (40 ms) — lightweight tasks.

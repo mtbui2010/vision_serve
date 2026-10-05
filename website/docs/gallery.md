@@ -119,7 +119,7 @@ the raw numbers are in [`figures.json`](assets/img/figures.json).
 
 <figure markdown="span">
   ![Top-5 ImageNet classes from two classifiers](assets/img/classify-564133.jpg){ loading=lazy }
-  <figcaption>Top-5 ImageNet classes from two classifiers<br/><code>efficientnet-b0 + mobilenet-v3</code> · efficientnet-b0 5 ms, mobilenet-v3 5 ms on gpu:0 · Photo: COCO val2017 #564133 (<a href="http://farm9.staticflickr.com/8348/8197453784_a3be1b210e_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+  <figcaption>Top-5 ImageNet classes from two classifiers<br/><code>efficientnet-b0 + mobilenet-v3</code> · efficientnet-b0 9 ms, mobilenet-v3 11 ms on gpu:0 · Photo: COCO val2017 #564133 (<a href="http://farm9.staticflickr.com/8348/8197453784_a3be1b210e_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
 <figure markdown="span">

@@ -59,9 +59,15 @@ def _registry(tmp_path, arch="rf-detr", letterbox="false", block=None):
     return tmp_path / "models"
 
 
-def _run(tmp_path, codes=None, status=FAIL, block=False, b1_source="recipe", implied=None, b2=None, c=None):
-    """A CheckRun with a hand-made report: B1 with the given diagnosis codes."""
-    reg = _registry(tmp_path, block="preprocess:\n  resize: squash\n" if block else None)
+def _run(tmp_path, codes=None, status=FAIL, block=False, b1_source="recipe", implied=None, b2=None, c=None,
+         arch="rf-detr", letterbox="false"):
+    """A CheckRun with a hand-made report: B1 with the given diagnosis codes. A server that
+    letterboxes (code letterbox_server) has a manifest that says so."""
+    padded = "letterbox_server" in (codes or {})
+    if padded:
+        letterbox = "true"
+    resize = "letterbox" if padded else "squash"
+    reg = _registry(tmp_path, arch=arch, letterbox=letterbox, block=f"preprocess:\n  resize: {resize}\n" if block else None)
     yaml = pytest.importorskip("yaml")  # noqa: F841
     inst = ck.load_installed(reg, "det")
     rep = Report(models=["det"], task="detection", architecture="rf-detr",
@@ -93,6 +99,26 @@ def test_letterbox_fail_names_cause_and_legacy_fix(tmp_path):
     steps = " ".join(out["summary"]["next_steps"])
     assert "input.letterbox: false" in steps and "Restart `visionserve serve`" in steps
     assert "--checkpoint" in steps and "--labels" in steps  # what would enable B2 and C
+
+
+def test_a_fix_never_asks_for_a_value_already_set(tmp_path):
+    """SCRFD's manifest already says `letterbox: true` (its top-left pad): a reference that
+    letterboxes centred must not be answered with "set `input.letterbox: true`"."""
+    pytest.importorskip("yaml")
+    out = ck.summarise(_run(tmp_path / "a", {"letterbox_reference": 5}, arch="scrfd", letterbox="true"))
+    b1 = out["summary"]["checks"][0]
+    assert "while the server pastes it at the top-left" in b1["cause"]
+    assert b1["fix"].startswith("`input.letterbox: true` is already set in") and " set `" not in b1["fix"]
+    assert "scrfd cannot serve letterbox (it serves top left pad)" in b1["fix"]
+    assert not any("Restart" in s for s in out["summary"]["next_steps"])  # nothing to edit
+    # The same rule for the other manifest fixes: geometry already squash, mean/std already declared.
+    sq = _run(tmp_path / "b", {"letterbox_server": 5})
+    sq.inst.doc["input"]["letterbox"] = False  # a server that pads although the manifest says squash
+    assert ck.causes_for({"letterbox_server": 5}, sq)[0]["fix"].startswith("`input.letterbox: false` is already set")
+    nm = ck.summarise(_run(tmp_path / "c", {"normalisation": 5}, implied=(IMN_MEAN, IMN_STD)))
+    assert "is already set in" in nm["summary"]["checks"][0]["fix"]
+    crop = ck.summarise(_run(tmp_path / "d", {"crop": 5}, arch="rf-detr"))["summary"]["checks"][0]["fix"]
+    assert "set `input.crop: center`" in crop
 
 
 def test_letterbox_fix_follows_a_preprocess_block(tmp_path):
@@ -229,6 +255,28 @@ def test_load_installed_reads_block_and_finds_by_manifest_name(tmp_path):
     assert inst.bundle.letterbox and inst.bundle.labels == ["N/A", "cat", "dog"] and not inst.uses_block
     with pytest.raises(ck.SetupError, match="not installed"):
         ck.load_installed(reg, "missing")
+
+
+def test_load_installed_resolves_the_architecture(tmp_path):
+    """The manifest reference is what the Go model applies (spec.resolve_arch): SCRFD's legacy
+    letterbox is its top-left pad and its normalize is in 0..255 units; the bundle carries the
+    mean/std in [0,1] units, which B1's gray-level arithmetic assumes."""
+    pytest.importorskip("yaml")
+    d = tmp_path / "models" / "scrfd"
+    d.mkdir(parents=True)
+    (d / "manifest.yaml").write_text(LEGACY.format(arch="scrfd", letterbox="true").replace(
+        "[0.485, 0.456, 0.406]", "[127.5, 127.5, 127.5]").replace("[0.229, 0.224, 0.225]", "[128.0, 128.0, 128.0]"))
+    inst = ck.load_installed(tmp_path / "models", "det")
+    assert inst.spec.resize == "top_left_pad" and inst.spec.rescale is False
+    assert np.allclose(inst.bundle.mean, [0.5] * 3) and np.allclose(inst.bundle.std, [128 / 255] * 3)
+    d2 = tmp_path / "m2" / "sam"
+    d2.mkdir(parents=True)
+    (d2 / "manifest.yaml").write_text(LEGACY.format(arch="mobile-sam", letterbox="true"))
+    assert ck.load_installed(tmp_path / "m2", "det").fixed_by_export
+    (d2 / "manifest.yaml").write_text(LEGACY.format(arch="mobile-sam", letterbox="true")
+                                      + "preprocess:\n  resize: long_side_pad\n")
+    with pytest.raises(ck.SetupError, match="fixed by its export"):
+        ck.load_installed(tmp_path / "m2", "det")
 
 
 def test_load_labels_coco_subset_and_csv(tmp_path):

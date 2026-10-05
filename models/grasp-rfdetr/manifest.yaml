@@ -34,7 +34,14 @@ input:                     # describes the rf-detr detector preprocess
   width: 560
   height: 560
   layout: NCHW
-  letterbox: true
+  # Squash, as RF-DETR is trained (square_resize_div_64) and as `rf-detr` serves these same
+  # weights — BUGS_TO_FIX.md #1. Measured 2026-10-05 (CUDA, ORT 1.26), detections of this model
+  # on the first 200 COCO val2017 images by id (1460 boxes), conf 0.5:
+  #   letterbox: true   mAP 45.50 / mAP50 56.83, 984 detections
+  #   letterbox: false  mAP 47.77 / mAP50 59.25, 1003 detections (= `rf-detr`, box for box)
+  # Grasps follow the boxes: 86.1% -> 87.6% of grasp centres land on a ground-truth mask of
+  # their class.
+  letterbox: false
   normalize:
     mean: [0.485, 0.456, 0.406]
     std:  [0.229, 0.224, 0.225]

@@ -144,7 +144,7 @@ func LoadManifest(path string) (*Manifest, error) {
 Every Go type has a zero value, and a struct's zero value has every field at zero. The
 project leans on this deliberately. The preprocessing spec says so in its doc comment:
 
-```go title="internal/vision/preprocess/spec.go (lines 98-139, trimmed)"
+```go title="internal/vision/preprocess/spec.go (lines 99-143, trimmed)"
 // Spec declares one model's preprocessing. The zero value of each field is the common case.
 // ...
 type Spec struct {
@@ -166,7 +166,7 @@ type Spec struct {
 }
 ```
 
-[spec.go#L98-L139 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L98-L139)
+[spec.go#L99-L143 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L99-L143)
 
 `NoRescale bool` is named so that its zero value (`false`) is the usual case (divide by 255).
 A manifest that does not mention it gets the right behaviour without a default value
@@ -178,14 +178,14 @@ anywhere. In Python you would write `no_rescale: bool = False`; in Go you choose
 You can define a new type on top of a basic one and attach methods to it. The resize
 mode is a string, but a *typed* one:
 
-```go title="internal/vision/preprocess/spec.go (lines 24-31, 59, 64-66, trimmed)"
+```go title="internal/vision/preprocess/spec.go (lines 24-31, 60, 65-67, trimmed)"
 // Mode is how an image is brought to the model's input size. Only modes that a served
 // architecture really uses exist; each one reproduces its upstream recipe exactly.
 type Mode string
 
 const (
 	// Squash resizes to exactly Width×Height; the aspect ratio is not kept (RF-DETR, MiDaS,
-	// EfficientNet, SAM2, …). Default resample: bilinear.
+	// RT-DETR, SAM2, …). Default resample: bilinear.
 	Squash Mode = "squash"
 	// ...
 )
@@ -196,7 +196,7 @@ func (m Mode) Pads() bool { return m == Letterbox || m == TopLeftPad || m == Lon
 ```
 
 [spec.go#L24-L31](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L24-L31),
-[#L64-L66](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L64-L66)
+[#L65-L67](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L65-L67)
 
 `(m Mode)` before the name is the **receiver**: Go's `self`, but written explicitly and
 named by you (usually one or two letters). You call it as `spec.Resize.Pads()`. A function

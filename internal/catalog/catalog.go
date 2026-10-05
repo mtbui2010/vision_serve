@@ -98,6 +98,12 @@ type Entry struct {
 	KeepAspect  bool   // manifest input.keep_aspect (graph needs dynamic H/W)
 	MultipleOf  int    // manifest input.multiple_of; 0 => omit
 	Normalize   *Normalize
+	// Preprocessing the legacy input.* fields cannot say, written as a `preprocess:` block
+	// (omitted when all three are empty): the resize mode, center_crop's crop_pct and the
+	// resample filter.
+	Resize   string  // preprocess.resize
+	CropPct  float32 // preprocess.crop_pct
+	Resample string  // preprocess.resample
 
 	PostprocessType string  // detr | sam | grounding-dino ...
 	BoxFormat       string  // e.g. cxcywh
@@ -940,10 +946,14 @@ var builtin = []Entry{
 			"encoder": "../mobile-sam/mobile_sam_encoder.onnx",
 			"decoder": "../mobile-sam/mobile_sam_decoder_single.onnx",
 		},
+		// Letterbox false = squash, as RF-DETR is trained and as the rf-detr entry serves the same
+		// weights (BUGS_TO_FIX.md #1): on 200 COCO val2017 photos this model's detections scored
+		// mAP 45.50 letterboxed, 47.77 squashed (= rf-detr), 2026-10-05. An unedited manifest from
+		// an older pull is regenerated on re-pull.
 		InputWidth:        560,
 		InputHeight:       560,
 		InputLayout:       "NCHW",
-		Letterbox:         true,
+		Letterbox:         false,
 		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
 		PostprocessType:   "detr",
 		BoxFormat:         "cxcywh",
@@ -1091,10 +1101,17 @@ var builtin = []Entry{
 		Files: []File{
 			{Role: "model", HFFilename: "efficientnet_b0_Opset17.onnx", LocalFilename: "model.onnx", SHA256: "e76596a2b9e27c7c734c38550859105b43fec926f13447a84dad175eb994068a"},
 		},
+		// Short side to 256, centred 224 crop (crop_pct 0.875), as timm evaluates these
+		// weights; the squash shipped until 2026-10-05 scored top-1 77.44 against 79.04 served on
+		// 5000 ImageNet val images (timm 78.84). An unedited manifest from an older pull is
+		// regenerated on re-pull.
 		InputWidth:        224,
 		InputHeight:       224,
 		InputLayout:       "NCHW",
 		Letterbox:         false,
+		Resize:            "center_crop",
+		CropPct:           0.875,
+		Resample:          "bicubic",
 		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
 		PostprocessType:   "classification",
 		MaxDetections:     5,
@@ -1115,10 +1132,17 @@ var builtin = []Entry{
 		Files: []File{
 			{Role: "model", HFFilename: "mobilenet_v3_small_Opset17.onnx", LocalFilename: "model.onnx", SHA256: "9152343d120cf7b03b6b775a5fccd53813cc21891e376060a8edd2dfc0c35193"},
 		},
+		// Short side to 256, centred 224 crop (crop_pct 0.875), as torchvision evaluates these
+		// weights; the squash shipped until 2026-10-05 scored top-1 68.08 against 71.82 served on
+		// 5000 ImageNet val images (torchvision 71.86). An unedited manifest from an older pull is
+		// regenerated on re-pull.
 		InputWidth:        224,
 		InputHeight:       224,
 		InputLayout:       "NCHW",
 		Letterbox:         false,
+		Resize:            "center_crop",
+		CropPct:           0.875,
+		Resample:          "bilinear",
 		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
 		PostprocessType:   "classification",
 		MaxDetections:     5,

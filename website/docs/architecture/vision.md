@@ -51,6 +51,9 @@ type Spec struct {
 	MultipleOf int
 	// NoUpscale: LongSide/LongSidePad never enlarge (the scale is capped at 1) — PaddleOCR's det.
 	NoUpscale bool
+	// CropPct: CenterCrop keeps this fraction of the resized short side (timm crop_pct, in
+	// (0, 1]); 0 = 1, the whole short side (CLIP). See CenterCropSize.
+	CropPct float32
 	// Resample: "" = the mode's default (see Mode).
 	Resample Resample
 	// Mean, Std: per-channel normalisation, RGB order (see the formula above).
@@ -66,7 +69,7 @@ type Spec struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L109-L139)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L110-L143)
 
 Each pixel value `p` (0 to 255) on color channel `c` becomes `(p/255 - mean[c]) / std[c]`.
 With `NoRescale` and no mean/std the raw 0..255 value is kept (the MobileSAM encoder normalizes
@@ -95,9 +98,9 @@ recipe exactly (rounding included).
 
 | Mode | What it does | Tensor size | Default filter | Used by |
 |---|---|---|---|---|
-| `squash` | Stretch to exactly width x height; the aspect ratio is not kept. | fixed | bilinear | RF-DETR, RT-DETR, MiDaS, EfficientNet, SAM2 |
-| `letterbox` | Shrink to fit inside width x height keeping the aspect ratio, center it, fill the borders with a gray level (default black). | fixed | bilinear | `grasp-rfdetr`'s detector stage (not verified, BUGS_TO_FIX.md #1); otherwise a manifest option |
-| `center_crop` | Resize the short side to the target, cut the centered window (HuggingFace CLIP processor). | fixed | bicubic | CLIP |
+| `squash` | Stretch to exactly width x height; the aspect ratio is not kept. | fixed | bilinear | RF-DETR, RT-DETR, MiDaS, SAM2 |
+| `letterbox` | Shrink to fit inside width x height keeping the aspect ratio, center it, fill the borders with a gray level (default black). | fixed | bilinear | a manifest option; no shipped model letterboxes (RF-DETR is trained squashed, BUGS_TO_FIX.md #1) |
+| `center_crop` | Resize the short side to the target, cut the centered window (HuggingFace CLIP processor). With `crop_pct` (timm) the short side goes to target / `crop_pct` first: 256 for 224 at 0.875. | fixed | bicubic | CLIP; EfficientNet, MobileNetV3 (`crop_pct: 0.875`) |
 | `keep_aspect` | HuggingFace DPT "keep aspect ratio" rule, sides rounded to `multiple_of`; no crop, no pad. | varies per image | bicubic | Depth Anything V2 |
 | `long_side` | Scale so the long side reaches the target; no pad. | varies per image | bilinear | MobileSAM (its graph pads) |
 | `long_side_pad` | `long_side`, then pad the *normalized* tensor at the bottom/right to width x height or to a multiple of `multiple_of`. | fixed or multiples | bilinear | NanoSAM, PaddleOCR detector |
@@ -142,7 +145,7 @@ preprocess:
   pad: 0                   # letterbox / top_left_pad: pixel gray level
 ```
 
-Older manifests (and, today, every shipped manifest) use the legacy fields `input.width`,
+Older manifests (and most shipped ones) use the legacy fields `input.width`,
 `input.height`, `input.letterbox`, `input.crop`, `input.keep_aspect`, `input.multiple_of`,
 `input.normalize` and `input.layout`. They are *aliases* of the block. Without a block they are
 mapped like this (none of the geometry flags means `squash`):
@@ -165,7 +168,7 @@ func FromLegacy(l LegacyFields) Spec {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L157-L171)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L161-L175)
 
 When both a block and a legacy field are present, the registry
 (`registry.Manifest.PreprocessSpec`) requires them to agree and refuses the manifest with an
@@ -210,7 +213,7 @@ func (a Arch) Resolve(s Spec) (Spec, error) {
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L278-L299)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L288-L309)
 
 For example, RF-DETR has always ignored `input.crop`, and SCRFD's legacy `letterbox: true` has
 always meant InsightFace's top-left pad; both readings are preserved. The same unsupported mode
@@ -256,7 +259,7 @@ func (m Meta) Affine() geom.Affine {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L328-L341)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L338-L351)
 
 A decoder inverts it with `geom.Affine.BoxToOrig` and then clips with `geom.Clamp`. The box
 format is `[x, y, w, h]`, top-left corner plus size, everywhere.
