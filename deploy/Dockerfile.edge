@@ -1,5 +1,9 @@
 # deploy/Dockerfile.edge — VisionServe SERVER image for arm64 edge devices (e.g. Jetson).
 #
+# JetPack 6 (Orin) only. Jetson Thor runs JetPack 7 (CUDA 13, SBSA-aligned, no l4t-* images):
+# use deploy/Dockerfile.thor. NOTE (checked 2026-10-05): the default L4T_ML_IMAGE tag below,
+# l4t-ml:r36.3.0, does not exist on NGC (l4t-ml stops at r36.2.0); pass one that exists.
+#
 # There is no single, stable, public download URL for an ONNX Runtime *C/C++ shared
 # library* built with the TensorRT/CUDA execution providers for Jetson: that build must
 # match the device's JetPack (CUDA + cuDNN + TensorRT) versions and is normally produced

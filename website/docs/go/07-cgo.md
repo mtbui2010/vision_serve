@@ -325,7 +325,7 @@ for the Jetson target:
 [ci.yml#L78-L86 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/.github/workflows/ci.yml#L78-L86)
 
 The edge Docker image does the same in its build stage
-([deploy/Dockerfile.edge#L41-L61](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile.edge#L41-L61)):
+([deploy/Dockerfile.edge#L45-L65](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile.edge#L45-L65)):
 `CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build ...`, then copies
 the binary into an arm64 image that also contains `libonnxruntime.so`. The stage installs
 `libc6-dev-arm64-cross` (the arm64 C library headers) next to the compiler: with

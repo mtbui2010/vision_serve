@@ -30,6 +30,14 @@ visionserve import  FILE.onnx --name N --task classification|detection|depth --l
 visionserve check   MODEL --images DIR [--labels FILE] [--reference SCRIPT.py | --checkpoint PATH]
                     [--server URL] [--models DIR] [--report FILE.html] [--json]
                                                # does the served model behave like training? (Docker image)
+visionserve bench   MODEL [--images DIR | --size WxH] [--requests N] [--concurrency C] [--warmup N]
+                    [--ep auto|cpu|cuda|tensorrt] [--server URL | --in-process] [--reload]
+                    [--json] [--report FILE.html] [--prompt ... | --box ... | --point ...]
+visionserve sensitivity MODEL --images DIR [--formats int8,fp16,...] [--threshold E] [--save FILE]
+                    [--gpu] [--json] [--report FILE.html] [--python PY]
+visionserve optimize MODEL --target jetson-orin|jetson-thor|cuda|cpu --images DIR [--labels COCO.json]
+                    [--max-drop P] [--max-output-err E] [--install [--install-format F]] [--tensorrt] [--gpu]
+                    [--sensitivity FILE] [--json] [--report FILE.html] [--python PY]
 visionserve version
 ```
 
@@ -58,6 +66,12 @@ then a short summary and the details; `--json` prints one object `{verdict, reas
 details}` and nothing else; `--report` writes a self-contained HTML file. They exit 0 on PASS or
 WARN, 1 on FAIL, 2 on a usage error. See [Inspect and verify a model](../guides/inspect.md).
 
+`bench`, `sensitivity` and `optimize` print a verdict line first (`PASS|WARN|FAIL: ...`), exit
+`0` on PASS/WARN, `1` on FAIL and `2` on a usage or setup error, print one JSON object with
+`--json`, and write a self-contained HTML page with `--report`. `sensitivity` and `optimize` run
+the converter (Docker image, or a local Python with `--python`). See
+[Make a model fast and small for Jetson](../guides/edge.md).
+
 The source of truth for flags is `visionserve help` and
 [`internal/cli`](https://github.com/mtbui2010/vision_serve/tree/main/internal/cli).
 
@@ -75,8 +89,9 @@ The source of truth for flags is `visionserve help` and
 | `VISIONSERVE_MAX_QUEUE` | auto | Requests per model, running + waiting, before new ones get `503`. Auto = `max(32, 2 × the model's sessions)`; `0` = unbounded. |
 | `VISIONSERVE_POOL_THREADS` | auto | CPU threads per session of a session pool. `0` = ONNX Runtime's default. |
 | `VISIONSERVE_VERIFY` | off | `strict` = cross-check every model's licence against the audited provenance ledger and enforce the SHA-256 / source pins. |
-| `VISIONSERVE_CONVERT_IMAGE` | built-in | Docker image used by `visionserve convert` and `visionserve check`. |
+| `VISIONSERVE_CONVERT_IMAGE` | built-in | Docker image used by `visionserve convert`, `check`, `sensitivity` and `optimize`. |
 | `VISIONSERVE_HOST` | `http://localhost:11435` | Server that `visionserve check` (and the converter's verification) talks to (`--server` wins). |
+| `VISIONSERVE_CONVERT_PYTHON` | — | A local Python with the converter installed: `sensitivity` and `optimize` run it instead of Docker (same as `--python`). |
 | `VISIONSERVE_ORIGINS` | none (no CORS) | Web origins allowed to call the API from a browser, comma-separated, e.g. `http://localhost:5173,https://app.example.com` (like Ollama's `OLLAMA_ORIGINS`). The server then answers their CORS preflight and adds `Access-Control-Allow-Origin`; other origins get no CORS headers. `*` allows every origin and is logged as a warning: the API has no authentication, so any page a user opens could use it. Unset, pages can only call the server from their own origin (or through a proxy). |
 
 ## Per model: the manifest
