@@ -44,7 +44,7 @@ TEXENV ?= texpdf
 ORT_DYLIB_PATH ?= $(shell find $(HOME) /usr/local/lib /usr/lib -xdev -name 'libonnxruntime.so*' 2>/dev/null | grep -v node_modules | grep -E 'onnxruntime/capi.*\.so\.[0-9]' | head -1)
 
 .PHONY: all build install run serve list ps rm pull demo terminate test fmt vet tidy lint clean \
-        build-linux-arm64 docker docker-convert push-docker-convert release-docker-convert docker-edge pypi pypi-next-version help pdf paper-clean clear-image \
+        build-linux-arm64 docker docker-convert push-docker-convert release-docker-convert docker-convert-gpu push-docker-convert-gpu release-docker-convert-gpu docker-edge pypi pypi-next-version help pdf paper-clean clear-image \
         push-docker push-docker-arm push-docker-next-version push-docker-readme
 
 all: build ## Default target: build
@@ -179,6 +179,27 @@ push-docker-convert: ## Tag and push the already-built converter image to Docker
 	@echo "=== Pushed: $(DOCKER_HUB_USER)/visionserve-convert:$(PUSH_VERSION) and :latest ==="
 
 release-docker-convert: docker-convert push-docker-convert ## Build the converter image, then push it to Docker Hub (run `docker login` first)
+
+docker-convert-gpu: ## Build the CUDA converter image (PyTorch CUDA + onnxruntime-gpu); run with --gpus all / `visionserve convert --gpu`
+	cp deploy/.dockerignore .dockerignore
+	docker build -f deploy/Dockerfile.convert \
+		--build-arg VERSION=$(PUSH_VERSION) \
+		--build-arg CONVERT_VARIANT=gpu \
+		-t visionserve-convert:$(PUSH_VERSION)-gpu \
+		-t visionserve-convert:latest-gpu .
+
+push-docker-convert-gpu: ## Tag and push the already-built CUDA converter image to Docker Hub (:<version>-gpu and :latest-gpu)
+	@docker image inspect visionserve-convert:$(PUSH_VERSION)-gpu >/dev/null 2>&1 || { \
+		echo "push-docker-convert-gpu: no local image visionserve-convert:$(PUSH_VERSION)-gpu."; \
+		echo "  build it first: make docker-convert-gpu PUSH_VERSION=$(PUSH_VERSION)   (or use: make release-docker-convert-gpu)"; \
+		exit 1; }
+	docker tag visionserve-convert:$(PUSH_VERSION)-gpu $(DOCKER_HUB_USER)/visionserve-convert:$(PUSH_VERSION)-gpu
+	docker tag visionserve-convert:$(PUSH_VERSION)-gpu $(DOCKER_HUB_USER)/visionserve-convert:latest-gpu
+	docker push $(DOCKER_HUB_USER)/visionserve-convert:$(PUSH_VERSION)-gpu
+	docker push $(DOCKER_HUB_USER)/visionserve-convert:latest-gpu
+	@echo "=== Pushed: $(DOCKER_HUB_USER)/visionserve-convert:$(PUSH_VERSION)-gpu and :latest-gpu ==="
+
+release-docker-convert-gpu: docker-convert-gpu push-docker-convert-gpu ## Build the CUDA converter image, then push it to Docker Hub (run `docker login` first)
 
 docker-arm: ## Build the Jetson/arm64 image (ORT_SOURCE=jetson for CUDA+TRT EP)
 	cp deploy/.dockerignore .dockerignore

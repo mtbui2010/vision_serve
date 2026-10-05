@@ -161,3 +161,19 @@ func TestBuildConvertDockerArgsCalibMounted(t *testing.T) {
 		t.Fatalf("--calib must be mounted read-only and rewritten to the container path:\n%s", got)
 	}
 }
+
+// --gpu gives the container the GPUs (and nothing else about the command changes).
+func TestWithGPUInsertsGPUsRightAfterRun(t *testing.T) {
+	in := []string{"run", "--rm", "--network", "host", "img", "rfdetr", "/in/1/c.pth", "--name", "d"}
+	got := withGPU(in)
+	want := []string{"run", "--gpus", "all", "--rm", "--network", "host", "img", "rfdetr", "/in/1/c.pth", "--name", "d"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("withGPU:\n got  %v\n want %v", got, want)
+	}
+	if strings.Join(in, " ") != "run --rm --network host img rfdetr /in/1/c.pth --name d" {
+		t.Fatalf("withGPU must not modify its input: %v", in)
+	}
+	if got := withGPU([]string{"build"}); len(got) != 1 || got[0] != "build" {
+		t.Fatalf("a non-run command is left alone: %v", got)
+	}
+}

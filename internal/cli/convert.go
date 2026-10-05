@@ -13,6 +13,10 @@ import (
 // Python-free Go binary (CLAUDE.md rule 3). The converter runs once and exits.
 const defaultConvertImage = "mtbui2010/visionserve-convert:latest"
 
+// defaultConvertGPUImage is the CUDA variant (onnxruntime-gpu + PyTorch CUDA). `convert --gpu` selects it
+// and runs it with `--gpus all`; sensitivity / mixed-precision runs are far faster there.
+const defaultConvertGPUImage = "mtbui2010/visionserve-convert:latest-gpu"
+
 // convertPathFlags are the converter flags whose value is a HOST path that must be mounted into
 // the container. The positional <source> is handled separately.
 var convertPathFlags = map[string]bool{
@@ -34,14 +38,14 @@ func runConvert(args []string) error {
 		return nil
 	}
 	image := os.Getenv("VISIONSERVE_CONVERT_IMAGE")
-	if image == "" {
-		image = defaultConvertImage
-	}
 	var models string
 	var pass []string
+	gpu := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		switch {
+		case a == "--gpu":
+			gpu = true
 		case a == "--image" && i+1 < len(args):
 			image = args[i+1]
 			i++
@@ -56,6 +60,12 @@ func runConvert(args []string) error {
 			pass = append(pass, a)
 		}
 	}
+	if image == "" {
+		image = defaultConvertImage
+		if gpu {
+			image = defaultConvertGPUImage
+		}
+	}
 	dir, err := convertModelsDir(models)
 	if err != nil {
 		return err
@@ -68,6 +78,9 @@ func runConvert(args []string) error {
 	if err != nil {
 		return err
 	}
+	if gpu {
+		dockerArgs = withGPU(dockerArgs)
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		return fmt.Errorf("convert needs Docker on this machine (the converter is the %s image).\n"+
 			"Equivalent command to run where Docker is available:\n  docker %s", image, shellJoin(dockerArgs))
@@ -79,6 +92,15 @@ func runConvert(args []string) error {
 		return fmt.Errorf("convert failed: %w", err)
 	}
 	return nil
+}
+
+// withGPU gives the container the host's NVIDIA GPUs: `--gpus all` right after `run`.
+func withGPU(dockerArgs []string) []string {
+	if len(dockerArgs) == 0 || dockerArgs[0] != "run" {
+		return dockerArgs
+	}
+	out := append([]string{"run", "--gpus", "all"}, dockerArgs[1:]...)
+	return out
 }
 
 // convertModelsDir picks the registry to install into. Without --models / $VISIONSERVE_MODELS it
@@ -284,6 +306,11 @@ Common flags:
   --models DIR       registry (default $VISIONSERVE_MODELS, else ~/.visionserve/models, or
                      ~/.visionserve_models when only that exists — the Docker layout)
   --image IMAGE      converter image (default $VISIONSERVE_CONVERT_IMAGE or ` + defaultConvertImage + `)
+  --gpu              run the CUDA converter image (` + defaultConvertGPUImage + `) with --gpus all:
+                     the precision step (sensitivity, mixed precision) and the verification run on the GPU
+
+Reduced precision (opt-in; see the "Reduced precision" guide): --precision fp16|int8|int4|mixed,
+--sensitivity, --formats, --max-output-err, --calib DIR, --ep auto|cpu|cuda.
 
 Every conversion is checked before install: the ONNX output must match the original framework's
 (parity), and its tensor shapes must match what the VisionServe architecture decodes.

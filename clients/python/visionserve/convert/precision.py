@@ -74,6 +74,10 @@ def add_precision_arguments(p) -> None:
     g.add_argument("--int4-algo", choices=INT4_ALGOS, default="rtn",
                    help="INT4 weight quantizer: rtn (round to nearest, no dependencies) or hqq (needs torch)")
     g.add_argument("--int4-block", type=int, default=32, metavar="N", help="INT4 block size along K (default 32)")
+    g.add_argument("--ep", choices=EP_CHOICES, default="auto",
+                   help="ONNX Runtime provider for the precision step's runs (sensitivity, calibration "
+                        "comparison): auto = CUDA when available, else CPU; cuda = require it. The GPU "
+                        "converter image (`visionserve convert --gpu`) has CUDA; the default image does not")
     g.add_argument("--calib", metavar="DIR", help="images for INT8 calibration and for --sensitivity "
                    "(default: --images). Use images like the ones the model will see")
     g.add_argument("--calib-n", type=int, default=32, metavar="N", help="calibration images used (default 32)")
@@ -386,7 +390,37 @@ def sqnr_db(err: float) -> float:
     return math.inf if err <= 0 else (-math.inf if math.isinf(err) else -20.0 * math.log10(err))
 
 
-def _session(model_or_path, optimise: bool = True, providers=("CPUExecutionProvider",)):
+EP_CHOICES = ("auto", "cpu", "cuda")
+CPU_EP = ("CPUExecutionProvider",)
+
+
+GPU_MIN_IMAGES = 16     # below this a CUDA session costs more to create than it saves (see resolve_providers)
+
+
+def resolve_providers(choice: str = "auto", n_images: Optional[int] = None) -> tuple:
+    """--ep -> ONNX Runtime providers for one stage that runs `n_images` images through a fresh session.
+
+    cpu = CPU. cuda = CUDA, and an error when this onnxruntime has none (a run meant for the GPU must not
+    silently take hours on the CPU). auto = CUDA only when it pays: measured on RF-DETR base (RTX A6000),
+    a CUDA session takes 3.1 s to create against 0.29 s on CPU, and then runs an image in 10 ms against
+    183 ms, so it wins from about 16 images per session on. Sensitivity makes a session per layer and
+    format, so with its default 8 images the CPU is faster. CPU is always last."""
+    import onnxruntime as ort
+    have = ort.get_available_providers()
+    if choice == "cpu":
+        return CPU_EP
+    if "CUDAExecutionProvider" not in have:
+        if choice == "cuda":
+            raise ConvertError("--ep cuda: this onnxruntime has no CUDAExecutionProvider "
+                               f"(available: {', '.join(have)}). Use the GPU converter image "
+                               "(visionserve-convert:*-gpu) with `visionserve convert --gpu`")
+        return CPU_EP
+    if choice == "auto" and n_images is not None and n_images < GPU_MIN_IMAGES:
+        return CPU_EP
+    return ("CUDAExecutionProvider", "CPUExecutionProvider")
+
+
+def _session(model_or_path, optimise: bool = True, providers=CPU_EP):
     import onnxruntime as ort
     so = ort.SessionOptions()
     so.log_severity_level = 3
@@ -404,9 +438,9 @@ def run_all(sess, feeds: Sequence[dict], what: str = "model") -> List[list]:
                            "Keep the offending op in float32 with --keep-fp-op OP (or --keep-fp-node NAME)")
 
 
-def compare_models(ref_path, test_path, feeds) -> dict:
+def compare_models(ref_path, test_path, feeds, providers=CPU_EP) -> dict:
     """The reduced model against the FP32 one on the calibration images."""
-    a, b = _session(ref_path), _session(test_path)
+    a, b = _session(ref_path, providers=providers), _session(test_path, providers=providers)
     errs = [output_error(ra, rb) for ra, rb in zip(run_all(a, feeds, 'FP32 model'), run_all(b, feeds, 'reduced model'))]
     finite = [e for e in errs if math.isfinite(e)]
     return {"images": len(errs), "err_mean": float(np.mean(finite)) if finite else math.inf,
@@ -697,7 +731,7 @@ def _weight_axis(node, w_index: int, ndim: int) -> int:
     return ndim - 1     # MatMul: [..., K, N] -> N
 
 
-def collect_activation_stats(model, targets, feeds):
+def collect_activation_stats(model, targets, feeds, providers=CPU_EP):
     """name -> {absmax, p, p999} for every non-weight input of the target nodes, over `feeds`."""
     import onnx
     init = {i.name for i in model.graph.initializer}
@@ -708,7 +742,7 @@ def collect_activation_stats(model, targets, feeds):
     for t in tensors:
         if t not in have:
             probe.graph.output.append(onnx.ValueInfoProto(name=t))
-    sess = _session(probe.SerializeToString(), optimise=False)
+    sess = _session(probe.SerializeToString(), optimise=False, providers=providers)
     names = [o.name for o in sess.get_outputs()]
     stats = {t: {"absmax": 0.0, "p": 0.0, "p999": 0.0} for t in tensors}
     for f in feeds:
@@ -769,7 +803,7 @@ def _act_nodes(helper, TensorProto, numpy_helper, fmt, t, new, stats, method, tr
 
 def measure_sensitivity(src, feeds: Sequence[dict], fmt: str = "int8", method: str = "percentile",
                         progress: Optional[Callable[[int, int, str], None]] = None,
-                        formats: Optional[Sequence[str]] = None) -> List[LayerScore]:
+                        formats: Optional[Sequence[str]] = None, providers=CPU_EP) -> List[LayerScore]:
     """Rank every MatMul/Gemm/Conv by how much reducing ONLY it to a format changes the model's outputs.
 
     `formats` (default [fmt]) measures several formats per layer: int8 | fp16 | int4 | fp8 | fp4. The
@@ -791,8 +825,8 @@ def measure_sensitivity(src, feeds: Sequence[dict], fmt: str = "int8", method: s
     if not targets:
         raise ConvertError("the model has no MatMul/Gemm/Conv to measure")
     init = {i.name: i for i in base.graph.initializer}
-    ref_outs = run_all(_session(base.SerializeToString(), optimise=False), feeds)
-    stats = collect_activation_stats(base, targets, feeds)
+    ref_outs = run_all(_session(base.SerializeToString(), optimise=False, providers=providers), feeds)
+    stats = collect_activation_stats(base, targets, feeds, providers)
     out_names = [o.name for o in base.graph.output]
     base19 = None
     if "fp8" in fmts and base.opset_import[0].version < 19:
@@ -841,7 +875,7 @@ def measure_sensitivity(src, feeds: Sequence[dict], fmt: str = "int8", method: s
             pos = next(i for i, n in enumerate(trial.graph.node) if n.name == node.name)
             for j, n in enumerate(added):
                 trial.graph.node.insert(pos + j, n)
-            got = run_all(_session(trial.SerializeToString(), optimise=False), feeds)
+            got = run_all(_session(trial.SerializeToString(), optimise=False, providers=providers), feeds)
             errs = [output_error(r[:len(out_names)], g[:len(out_names)]) for r, g in zip(ref_outs, got)]
             err = math.inf if any(math.isinf(e) for e in errs) else float(np.mean(errs))
             sc = by_name.get(node.name)
@@ -1003,6 +1037,12 @@ def apply(bundles, args, workdir: Path) -> PrecisionResult:
     out_dir = Path(workdir) / "precision"
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    ep = getattr(args, "ep", "auto")
+
+    def pick(n):
+        prov = resolve_providers(ep, n)
+        log(f"precision: {n} image(s) per session -> ONNX Runtime {prov[0].replace('ExecutionProvider', '')}")
+        return prov
     calib_dir = getattr(args, "calib", None) or getattr(args, "images", None)
     n_cal = max(1, int(getattr(args, "calib_n", 32)))
     feeds = (load_calibration(b.spec(), in_name, in_shape, calib_dir, n_cal) if calib_dir and
@@ -1023,7 +1063,8 @@ def apply(bundles, args, workdir: Path) -> PrecisionResult:
             if i == 0 or (i + 1) * 10 // n != i * 10 // n:
                 log(f"  sensitivity {i + 1}/{n} ({name.split(':')[0]})")
 
-        scores = measure_sensitivity(src, sfeeds, sfmts[0], method, progress, formats=sfmts)
+        scores = measure_sensitivity(src, sfeeds, sfmts[0], method, progress, formats=sfmts,
+                                     providers=pick(len(sfeeds)))
         top = int(getattr(args, "keep_fp_top", 0))
         picked = select_keep(scores, top)
         keep_nodes += [n for n in picked if n not in keep_nodes]
@@ -1043,6 +1084,7 @@ def apply(bundles, args, workdir: Path) -> PrecisionResult:
         cmp_feeds = feeds
         if not cmp_feeds and getattr(args, "images", None):
             cmp_feeds = load_calibration(b.spec(), in_name, in_shape, args.images, 8)
+        cmp_providers = pick(len(cmp_feeds)) if cmp_feeds else CPU_EP
         model0 = _load(src)
         eligible4 = set(int4_eligible(model0))
         skip8 = batched_weight_matmuls(model0)
@@ -1051,7 +1093,7 @@ def apply(bundles, args, workdir: Path) -> PrecisionResult:
         del model0
 
         def check(dst):
-            return compare_models(src, dst, cmp_feeds) if cmp_feeds else {}
+            return compare_models(src, dst, cmp_feeds, cmp_providers) if cmp_feeds else {}
 
         def build(keep):
             dst = out_dir / f"{src.stem}-{prec}.onnx"

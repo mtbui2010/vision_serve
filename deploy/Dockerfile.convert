@@ -23,6 +23,14 @@
 #     -v $PWD:/in:ro mtbui2010/visionserve-convert rfdetr /in/ckpt.pth --name my-det \
 #     --precision mixed --formats int4,int8,fp16 --calib /in/photos --max-output-err 0.05 --eval /in/val.json
 #
+# Two variants (--build-arg CONVERT_VARIANT):
+#   cpu (default): PyTorch CPU wheel + onnxruntime CPU.                       ~3.5 GB
+#   gpu          : PyTorch CUDA 12.6 wheel + onnxruntime-gpu (CUDA EP); the Go binary verifies on the GPU
+#                  too. Needs the NVIDIA driver and `docker run --gpus all` (`visionserve convert --gpu`).
+#                  Makes sensitivity / mixed-precision runs and the FP16 checks run on the CUDA EP.
+#                  Only the PyTorch venv is GPU: the TensorFlow venv (tensorflow, keras, tflite) stays CPU.
+#   make docker-convert          # cpu          make docker-convert-gpu   # gpu
+#
 # Two venvs, because TensorFlow/tf2onnx and PyTorch cannot share one (tf2onnx pins protobuf ~=3.20
 # and numpy<2; torch/transformers need numpy 2): /opt/torchenv (rfdetr, hf, torchscript, pytorch)
 # and /opt/tfenv (tensorflow, keras, tflite). vsconvert-entrypoint.sh routes by format.
@@ -44,6 +52,7 @@ RUN CGO_ENABLED=1 go build -ldflags "-s -w -X visionserve/internal/cli.Version=$
 # Stage 2 — converter runtime
 ############################
 FROM python:3.11-slim-bookworm
+ARG CONVERT_VARIANT=cpu
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libgl1 libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
@@ -52,8 +61,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY convert/requirements.txt convert/requirements-tf.txt /tmp/
 RUN python -m venv /opt/torchenv \
  && /opt/torchenv/bin/pip install --no-cache-dir --upgrade pip \
- && /opt/torchenv/bin/pip install --no-cache-dir \
-        --extra-index-url https://download.pytorch.org/whl/cpu -r /tmp/requirements.txt
+ && if [ "$CONVERT_VARIANT" = gpu ]; then IDX=https://download.pytorch.org/whl/cu126; \
+    else IDX=https://download.pytorch.org/whl/cpu; fi \
+ && /opt/torchenv/bin/pip install --no-cache-dir --extra-index-url "$IDX" -r /tmp/requirements.txt
+# GPU: the CUDA onnxruntime wheel replaces the CPU one (they cannot coexist; same version as
+# requirements.txt). Its CUDA 12 / cuDNN 9 libraries come from the nvidia-* wheels that torch and the
+# `cuda,cudnn` extras install; ldconfig is told where they are so the Go binary finds them as well.
+RUN if [ "$CONVERT_VARIANT" = gpu ]; then \
+      ORTV=$(sed -n 's/^onnxruntime==//p' /tmp/requirements.txt) \
+   && /opt/torchenv/bin/pip uninstall -y onnxruntime \
+   && /opt/torchenv/bin/pip install --no-cache-dir "onnxruntime-gpu[cuda,cudnn]==${ORTV}" \
+   && ls -d /opt/torchenv/lib/python3.11/site-packages/nvidia/*/lib > /etc/ld.so.conf.d/nvidia-pip.conf \
+   && ldconfig; \
+    fi
 RUN python -m venv /opt/tfenv \
  && /opt/tfenv/bin/pip install --no-cache-dir --upgrade pip \
  && /opt/tfenv/bin/pip install --no-cache-dir -r /tmp/requirements-tf.txt
@@ -65,10 +85,16 @@ RUN /opt/torchenv/bin/pip install --no-cache-dir --no-deps /opt/vsconvert-src \
 COPY convert/vsconvert-entrypoint.sh /usr/local/bin/vsconvert
 # The verification tiers (end-to-end parity, mAP, speed) start a temporary `visionserve serve`
 # when no server is reachable. The Go binary needs a libonnxruntime.so for that; the CPU one
-# shipped inside the onnxruntime wheel is enough for verification.
+# shipped inside the onnxruntime wheel is enough for verification (the GPU variant also copies the CUDA
+# provider libraries next to it, which ONNX Runtime looks for beside libonnxruntime.so).
 RUN ln -s "$(ls /opt/torchenv/lib/python3.11/site-packages/onnxruntime/capi/libonnxruntime.so.* | head -1)" \
-        /usr/local/lib/libonnxruntime.so
-ENV ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so
+        /usr/local/lib/libonnxruntime.so \
+ && if [ "$CONVERT_VARIANT" = gpu ]; then \
+      cp /opt/torchenv/lib/python3.11/site-packages/onnxruntime/capi/libonnxruntime_providers_*.so /usr/local/lib/ \
+   && ldconfig; \
+    fi
+ENV ORT_DYLIB_PATH=/usr/local/lib/libonnxruntime.so \
+    NVIDIA_VISIBLE_DEVICES=all NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 # `--user <host uid>` has no /etc/passwd entry here; getpass.getuser() (torch, tf) reads these
 # first instead of failing with "getpwuid(): uid not found".

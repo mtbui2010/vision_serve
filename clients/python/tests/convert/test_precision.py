@@ -683,3 +683,46 @@ def test_mixed_with_fp16_rest_loads_when_a_quantized_matmul_feeds_a_bias_add(tmp
     dst = P.build_mixed(src, tmp_path / "mix.onnx", assign, feeds, "minmax", fp16_rest=True, workdir=tmp_path)
     err = P.compare_models(src, dst, _feeds(np.random.default_rng(51), 6))      # loads and runs
     assert err["err_mean"] < 0.3 and err["non_finite_images"] == 0
+
+
+# --------------------------------------------------------------------------------------------
+# execution provider choice (--ep)
+# --------------------------------------------------------------------------------------------
+
+def test_resolve_providers_auto_cpu_and_cuda(monkeypatch):
+    import onnxruntime as ort
+    monkeypatch.setattr(ort, "get_available_providers", lambda: ["CPUExecutionProvider"])
+    assert P.resolve_providers("auto") == P.CPU_EP and P.resolve_providers("cpu") == P.CPU_EP
+    with pytest.raises(ConvertError, match="no CUDAExecutionProvider.*--gpu"):
+        P.resolve_providers("cuda")                              # a GPU run must not silently use the CPU
+    monkeypatch.setattr(ort, "get_available_providers", lambda: ["CUDAExecutionProvider", "CPUExecutionProvider"])
+    assert P.resolve_providers("auto") == ("CUDAExecutionProvider", "CPUExecutionProvider")
+    assert P.resolve_providers("cuda") == ("CUDAExecutionProvider", "CPUExecutionProvider")
+    assert P.resolve_providers("cpu") == P.CPU_EP                 # cpu is honoured even when CUDA exists
+    # auto only takes CUDA when a session runs enough images to repay its creation cost
+    assert P.resolve_providers("auto", P.GPU_MIN_IMAGES - 1) == P.CPU_EP
+    assert P.resolve_providers("auto", P.GPU_MIN_IMAGES) == ("CUDAExecutionProvider", "CPUExecutionProvider")
+    assert P.resolve_providers("cuda", 1) == ("CUDAExecutionProvider", "CPUExecutionProvider")   # explicit wins
+
+
+def test_every_session_of_a_precision_run_uses_the_resolved_providers(tmp_path, monkeypatch):
+    """Sensitivity, calibration statistics and the FP32-vs-reduced comparison all run on the chosen EP."""
+    fake = ("FakeExecutionProvider", "CPUExecutionProvider")
+    seen = []
+    real = P._session
+
+    def spy(model, optimise=True, providers=P.CPU_EP):
+        seen.append(tuple(providers))
+        return real(model, optimise, P.CPU_EP)                    # no GPU here: run on the CPU
+    monkeypatch.setattr(P, "_session", spy)
+    monkeypatch.setattr(P, "resolve_providers", lambda choice="auto", n_images=None: fake)
+    src = image_mlp(tmp_path / "m.onnx", np.random.default_rng(60))
+    cal = write_images(tmp_path / "cal")
+    P.apply([_bundle(src)], _args(precision="int8", calib=str(cal), sensitivity=True), tmp_path / "o")
+    assert seen and set(seen) == {fake}
+
+
+def test_cli_parser_has_ep_flag_defaulting_to_auto():
+    from visionserve.convert import cli
+    assert cli.build_parser().parse_args(["rfdetr", "x.pth", "--name", "n"]).ep == "auto"
+    assert cli.build_parser().parse_args(["rfdetr", "x.pth", "--name", "n", "--ep", "cuda"]).ep == "cuda"

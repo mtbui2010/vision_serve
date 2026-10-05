@@ -24,6 +24,7 @@ visionserve convert rfdetr ckpt.pth --name my-det-mixed --precision int8 --calib
 | `--formats LIST` | With `mixed`: the formats a layer may take, from `int4,int8,fp16` (default `int8,fp16`). `fp32` is always the fallback |
 | `--sens-formats LIST` | Formats `--sensitivity` measures per layer, from `int4,int8,fp16,fp8,fp4`. `fp8` and `fp4` are simulated, see below |
 | `--int4-algo rtn\|hqq`, `--int4-block N` | INT4 weight quantizer (`rtn` needs nothing; `hqq` needs torch) and its block size along K (default 32) |
+| `--ep auto\|cpu\|cuda` | ONNX Runtime provider for the precision step's runs (sensitivity, FP32-vs-reduced comparison). `auto` takes CUDA when the environment has it; `cuda` refuses to fall back to CPU |
 | `--calib DIR` | Images for INT8 ranges and for `--sensitivity`, preprocessed exactly as the server will. Use photos like the ones the model will see (default: `--images`) |
 | `--calib-method` | `minmax`, `entropy` or `percentile` (default; clips rare outliers) |
 | `--sensitivity` | Score every MatMul / Gemm / Conv (see below) |
@@ -111,14 +112,15 @@ tabletop-22, so the absolute mAP is flattering; only the differences between row
 | **mixed** `int8,fp16`, `--max-output-err 0.1` | 47.7 MB | 0.097 | 62.74 | 67.74 |
 | **mixed** `int4,fp16` (HQQ), `--max-output-err 0.1` | 42.9 MB | 0.095 | 64.15 | 69.23 |
 | **mixed** `int4,int8,fp16` (HQQ), `--max-output-err 0.1` | 44.9 MB | 0.076 | 62.79 | 68.09 |
+| **mixed** `int4,int8,fp16` (HQQ), `--max-output-err 0.05` | 50.6 MB | 0.042 | 63.20 | 68.26 |
 
 What to take from it:
 
 - **FP16 is free** here (within ±0.3 mAP) and halves the file.
 - **One format for every layer is costly.** INT8 everywhere lost 4.8 points, INT4 RTN 8.7. INT4 HQQ is much
   better than RTN (−2.6) for 5 s more, so use `--int4-algo hqq` for INT4 when torch is present.
-- **A format per layer is the useful result.** The mixed models are 2.4 to 2.7 times smaller than FP32
-  and lose between −0.7 and +0.7 mAP. The INT8-only mix is the same size as INT8 with the sensitive layers
+- **A format per layer is the useful result.** The mixed models are 2.3 to 2.7 times smaller than FP32
+  and lose between −0.7 and +0.7 mAP; a tighter target (0.05) costs 6 MB more and loses 0.3. The INT8-only mix is the same size as INT8 with the sensitive layers
   kept in float32 (47.7 vs 95.7 MB) and loses half as much.
 - **The P error predicts mAP only roughly.** Errors of 0.076 to 0.098 gave −1.4 to +0.7 points. The
   differences between the three mixed rows are within noise of a 215-image test set. Check the winner
@@ -139,8 +141,19 @@ published account of transformer INT8: a few activation outliers, not the weight
 ## Limits you should know
 
 - The ONNX Runtime CUDA execution provider does not speed up QDQ INT8; INT8 pays off on CPU and
-  under TensorRT. FP16 is the CUDA win. The converter image is CPU-only, so tiers B/C run FP16
-  and INT8 on CPU; a GPU converter image is not built yet.
+  under TensorRT. FP16 is the CUDA win.
+- The default converter image is CPU-only: tiers B/C run FP16 and INT8 on the CPU. The **GPU image**
+  (`make docker-convert-gpu`, tag `...-gpu`, about 10 GB; `visionserve convert --gpu` runs it with
+  `--gpus all`) has PyTorch CUDA and `onnxruntime-gpu`: the server it starts for tiers B/C uses the CUDA EP,
+  and FP16 is checked where it will run. It needs the NVIDIA driver. Only its PyTorch venv is GPU; the
+  TensorFlow venv (tensorflow, keras, tflite) stays CPU.
+- **The GPU does not speed up the sensitivity loop at its default size.** Measured on RF-DETR base
+  (RTX A6000): a CUDA session takes 3.1 s to create against 0.29 s on CPU, then runs an image in 10 ms
+  against 183 ms. Sensitivity makes one session per layer and format, so with 8 images the CPU is
+  faster (3 images, 120 layers: 137 s CPU, 230 s CUDA, same ranking). The GPU wins from about 16 images per
+  session. `--ep auto` (the default) therefore takes CUDA only for a stage that runs 16 or more images
+  per session, `--ep cuda` always, `--ep cpu` never. Large `--eval` sets and the verification tiers are
+  where the GPU image saves the time.
 - A `MatMul` whose constant operand is not a 2-D matrix (a folded `[1, heads, Q, D]` tensor in an
   exported DETR decoder) is left in float: ONNX Runtime's `QLinearMatMul` cannot run a per-channel
   zero point on it.
