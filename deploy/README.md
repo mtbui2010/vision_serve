@@ -438,6 +438,25 @@ docker run -d \
   mtbui2010/visionserve:latest-arm
 ```
 
+> **Checked 2026-10-05:** `nvcr.io/nvidia/l4t-ml:r36.3.0` does not exist on NGC (`docker manifest
+> inspect` says "no such manifest"; l4t-ml stops at r36.2.0). Pass `--build-arg L4T_ML_IMAGE=...`
+> with an image that exists, or take ONNX Runtime from the Jetson AI Lab `jp6/cu126` build.
+
+### Jetson Thor (JetPack 7): `deploy/Dockerfile.thor` (untested on hardware)
+
+JetPack 7 is SBSA-aligned (standard arm64 CUDA 13 packages; no l4t-* images) and Thor's GPU is
+Blackwell (sm_110), so the JetPack 6 image does not apply. `Dockerfile.thor` uses
+`nvcr.io/nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04` and the ONNX Runtime 1.24 libraries of the
+Jetson AI Lab `sbsa/cu130` wheel (CUDA + TensorRT providers, sm_110 kernels, pinned by SHA-256).
+It builds without QEMU (every `RUN` runs on the build platform):
+
+```bash
+docker buildx build --platform linux/arm64 -f deploy/Dockerfile.thor -t visionserve:thor --load .
+docker run -d --runtime nvidia --gpus all -p 11435:11435 -v visionserve:/root/.models visionserve:thor
+```
+
+It has not run on a Thor yet: see the checklist in `website/docs/guides/edge.md`.
+
 ---
 
 ## Docker Compose
