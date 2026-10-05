@@ -338,6 +338,19 @@ all 300 match. (Before 2026-10-05 tier A allowed at most 2 % of rows to differ, 
 this checkpoint, and Small, which has 32 such queries on the second noise image.) The official
 Base and Medium checkpoints and a fine-tuned Small pass the same way.
 
+A near-tie can also land on a query that scores above 0.05. The official Medium checkpoint on
+`test/testdata/sample.jpg` scores proposals 501 and 224 at −3.635506 and −3.635507. PyTorch puts
+them in decoder slots 190 and 191, and ONNX Runtime puts them the other way round. Each slot adds
+its own learned query to its proposal, so after the swap the two slots hold two different queries.
+Both score about 0.06, and neither matches any row of the other run (the closest one is off by
+1.15e-2). Tier A therefore reads which proposals the ONNX graph kept, through a copy of the graph
+that also returns the input and indices of its `TopK`. It accepts the difference only if the
+encoder's proposal scores match to the tolerance and each moved slot holds a proposal that ties
+with PyTorch's choice within the measured score difference. It then runs PyTorch again with ONNX's
+proposal order and compares every query under the usual rules. On that photo the rerun matches
+all 300 queries to 1.9e-4. An export bug next to a tie still fails the rerun, and a selection
+that is not a near-tie fails the check before the rerun.
+
 ### Tier B1 catching a preprocessing mistake
 
 To see what B1 does with a real mistake, we served three deliberately wrong versions of

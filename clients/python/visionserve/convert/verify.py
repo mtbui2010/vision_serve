@@ -456,6 +456,11 @@ def tier_a_results(records, names) -> List[TierResult]:
     low = sum(int(r.get("low_score_differ", 0)) for r in records)
     note = (f"; {low} low-score queries differ over the runs (DETR top-K near-ties), not judged one by one"
             if low else "")
+    tied = [r for r in records if r.get("proposal_rows")]
+    if tied:
+        note += (f"; on {len(tied)} run(s) near-tied encoder proposals took different decoder slots "
+                 f"({sum(int(r['proposal_rows']) for r in tied)} slots), compared against PyTorch re-run on "
+                 "ONNX's proposal order")
     return [TierResult("A", f"ONNX vs framework parity ({inputs})", PASS,
                        f"max|Δ|/scale {worst_err:.2e} over {len(records)} run(s), tolerance {records[0]['tol']:g}"
                        + note,

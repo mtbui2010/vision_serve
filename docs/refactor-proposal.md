@@ -404,3 +404,19 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   Go `owlvit.json` sinh lại: case `manifest`/`defaults-max100` mới bằng đúng case cũ lọc
   score > 0.9; case `sim0.1` bằng từng byte case `manifest` cũ. Chưa có protocol đo độ chính xác
   cho template (một bộ ảnh + template có nhãn); ngưỡng 0.9 là theo HF, chưa đo trên dữ liệu thật.
+- Converter RF-DETR, nhận variant (2026-10-05): **đã sửa**. Trước đây metadata của checkpoint
+  thắng shape của state_dict, nên `rf-detr-base.pth` chính thức (`args.pretrain_weights=
+  'lwdetr_dinov2_small_o365_checkpoint.pth'`, tên checkpoint pretrain) bị nhận là small và build
+  lỗi patch_size 14 vs 16; phải truyền `--variant base`. Nay: `--variant` > shape (patch, dim,
+  số layer decoder) > `model_name`/args > tên file. Metadata chỉ chọn giữa các variant mà shape
+  cho phép (medium và large chỉ khác lưới PE); shape không khớp variant nào thì từ chối. Tier A
+  (CPU, `--dry-run --no-server`, không `--variant`): nano, small, base, fine-tune tabletop đều
+  PASS. Medium FAIL ổn định trên `test/testdata/sample.jpg`: 2 query điểm ≈ 0.06 lệch 1.15e-2.
+  **Đã tìm ra nguyên nhân và đã sửa.** Hai proposal 501 và 224 của encoder có điểm −3.635506 và
+  −3.635507, nên PyTorch và ORT xếp chúng vào slot 190/191 theo thứ tự ngược nhau. Mỗi slot cộng
+  query học riêng (`query_feat`, `refpoint_embed`), nên sau khi đổi chỗ đó là hai query khác hẳn,
+  không khớp với hàng nào của lần chạy kia. Chạy lại PyTorch theo đúng thứ tự proposal của ORT
+  thì cả 300 hàng khớp tới 1.9e-4. Không phải lỗi số học, tolerance 1e-3 vẫn hợp lý cho medium.
+  Sửa: `parity_run` đọc input và index của `TopK` qua một bản sao graph có thêm 2 output, kiểm
+  điểm proposal khớp tới tolerance và mỗi slot đổi là near-tie, rồi so lại với PyTorch chạy theo
+  thứ tự của ORT bằng luật cũ. Lỗi export thật (cạnh một tie hay không) vẫn FAIL, có test.
