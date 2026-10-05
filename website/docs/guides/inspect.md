@@ -64,10 +64,11 @@ Next steps
 The correct `rf-detr` manifest on the same photos gives `PASS: rf-detr behaves like its training
 pipeline on 5 photos (preprocessing within 0.4 gray levels)`, and with `--labels` on 200 COCO
 val2017 photos it adds the served mAP, 47.6. With `--checkpoint`, B2 and C compare against the
-original model. On the official `rf-detr-nano.pth` and 200 COCO val2017 photos (CPU), the shipped
-`rf-detr-nano` manifest, which letterboxes, failed: B1 46.6 gray levels, B2 31 of 36 boxes matched,
-C mAP 40.92 served against 44.09 for `rfdetr` itself. A copy with `letterbox: false` passed all
-three: 0.4 gray levels, 38 of 38 boxes, mAP 43.80 against 44.09.
+original model. This check is how the `rf-detr-nano` manifest was found wrong: on the official
+`rf-detr-nano.pth` and 200 COCO val2017 photos (CPU), the manifest as shipped until 5 October 2026
+letterboxed and failed: B1 46.6 gray levels, B2 31 of 36 boxes matched, C mAP 40.92 served against
+44.09 for `rfdetr` itself. With `letterbox: false`, what it ships now, it passes all three: 0.4 gray
+levels, 38 of 38 boxes, mAP 43.80 against 44.09.
 
 `--report check.html` writes the same verdict as one self-contained page (no network access when
 opened): the summary, what the model sees next to the reference with a heatmap of the difference,

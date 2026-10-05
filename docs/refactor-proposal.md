@@ -420,3 +420,18 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   Sửa: `parity_run` đọc input và index của `TopK` qua một bản sao graph có thêm 2 output, kiểm
   điểm proposal khớp tới tolerance và mỗi slot đổi là near-tie, rồi so lại với PyTorch chạy theo
   thứ tự của ORT bằng luật cũ. Lỗi export thật (cạnh một tie hay không) vẫn FAIL, có test.
+- Manifest so với cách model được train, audit bằng `visionserve check` (2026-10-05): **đã
+  sửa 2, còn báo 3.** Cùng loại lỗi với BUGS_TO_FIX.md #1. `rf-detr-nano` letterbox trong khi
+  RF-DETR train bằng squash: so với checkpoint chính thức chạy bằng `rfdetr` (CPU, 200 ảnh COCO
+  val2017) B1 lệch 46.6 mức xám, B2 31/36 box, mAP 40.92 so với 44.09 (−3.16); squash: 0.4,
+  38/38, 43.80 (−0.29). `rt-detr` letterbox và chuẩn hóa ImageNet trong khi RT-DETR train bằng
+  squash 640×640, chỉ chia 255: đo bằng weights thay thế `rtdetr_r50vd` (RT-DETR-l-hf đã mất),
+  mAP 7.16 so với 50.40 (−43.25); sửa xong 50.34. Đã đổi manifest, catalog, golden Go; `pull`
+  lại sẽ ghi đè manifest do `pull` cũ sinh ra mà chưa ai sửa. Golden 43 case trên CPU: chỉ 3 case
+  `rf-detr-nano` đổi, 40 case còn lại trùng từng byte. Các model còn lại đạt (`rf-detr`,
+  `rfdetr-small*`, `depth-anything-v2`, `clip`, `siglip-image*`), bảng đầy đủ ở BUGS_TO_FIX.md #1.
+  Còn mở: `efficientnet-b0` và `mobilenet-v3` squash cả ảnh trong khi timm/torchvision resize rồi
+  cắt giữa (B1 ≈ 40 mức xám, top-1 trùng 4/8 và 3/8), chưa đo top-1 nên chưa sửa;
+  `grasp-rfdetr` vẫn letterbox (cùng weights với `rf-detr`), cần kiểm output grasp trước khi
+  đổi; `check` báo FAIL sai cho `scrfd` vì phía Python không áp luật legacy theo kiến trúc
+  (`top_left_pad`, mean/std theo đơn vị 0..255) như Go.

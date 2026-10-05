@@ -15,7 +15,7 @@ This directory targets **RT-DETR-l** (large), COCO-pretrained, from the HuggingF
 
 | Tensor         | Shape          | Notes                                        |
 |----------------|----------------|----------------------------------------------|
-| `pixel_values` | `[1,3,640,640]`| NCHW, ImageNet-normalized, letterboxed       |
+| `pixel_values` | `[1,3,640,640]`| NCHW, squashed to 640x640, [0,1], no mean/std |
 | `pred_logits`  | `[1,300,80]`   | Raw logits, COCO-80, sigmoid applied at decode|
 | `pred_boxes`   | `[1,300,4]`    | cxcywh, normalized [0,1] to input image size |
 

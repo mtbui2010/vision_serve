@@ -184,6 +184,40 @@ func TestPullRegeneratesOnlyGeneratedManifests(t *testing.T) {
 	}
 }
 
+// rf-detr-nano is served squashed, like every RF-DETR (BUGS_TO_FIX.md #1: letterbox cost 3.16 mAP
+// against the official checkpoint). Installs made before the fix hold a generated manifest with
+// letterbox: true; each rendering an older release could have written must count as unedited
+// generated output, so a plain re-pull replaces it (Pull's isUneditedGenerated branch).
+func TestRFDETRNanoSquashesAndOldManifestsAreRegenerated(t *testing.T) {
+	e, ok := Lookup("rf-detr-nano")
+	if !ok {
+		t.Fatal("rf-detr-nano not in the catalog")
+	}
+	p := filepath.Join(t.TempDir(), "rf-detr-nano", "manifest.yaml")
+	if m := loadRendered(t, p, render(t, e)); m.Input.Letterbox {
+		t.Fatal("rf-detr-nano renders letterbox: true; RF-DETR is trained squashed")
+	}
+	old := e
+	old.Letterbox = true
+	oldHashed := render(t, old)
+	for name, content := range map[string]string{
+		"hashed header": oldHashed,
+		"legacy":        legacyRenderManifest(old),
+		"pre-hash":      generatedHeader + " rf-detr-nano`\n" + oldHashed[strings.IndexByte(oldHashed, '\n')+1:],
+	} {
+		if !strings.Contains(content, "letterbox: true") {
+			t.Fatalf("%s: precondition: the old rendering letterboxes:\n%s", name, content)
+		}
+		if !isUneditedGenerated(content) {
+			t.Errorf("%s: an old generated rf-detr-nano manifest is not recognised as generated; "+
+				"re-pull would keep letterbox: true", name)
+		}
+		if content == render(t, e) {
+			t.Errorf("%s: old and new renderings are identical", name)
+		}
+	}
+}
+
 // depth-anything-v2's keep-aspect geometry must survive RenderManifest -> registry parsing, the
 // same path `pull` takes; midas must stay a plain squash.
 func TestDepthKeepAspectRendersAndParses(t *testing.T) {

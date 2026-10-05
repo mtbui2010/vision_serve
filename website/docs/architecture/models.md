@@ -408,7 +408,7 @@ image.
 
 <figure markdown="span">
   ![The same detection in the model's input space and in the original photo](../assets/img/bbox-mapping-177015.jpg){ loading=lazy }
-  <figcaption>The same detection in the model's input space and in the original photo<br/><code>rf-detr-nano</code> · 17 ms on gpu:0 · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
+  <figcaption>The same detection in the model's input space and in the original photo<br/><code>rf-detr-nano</code> (squash: scale_x 0.6, scale_y 0.8, no padding) · 29 ms on gpu:0 · Photo: COCO val2017 #177015 (<a href="http://farm1.staticflickr.com/131/355302776_1d1215b7c1_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
 ```go title="internal/models/detr/postprocess.go"

@@ -291,10 +291,14 @@ var builtin = []Entry{
 				SHA256:        "3fcbba0f68bad4939fdf1c38f432783b95691e2869af3be369780aa5be67abb2",
 			},
 		},
+		// Letterbox false = squash, like every RF-DETR (BUGS_TO_FIX.md #1): `visionserve check`
+		// against the official rf-detr-nano.pth on 200 COCO val2017 photos measured letterbox mAP
+		// 40.92 vs 44.09 (rfdetr), squash 43.80 (2026-10-05). An unedited manifest from an older
+		// pull is regenerated on re-pull.
 		InputWidth:        384,
 		InputHeight:       384,
 		InputLayout:       "NCHW",
-		Letterbox:         true,
+		Letterbox:         false,
 		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
 		PostprocessType:   "detr",
 		BoxFormat:         "cxcywh",
@@ -960,11 +964,14 @@ var builtin = []Entry{
 		Files: []File{
 			{Role: "model", HFFilename: "onnx/model.onnx", LocalFilename: "model.onnx"},
 		},
+		// Squash + [0, 1] with no mean/std, as RT-DETR is trained (RTDetrImageProcessor
+		// do_normalize false); letterbox + ImageNet mean/std scored 7.16 mAP vs 50.40 on
+		// rtdetr_r50vd (models/rt-detr/manifest.yaml, BUGS_TO_FIX.md #1).
 		InputWidth:        640,
 		InputHeight:       640,
 		InputLayout:       "NCHW",
-		Letterbox:         true,
-		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		Letterbox:         false,
+		Normalize:         &Normalize{Mean: []float32{0, 0, 0}, Std: []float32{1, 1, 1}},
 		PostprocessType:   "rt-detr",
 		BoxFormat:         "cxcywh",
 		ConfThreshold:     0.5,
