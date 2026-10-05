@@ -964,11 +964,14 @@ var builtin = []Entry{
 		Files: []File{
 			{Role: "model", HFFilename: "onnx/model.onnx", LocalFilename: "model.onnx"},
 		},
+		// Squash + [0, 1] with no mean/std, as RT-DETR is trained (RTDetrImageProcessor
+		// do_normalize false); letterbox + ImageNet mean/std scored 7.16 mAP vs 50.40 on
+		// rtdetr_r50vd (models/rt-detr/manifest.yaml, BUGS_TO_FIX.md #1).
 		InputWidth:        640,
 		InputHeight:       640,
 		InputLayout:       "NCHW",
-		Letterbox:         true,
-		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
+		Letterbox:         false,
+		Normalize:         &Normalize{Mean: []float32{0, 0, 0}, Std: []float32{1, 1, 1}},
 		PostprocessType:   "rt-detr",
 		BoxFormat:         "cxcywh",
 		ConfThreshold:     0.5,

@@ -109,7 +109,11 @@ func TestGoldenRTDETR(t *testing.T) {
 		name string
 		cfg  models.Config
 	}{
-		// models/rt-detr/manifest.yaml (letterbox 640, COCO-80) + a squash variant.
+		// models/rt-detr/manifest.yaml (squash 640, [0, 1] with no mean/std since 2026-10-05,
+		// BUGS_TO_FIX.md #1; COCO-80), the letterbox + ImageNet branch it used before (values
+		// unchanged), and a squash variant.
+		{"manifest640", models.Config{Name: "rt-detr", Width: 640, Height: 640, Mean: []float32{0, 0, 0},
+			Std: []float32{1, 1, 1}, BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300, Labels: coco80}},
 		{"lb640", models.Config{Name: "rt-detr", Width: 640, Height: 640, Letterbox: true, Mean: mean, Std: std,
 			BoxFormat: "cxcywh", ConfThresh: 0.5, MaxDet: 300, Labels: coco80}},
 		{"sq640max5", models.Config{Name: "rt", Width: 640, Height: 480, Mean: mean, Std: std,
