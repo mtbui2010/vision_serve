@@ -59,9 +59,11 @@ __all__ = [
     "connect",
     "host_url",
     "ensure_model",
+    "has_model",
     "photo",
     "PHOTOS",
     "draw",
+    "mark",
     "show",
     "show_side_by_side",
     "run_cli",
@@ -165,35 +167,38 @@ def _model_state(client: Client, name: str) -> str | None:
     return None
 
 
-def ensure_model(client: Client, name: str) -> bool:
+def has_model(client: Client, name: str) -> bool:
+    """True when the server has the model `name` on disk (state "available" or "loaded")."""
+    return _model_state(client, name) in ("available", "loaded")
+
+
+def ensure_model(client: Client, name: str) -> None:
     """Make sure the model `name` is installed on the server.
 
     If the server already has it, this only prints a short line. If it is missing
     (state "not_downloaded", or not in the list at all), it runs
     `visionserve pull NAME` with `run_cli` and prints what happened.
     Set HANDSON_NO_PULL=1 to only report a missing model and never download.
-
-    Returns True when the model is ready to use, False when it is still missing.
+    Use `has_model(client, name)` when your code needs a True/False answer.
     """
     state = _model_state(client, name)
     if state in ("available", "loaded"):
         print("Model %r is installed (state: %s)." % (name, state))
-        return True
+        return
     why = "is not downloaded yet" if state == "not_downloaded" else "is not known to this server"
     if os.environ.get("HANDSON_NO_PULL", "").strip() not in ("", "0", "false", "no"):
         print("Model %r %s. HANDSON_NO_PULL is set, so it is NOT downloaded.\n"
               "Download it yourself with:  visionserve pull %s" % (name, why, name))
-        return False
+        return
     print("Model %r %s. Downloading it with `visionserve pull %s` (only once)..." % (name, why, name))
     run_cli("pull", name)
     state = _model_state(client, name)
     if state in ("available", "loaded"):
         print("Done: model %r is installed (state: %s)." % (name, state))
-        return True
+        return
     print("The server still reports model %r as %r.\n"
           "Check that the command-line program and the server use the same models folder\n"
           "(in Docker, use VISIONSERVE_CLI=\"docker exec visionserve visionserve\")." % (name, state))
-    return False
 
 
 # --------------------------------------------------------------------------- #
@@ -314,6 +319,47 @@ def draw(image: Any, result: Result | None = None, show_masks: bool = True):
                 d.line([(q[0] - px, q[1] - py), (q[0] + px, q[1] + py)], fill=col, width=lw + 2)
             d.ellipse([g.x - lw, g.y - lw, g.x + lw, g.y + lw], fill=col)
     return out
+
+
+def mark(image: Any, boxes: Any = None, points: Any = None):
+    """Draw prompts on a copy of the photo and return it (a PIL image).
+
+    `boxes`: one box `[x, y, w, h]` or a list of boxes, drawn as white dashed rectangles.
+    `points`: one point `[x, y]` / `[x, y, label]` or a list of them. Label 1 (the default)
+    is drawn as a green dot ("on the object"), label 0 as a red cross ("not on the object").
+    Use it to see the prompt you send, for example `show(mark(photo("cat"), boxes=box), res)`.
+    """
+    from PIL import ImageDraw
+
+    img = _load_image(image).copy()
+    d = ImageDraw.Draw(img)
+    w, h = img.size
+    lw = max(2, int(round(min(w, h) / 200)))
+
+    def _many(v):
+        if v is None:
+            return []
+        v = [list(map(float, x)) if hasattr(x, "__len__") else float(x) for x in v]
+        return [v] if v and not isinstance(v[0], list) else v
+
+    for x, y, bw, bh in _many(boxes):
+        corners = [(x, y), (x + bw, y), (x + bw, y + bh), (x, y + bh), (x, y)]
+        for (x0, y0), (x1, y1) in zip(corners, corners[1:]):
+            n = max(1, int(max(abs(x1 - x0), abs(y1 - y0)) // 8))
+            for k in range(0, n, 2):  # dashes
+                a, b = k / n, min(1.0, (k + 1) / n)
+                d.line([(x0 + (x1 - x0) * a, y0 + (y1 - y0) * a),
+                        (x0 + (x1 - x0) * b, y0 + (y1 - y0) * b)], fill=(255, 255, 255), width=lw)
+    r = max(5, lw * 3)
+    for p in _many(points):
+        x, y = p[0], p[1]
+        label = int(p[2]) if len(p) > 2 else 1
+        if label == 1:
+            d.ellipse([x - r, y - r, x + r, y + r], fill=(0, 220, 0), outline=(255, 255, 255), width=2)
+        else:
+            d.line([(x - r, y - r), (x + r, y + r)], fill=(255, 0, 0), width=lw + 2)
+            d.line([(x - r, y + r), (x + r, y - r)], fill=(255, 0, 0), width=lw + 2)
+    return img
 
 
 def _mask_labels(result: Result) -> list:
@@ -663,7 +709,7 @@ def table(rows: list[list], headers: list[str]) -> None:
 
         if get_ipython() is not None:
             display(pd.DataFrame([list(r) for r in rows], columns=list(headers))
-                    .style.hide(axis="index"))
+                    .style.format(_cell).hide(axis="index"))
             return
     except Exception:
         pass

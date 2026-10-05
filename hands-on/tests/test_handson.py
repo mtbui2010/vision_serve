@@ -102,7 +102,9 @@ def test_ensure_model_installed_does_not_pull(monkeypatch, capsys):
     calls = []
     monkeypatch.setattr(handson, "run_cli", lambda *a, **k: calls.append(a) or "")
     with _FakeServer([_model("rf-detr", "available")]) as srv:
-        assert handson.ensure_model(handson.Client(srv.url), "rf-detr") is True
+        client = handson.Client(srv.url)
+        assert handson.ensure_model(client, "rf-detr") is None
+        assert handson.has_model(client, "rf-detr") is True
     assert calls == []
     assert "installed" in capsys.readouterr().out
 
@@ -118,7 +120,10 @@ def test_ensure_model_pulls_missing(monkeypatch):
 
         monkeypatch.setattr(handson, "run_cli", fake_cli)
         monkeypatch.delenv("HANDSON_NO_PULL", raising=False)
-        assert handson.ensure_model(handson.Client(srv.url), "midas") is True
+        client = handson.Client(srv.url)
+        assert handson.has_model(client, "midas") is False
+        handson.ensure_model(client, "midas")
+        assert handson.has_model(client, "midas") is True
     assert calls == [("pull", "midas")]
 
 
@@ -127,7 +132,9 @@ def test_ensure_model_unknown_model_pulls(monkeypatch):
     monkeypatch.setattr(handson, "run_cli", lambda *a, **k: calls.append(a) or "")
     monkeypatch.delenv("HANDSON_NO_PULL", raising=False)
     with _FakeServer([]) as srv:
-        assert handson.ensure_model(handson.Client(srv.url), "scrfd") is False  # still missing
+        client = handson.Client(srv.url)
+        handson.ensure_model(client, "scrfd")
+        assert handson.has_model(client, "scrfd") is False  # still missing
     assert calls == [("pull", "scrfd")]
 
 
@@ -136,7 +143,7 @@ def test_ensure_model_no_pull(monkeypatch, capsys):
     monkeypatch.setattr(handson, "run_cli", lambda *a, **k: calls.append(a) or "")
     monkeypatch.setenv("HANDSON_NO_PULL", "1")
     with _FakeServer([_model("midas", "not_downloaded")]) as srv:
-        assert handson.ensure_model(handson.Client(srv.url), "midas") is False
+        handson.ensure_model(handson.Client(srv.url), "midas")
     assert calls == []
     assert "NOT downloaded" in capsys.readouterr().out
 
@@ -283,3 +290,15 @@ def test_show_html_report(tmp_path):
     p = tmp_path / "r.html"
     p.write_text("<h1>Report</h1>")
     handson.show_html_report(p, height=300)
+
+
+def test_mark_draws_prompts():
+    import numpy as np
+
+    img = np.zeros((48, 64, 3), np.uint8)
+    out = np.asarray(handson.mark(img, boxes=[4, 4, 30, 20], points=[[40, 30], [10, 40, 0]]))
+    assert out[30, 40, 1] > 150  # green dot (label 1)
+    assert out[40, 10, 0] > 150  # red cross (label 0)
+    assert out.shape == (48, 64, 3)
+    one = np.asarray(handson.mark(img, points=[40, 30]))  # a single point is fine too
+    assert one[30, 40, 1] > 150
