@@ -34,6 +34,12 @@ Usage:
                                     inputs/outputs, preprocessing, runtime; also takes a .onnx file or a folder
   visionserve import <file.onnx>    make an existing ONNX file servable: write its manifest + install it
                                     (--name --task --license required; see: visionserve import --help)
+  visionserve bench <model>         latency, throughput, memory and EP of a model on THIS machine
+                                    (see: visionserve bench --help)
+  visionserve sensitivity <model>   which layers of a model lose accuracy at reduced precision
+  visionserve optimize <model>      build FP16 / INT8 / mixed variants for a target (jetson-orin,
+                                    jetson-thor, cpu, cuda), measure them, recommend one
+                                    (sensitivity and optimize run the converter: Docker or --python)
   visionserve version               print the version
 
 Common flags:
@@ -85,6 +91,12 @@ func Execute(args []string) error {
 		return runInspect(args[2:])
 	case "import":
 		return runImport(args[2:])
+	case "bench":
+		return runBench(args[2:])
+	case "sensitivity":
+		return runSensitivity(args[2:])
+	case "optimize":
+		return runOptimize(args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("visionserve %s\n", Version)
 		for _, line := range epStatus() {
