@@ -48,3 +48,6 @@ blog/*
 
 # Agent git worktrees (Claude Code)
 .claude/worktrees/
+
+# hands-on notebooks write scratch output here
+hands-on/work-*/
