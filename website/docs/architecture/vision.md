@@ -96,7 +96,7 @@ recipe exactly (rounding included).
 | Mode | What it does | Tensor size | Default filter | Used by |
 |---|---|---|---|---|
 | `squash` | Stretch to exactly width x height; the aspect ratio is not kept. | fixed | bilinear | RF-DETR, RT-DETR, MiDaS, EfficientNet, SAM2 |
-| `letterbox` | Shrink to fit inside width x height keeping the aspect ratio, center it, fill the borders with a gray level (default black). | fixed | bilinear | `grasp-rfdetr`'s detector stage (not verified, BUGS_TO_FIX.md #1); otherwise a manifest option |
+| `letterbox` | Shrink to fit inside width x height keeping the aspect ratio, center it, fill the borders with a gray level (default black). | fixed | bilinear | a manifest option; no shipped model letterboxes (RF-DETR is trained squashed, BUGS_TO_FIX.md #1) |
 | `center_crop` | Resize the short side to the target, cut the centered window (HuggingFace CLIP processor). | fixed | bicubic | CLIP |
 | `keep_aspect` | HuggingFace DPT "keep aspect ratio" rule, sides rounded to `multiple_of`; no crop, no pad. | varies per image | bicubic | Depth Anything V2 |
 | `long_side` | Scale so the long side reaches the target; no pad. | varies per image | bilinear | MobileSAM (its graph pads) |

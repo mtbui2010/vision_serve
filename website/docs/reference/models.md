@@ -144,6 +144,13 @@ make pull MODEL=rf-detr-nano        # ~103 MB, 384×384 input, 57 ms GPU (srv-on
     (`rf-detr-nano-fp16`, …) copied its preprocessing: set `input.letterbox: false` in theirs too.
     Restart the server afterwards (it reads a manifest once).
 
+!!! note "Pulled `grasp-rfdetr` before 5 October 2026? Pull it again"
+    Its detector stage letterboxed the photo, while `rf-detr` serves the same RF-DETR weights
+    squashed. On 200 COCO val2017 photos its detections scored mAP 45.50 letterboxed against
+    47.77 squashed (the same boxes as `rf-detr`), and 87.6% of its grasp centres land on a
+    ground-truth mask of their class instead of 86.1%. `visionserve pull grasp-rfdetr` rewrites
+    an unedited generated manifest as above; in one you edited, set `input.letterbox: false`.
+
 ### Key takeaways
 
 - **Fastest models (GPU):** CLIP (33 ms), MobileNetV3 (38 ms), EfficientNet-B0 (40 ms) — lightweight tasks.

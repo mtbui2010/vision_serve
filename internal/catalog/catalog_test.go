@@ -184,36 +184,40 @@ func TestPullRegeneratesOnlyGeneratedManifests(t *testing.T) {
 	}
 }
 
-// rf-detr-nano is served squashed, like every RF-DETR (BUGS_TO_FIX.md #1: letterbox cost 3.16 mAP
-// against the official checkpoint). Installs made before the fix hold a generated manifest with
-// letterbox: true; each rendering an older release could have written must count as unedited
-// generated output, so a plain re-pull replaces it (Pull's isUneditedGenerated branch).
-func TestRFDETRNanoSquashesAndOldManifestsAreRegenerated(t *testing.T) {
-	e, ok := Lookup("rf-detr-nano")
-	if !ok {
-		t.Fatal("rf-detr-nano not in the catalog")
-	}
-	p := filepath.Join(t.TempDir(), "rf-detr-nano", "manifest.yaml")
-	if m := loadRendered(t, p, render(t, e)); m.Input.Letterbox {
-		t.Fatal("rf-detr-nano renders letterbox: true; RF-DETR is trained squashed")
-	}
-	old := e
-	old.Letterbox = true
-	oldHashed := render(t, old)
-	for name, content := range map[string]string{
-		"hashed header": oldHashed,
-		"legacy":        legacyRenderManifest(old),
-		"pre-hash":      generatedHeader + " rf-detr-nano`\n" + oldHashed[strings.IndexByte(oldHashed, '\n')+1:],
-	} {
-		if !strings.Contains(content, "letterbox: true") {
-			t.Fatalf("%s: precondition: the old rendering letterboxes:\n%s", name, content)
+// Every RF-DETR detector is served squashed, as RF-DETR is trained (BUGS_TO_FIX.md #1):
+// letterbox cost rf-detr-nano 3.16 mAP against the official checkpoint, and grasp-rfdetr's
+// detector stage 2.27 (45.50 vs 47.77, the same weights as rf-detr). Installs made before each
+// fix hold a generated manifest with letterbox: true; each rendering an older release could have
+// written must count as unedited generated output, so a plain re-pull replaces it (Pull's
+// isUneditedGenerated branch).
+func TestRFDETRDetectorsSquashAndOldManifestsAreRegenerated(t *testing.T) {
+	for _, name := range []string{"rf-detr-nano", "grasp-rfdetr"} {
+		e, ok := Lookup(name)
+		if !ok {
+			t.Fatalf("%s not in the catalog", name)
 		}
-		if !isUneditedGenerated(content) {
-			t.Errorf("%s: an old generated rf-detr-nano manifest is not recognised as generated; "+
-				"re-pull would keep letterbox: true", name)
+		p := filepath.Join(t.TempDir(), name, "manifest.yaml")
+		if m := loadRendered(t, p, render(t, e)); m.Input.Letterbox {
+			t.Fatalf("%s renders letterbox: true; RF-DETR is trained squashed", name)
 		}
-		if content == render(t, e) {
-			t.Errorf("%s: old and new renderings are identical", name)
+		old := e
+		old.Letterbox = true
+		oldHashed := render(t, old)
+		for kind, content := range map[string]string{
+			"hashed header": oldHashed,
+			"legacy":        legacyRenderManifest(old),
+			"pre-hash":      generatedHeader + " " + name + "`\n" + oldHashed[strings.IndexByte(oldHashed, '\n')+1:],
+		} {
+			if !strings.Contains(content, "letterbox: true") {
+				t.Fatalf("%s %s: precondition: the old rendering letterboxes:\n%s", name, kind, content)
+			}
+			if !isUneditedGenerated(content) {
+				t.Errorf("%s %s: an old generated manifest is not recognised as generated; "+
+					"re-pull would keep letterbox: true", name, kind)
+			}
+			if content == render(t, e) {
+				t.Errorf("%s %s: old and new renderings are identical", name, kind)
+			}
 		}
 	}
 }

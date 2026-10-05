@@ -940,10 +940,14 @@ var builtin = []Entry{
 			"encoder": "../mobile-sam/mobile_sam_encoder.onnx",
 			"decoder": "../mobile-sam/mobile_sam_decoder_single.onnx",
 		},
+		// Letterbox false = squash, as RF-DETR is trained and as the rf-detr entry serves the same
+		// weights (BUGS_TO_FIX.md #1): on 200 COCO val2017 photos this model's detections scored
+		// mAP 45.50 letterboxed, 47.77 squashed (= rf-detr), 2026-10-05. An unedited manifest from
+		// an older pull is regenerated on re-pull.
 		InputWidth:        560,
 		InputHeight:       560,
 		InputLayout:       "NCHW",
-		Letterbox:         true,
+		Letterbox:         false,
 		Normalize:         &Normalize{Mean: []float32{0.485, 0.456, 0.406}, Std: []float32{0.229, 0.224, 0.225}},
 		PostprocessType:   "detr",
 		BoxFormat:         "cxcywh",
