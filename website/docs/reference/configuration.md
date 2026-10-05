@@ -28,7 +28,7 @@ visionserve import  FILE.onnx --name N --task classification|detection|depth --l
                     [--layout NCHW|NHWC] [--force] [--dry-run] [--models DIR] [--json]
                     [--report r.html]          # write a manifest for an ONNX file + install it
 visionserve check   MODEL --images DIR [--labels FILE] [--reference SCRIPT.py | --checkpoint PATH]
-                    [--server URL] [--models DIR] [--report FILE.html] [--json]
+                    [--server URL] [--models DIR] [--gpu] [--report FILE.html] [--json]
                                                # does the served model behave like training? (Docker image)
 visionserve bench   MODEL [--images DIR | --size WxH] [--requests N] [--concurrency C] [--warmup N]
                     [--ep auto|cpu|cuda|tensorrt] [--server URL | --in-process] [--reload]

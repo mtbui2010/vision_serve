@@ -97,9 +97,6 @@ type tuneArgs struct {
 
 func parseTuneArgs(args []string) (tuneArgs, error) {
 	t := tuneArgs{python: os.Getenv("VISIONSERVE_CONVERT_PYTHON"), image: os.Getenv("VISIONSERVE_CONVERT_IMAGE")}
-	if t.image == "" {
-		t.image = defaultConvertImage
-	}
 	value := func(i *int, a string) (string, error) {
 		if _, v, ok := strings.Cut(a, "="); ok {
 			return v, nil
@@ -133,6 +130,12 @@ func parseTuneArgs(args []string) (tuneArgs, error) {
 	}
 	if len(t.pass) == 0 || strings.HasPrefix(t.pass[0], "-") {
 		return t, clireport.Usagef("the model name comes first, e.g. visionserve optimize rf-detr --target jetson-orin --images ./photos")
+	}
+	if t.image == "" { // no --image and no $VISIONSERVE_CONVERT_IMAGE: --gpu picks the CUDA image, as convert does
+		t.image = defaultConvertImage
+		if t.gpu {
+			t.image = defaultConvertGPUImage
+		}
 	}
 	return t, nil
 }
@@ -194,16 +197,11 @@ func runTuneTool(tool, usage string, args []string) error {
 
 // buildTuneDockerArgs mounts the registry (read-write: --install and --save write to it), input
 // paths read-only and output files' directories read-write, rewriting each path. --gpu adds
-// --gpus all.
-// TODO(merge): the converter's GPU image (defaultConvertGPUImage, being added to convert.go by
-// another stream) should become the default image with --gpu.
+// --gpus all (withGPU, as convert does); parseTuneArgs already picked the CUDA image for it.
 func buildTuneDockerArgs(tool string, t tuneArgs, modelsDir, cacheDir string, uid, gid int) ([]string, error) {
 	run := []string{"run", "--rm", "--network", "host"}
 	if uid >= 0 && gid >= 0 {
 		run = append(run, "--user", fmt.Sprintf("%d:%d", uid, gid))
-	}
-	if t.gpu {
-		run = append(run, "--gpus", "all")
 	}
 	run = append(run, "-e", "HOME=/tmp", "-e", "HF_HOME=/cache/hf",
 		"--mount", bindMount(modelsDir, "/root/.models", false),
@@ -264,7 +262,11 @@ func buildTuneDockerArgs(tool string, t tuneArgs, modelsDir, cacheDir string, ui
 		out = append(out, name, p)
 	}
 	out = append(out, "--models", "/root/.models")
-	return append(append(run, t.image), out...), nil
+	args := append(append(run, t.image), out...)
+	if t.gpu {
+		args = withGPU(args)
+	}
+	return args, nil
 }
 
 func absOr(p string) string {

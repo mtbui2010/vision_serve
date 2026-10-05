@@ -45,7 +45,8 @@ var checkInputFlags = map[string]bool{"--images": true, "--labels": true, "--ref
 
 type checkOpts struct {
 	model, image, models, server string
-	pass                         []string // forwarded to the converter image (without --image/--models/--server)
+	gpu                          bool     // --gpu: the CUDA converter image with the host's GPUs
+	pass                         []string // forwarded to the converter image (without --image/--models/--server/--gpu)
 }
 
 // parseCheckArgs splits the wrapper's own flags (--image, --models, --server) from the ones the
@@ -69,6 +70,8 @@ func parseCheckArgs(args []string) (checkOpts, error) {
 			o.models = val
 		case name == "--server":
 			o.server = val
+		case a == "--gpu":
+			o.gpu = true
 		case !strings.HasPrefix(a, "-"):
 			if o.model != "" {
 				return o, fmt.Errorf("unexpected argument %q (one model name only; is a flag before it misspelt?)", a)
@@ -83,6 +86,9 @@ func parseCheckArgs(args []string) (checkOpts, error) {
 	}
 	if o.model == "" {
 		return o, errors.New("missing <model>: the installed model to check (see `visionserve list`)")
+	}
+	if o.gpu && !hasFlag(o.pass, "--device") { // run the reference model (--checkpoint) on the GPU too
+		o.pass = append(o.pass, "--device", "cuda")
 	}
 	return o, nil
 }
@@ -109,9 +115,10 @@ func runCheck(args []string) error {
 	}
 	if image == "" {
 		image = defaultConvertImage
+		if o.gpu {
+			image = defaultConvertGPUImage // as `convert --gpu` picks it
+		}
 	}
-	// TODO(gpu): after the converter's --gpu image selection (withGPU) lands in convert.go, accept
-	// --gpu here too and pick the image through it; check runs its references on CPU until then.
 	dir, err := checkModelsDir(o.models)
 	if err != nil {
 		return err
@@ -127,6 +134,9 @@ func runCheck(args []string) error {
 	dockerArgs, err := buildCheckDockerArgs(o.pass, image, dir, cacheDir, url, os.Getuid(), os.Getgid())
 	if err != nil {
 		return setupError("check: %v", err)
+	}
+	if o.gpu {
+		dockerArgs = withGPU(dockerArgs)
 	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		return setupError("check needs Docker on this machine (it runs the converter image %s).\n"+
@@ -337,6 +347,8 @@ Flags:
   --json                print one JSON object {"verdict","reason","summary","details"}
   --max-images N        photos for B1/B2 (default 8)      --labels-max N  cap for C (default 200)
   --device D            device for --checkpoint (auto, cpu, cuda)
+  --gpu                 run on the GPU: the CUDA converter image (` + defaultConvertGPUImage + `)
+                        with the host's GPUs; implies --device cuda unless --device is given
   --image IMAGE         converter image (default $VISIONSERVE_CONVERT_IMAGE or ` + defaultConvertImage + `)
 
 Runs in the converter image (Docker), like convert. Exit status: 0 PASS or WARN, 1 FAIL, 2 usage or
@@ -347,3 +359,13 @@ Examples:
   visionserve check my-detector --images ./val/images --labels ./val/_annotations.coco.json \
       --checkpoint ./checkpoint_best_total.pth --report check.html
 `
+
+// hasFlag reports whether args already carries flag (as "--flag" or "--flag=value").
+func hasFlag(args []string, flag string) bool {
+	for _, a := range args {
+		if a == flag || strings.HasPrefix(a, flag+"=") {
+			return true
+		}
+	}
+	return false
+}

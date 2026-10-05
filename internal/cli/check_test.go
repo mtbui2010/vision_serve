@@ -166,3 +166,53 @@ func TestCheckModelsDirMustExist(t *testing.T) {
 		t.Fatalf("checkModelsDir(%s) = %s, %v", d, got, err)
 	}
 }
+
+// --gpu is a wrapper flag: not forwarded as such, it selects the CUDA image, adds --gpus all and
+// --device cuda (unless --device was given).
+func TestCheckGPUFlag(t *testing.T) {
+	o, err := parseCheckArgs([]string{"rf-detr", "--images", "/tmp/x", "--gpu"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !o.gpu || hasFlag(o.pass, "--gpu") || !hasFlag(o.pass, "--device") {
+		t.Fatalf("gpu=%v pass=%v: want gpu, --gpu not forwarded, --device cuda added", o.gpu, o.pass)
+	}
+	o, err = parseCheckArgs([]string{"rf-detr", "--gpu", "--device", "cpu"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, a := range o.pass {
+		if a == "--device" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("pass=%v: an explicit --device must not get a second one", o.pass)
+	}
+	args := withGPU([]string{"run", "--rm", defaultConvertGPUImage})
+	if len(args) < 3 || args[1] != "--gpus" || args[2] != "all" {
+		t.Fatalf("withGPU gave %v", args)
+	}
+}
+
+// sensitivity/optimize: --gpu picks the CUDA converter image unless --image or
+// $VISIONSERVE_CONVERT_IMAGE says otherwise, and the docker run gets --gpus all.
+func TestTuneGPUImage(t *testing.T) {
+	t.Setenv("VISIONSERVE_CONVERT_IMAGE", "")
+	ta, err := parseTuneArgs([]string{"rf-detr", "--gpu", "--images", "/tmp/x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ta.image != defaultConvertGPUImage {
+		t.Fatalf("image %q, want %q", ta.image, defaultConvertGPUImage)
+	}
+	ta, err = parseTuneArgs([]string{"rf-detr", "--images", "/tmp/x"})
+	if err != nil || ta.image != defaultConvertImage {
+		t.Fatalf("without --gpu: image %q err %v", ta.image, err)
+	}
+	t.Setenv("VISIONSERVE_CONVERT_IMAGE", "mine:1")
+	if ta, _ = parseTuneArgs([]string{"rf-detr", "--gpu"}); ta.image != "mine:1" {
+		t.Fatalf("env image overridden by --gpu: %q", ta.image)
+	}
+}
