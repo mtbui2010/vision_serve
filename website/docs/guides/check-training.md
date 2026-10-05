@@ -107,7 +107,11 @@ follow from it.
 
 `--report check.html` writes the same verdict as one page, with the two pictures side by side and
 the boxes of both models drawn on the photos where they disagree most. The exit status is `0` for
-PASS or WARN, `1` for FAIL and `2` when it cannot run (no server, model not installed).
+PASS or WARN, `1` for FAIL and `2` when it cannot run (no server, model not installed). A check you
+asked for by flag that could not run (an exception, out of GPU memory, a missing package) also
+exits `2`, with the verdict `ERROR` naming the check and its error: `--reference` or
+`--checkpoint` ask for the preprocessing and outputs checks, `--labels` for accuracy. The checks
+that did run are still printed, so a script never reads an incomplete check as passed.
 
 ## If it says WARN or FAIL
 
@@ -126,9 +130,11 @@ framework's pipeline).
 | the reference is mirrored left-right compared with the server | Your reference script still has a random flip on. Turn it off. |
 | small resize-filter or JPEG-decoder differences | Usually nothing to fix (a WARN, not a FAIL). |
 | outputs differ although the photo is prepared the same way | Check the label file order and the box format in the manifest; re-export if the file's `sha256` is not your export's. |
+| the served model loses mAP although B1 found no preprocessing difference | Follow the next steps it prints: with fewer than 200 labelled photos re-run with more first (a small difference is noise there); then check the class mapping (the label file in training order, with your dataset's names) and the confidence threshold; without `--checkpoint`, re-run with it to compare the outputs photo by photo. |
 | a near-zero score usually means the label names do not match the model's classes | Make the class names in the model's label file match your dataset's category names (case, spaces and `_` are ignored). |
 | the manifest and the model file disagree (size, layout or files) | Fix the manifest as the error says (run [`visionserve inspect`](see-a-model.md)), then restart the server. |
 | exit status 2: no server | Start one: `visionserve serve`, or pass `--server URL`. |
+| `ERROR`, exit status 2: a check you asked for could not run | Fix the error it names (out of GPU memory: `--device cpu` or a free GPU), then re-run. |
 
 After changing a manifest, restart `visionserve serve`: it reads a manifest once.
 

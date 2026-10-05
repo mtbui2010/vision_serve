@@ -202,7 +202,8 @@ def render_html(out: dict, figures: Optional[list] = None) -> str:
     """out: check.summarise()'s object. figures: [{"title", "caption", "panels": [(PIL image, label)]}]."""
     s, d = out["summary"], out["details"]
     verdict = out["verdict"]
-    cls = STATUS_CLASS.get(verdict, "skip")
+    # An ERROR verdict (a tier asked for could not run: exit 2) is red like FAIL; an ERROR row stays amber.
+    cls = "fail" if verdict == "ERROR" else STATUS_CLASS.get(verdict, "skip")
     created = d.get("created") or _dt.datetime.now(_dt.timezone.utc).replace(microsecond=0).isoformat()
     rows = []
     for r in s["checks"]:

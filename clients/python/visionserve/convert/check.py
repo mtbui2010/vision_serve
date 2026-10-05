@@ -17,12 +17,14 @@ INSTALLED, against a RUNNING server, in one command:
       `image,label` for classification): served vs reference when a reference model exists,
       the served number alone otherwise.
 
-Output (shared with the Go reports): the first line is `PASS|WARN|FAIL: <one sentence>`, then a
+Output (shared with the Go reports): the first line is `PASS|WARN|FAIL|ERROR: <one sentence>`, then a
 plain-language summary (what was checked, numbers in words, a likely cause and fix for every FAIL
 and WARN, from diagnose.py's fingerprints), next steps, and the converter's detailed table.
 --json prints one object {"verdict", "reason", "summary", "details"} and nothing else on stdout;
 --report FILE.html writes a self-contained page (htmlreport.py). Progress goes to stderr.
-Exit code: 0 PASS or WARN, 1 FAIL, 2 usage or setup error (no server, model not installed, ...).
+Exit code: 0 PASS or WARN, 1 FAIL, 2 usage or setup error (no server, model not installed, ...) or a
+tier asked for by flag that could not run (--reference/--checkpoint: B1 and B2, --labels: C; e.g. CUDA
+out of memory): the verdict is then ERROR, and the tiers that did run are still printed.
 """
 from __future__ import annotations
 
@@ -965,7 +967,8 @@ def _b1_row(t: TierResult, run: CheckRun) -> dict:
 
 def _b2_row(t: TierResult, run: CheckRun) -> dict:
     m = t.metrics
-    row = {"tier": "B2", "name": TIER_NAMES["B2"], "status": t.status, "cause": None, "fix": None}
+    row = {"tier": "B2", "name": TIER_NAMES["B2"], "status": t.status, "cause": None, "fix": None,
+           "depends_on_b1": False}
     if t.status == SKIP:
         row["finding"] = f"Not compared: {t.summary.rstrip('.')}."
         return row
@@ -987,6 +990,7 @@ def _b2_row(t: TierResult, run: CheckRun) -> dict:
     if t.status in (WARN, FAIL):
         b1 = run.report.tier("B1")
         if b1 is not None and b1.status in (WARN, FAIL):
+            row["depends_on_b1"] = True
             row["cause"] = "the preprocessing difference found in B1"
             row["fix"] = "fix B1 first, then re-run"
         elif m.get("matched_frac") is None and "matched_frac" in m:
@@ -1001,7 +1005,8 @@ def _b2_row(t: TierResult, run: CheckRun) -> dict:
 
 def _c_row(t: TierResult, run: CheckRun) -> dict:
     m = t.metrics
-    row = {"tier": "C", "name": TIER_NAMES["C"], "status": t.status, "cause": None, "fix": None}
+    row = {"tier": "C", "name": TIER_NAMES["C"], "status": t.status, "cause": None, "fix": None,
+           "depends_on_b1": False, "steps": []}
     if t.status == SKIP:
         row["finding"] = ("Not measured: pass --labels (a COCO json for detection; a folder per class or a CSV "
                           "`image,label` for classification)." if not run.args.labels else f"Not measured: {t.summary}.")
@@ -1041,10 +1046,69 @@ def _c_row(t: TierResult, run: CheckRun) -> dict:
         row["fix"] = "check that the model's labels file uses the dataset's category names"
     elif t.status in (WARN, FAIL):
         b1 = run.report.tier("B1")
-        row["cause"] = ("the preprocessing difference found in B1" if b1 is not None and b1.status in (WARN, FAIL)
-                        else "the served model loses accuracy although B1 found no preprocessing difference")
-        row["fix"] = "fix B1 first, then re-run" if "B1" in row["cause"] else "compare the outputs in B2 with --report"
+        if b1 is not None and b1.status in (WARN, FAIL):
+            row["depends_on_b1"] = True
+            row["cause"] = "the preprocessing difference found in B1"
+            row["fix"] = "fix B1 first, then re-run"
+        else:
+            row["cause"], row["fix"], row["steps"] = _c_cause_without_b1(m, b1, run)
     return row
+
+
+# Below this many labelled photos a 1-point accuracy difference is within noise (the --labels-max default).
+_C_MIN_IMAGES = 200
+
+
+def _c_cause_without_b1(m: dict, b1: Optional[TierResult], run: CheckRun) -> Tuple[str, str, List[str]]:
+    """(cause, fix, further steps) for a C drop that B1 does not explain: B1 passed, or did not run."""
+    det = m.get("kind") == "detection"
+    n = int(m.get("images") or 0)
+    metric = "mAP" if det else "top-1 accuracy"
+    if b1 is not None and b1.status == PASS:
+        why = "although B1 found no preprocessing difference"
+    else:
+        why = "and the preprocessing was not compared (B1 did not run)"
+    b2 = run.report.tier("B2")
+    b2_differs = b2 is not None and b2.status in (WARN, FAIL)
+    b2_matches = b2 is not None and b2.status == PASS
+    few = n < _C_MIN_IMAGES
+    # The leading suspect becomes the fix; the others become further steps.
+    lead = "b2" if b2_differs else ("few" if few else "mapping")
+    steps: List[str] = []
+    if lead == "b2":
+        cause = (f"the served model loses {metric} {why}, and its outputs differ from the original model's (B2): the "
+                 "label file order, the box format or an ONNX that is not this checkpoint's export")
+        fix = "follow B2's fix first (compare the boxes in --report), then re-run"
+    elif lead == "few":
+        cause = (f"the served model loses {metric} {why}; on {n} labelled photos a difference of this size can be "
+                 "noise")
+        fix = (f"re-run with at least {_C_MIN_IMAGES} labelled photos (--labels-max {_C_MIN_IMAGES} or more, and a "
+               "--labels file that covers them) before changing anything")
+    else:
+        where = " while the outputs matched on the B photos (B2)" if b2_matches else ""
+        cause = (f"the served model loses {metric} {why}{where}: the class mapping between the model's labels and "
+                 f"your labels{', or the confidence threshold' if det else ''} is the usual suspect")
+        fix = ("check that the model's labels file lists the classes in training order, with your dataset's category "
+               "names")
+    if few and lead != "few":
+        steps.append(f"Re-run with at least {_C_MIN_IMAGES} labelled photos (--labels-max {_C_MIN_IMAGES} or more; this "
+                     f"run scored {n}): fewer make a small {metric} difference noisy.")
+    if not run.args.checkpoint and not b2_differs:
+        steps.append("Compare with the original framework's own pipeline photo by photo: re-run with --checkpoint PATH "
+                     "(the checkpoint the model was exported from), which B2 compares output by output.")
+    if lead != "mapping":
+        if det:
+            odd, what = m.get("unmapped_labels") or [], "model classes with no dataset category"
+        else:
+            odd, what = m.get("skipped_folders") or [], "labels with no model class"
+        steps.append("Check the class mapping: the model's labels file must list the classes in training order, with "
+                     "your dataset's category names" + (f" ({what} here: {', '.join(map(str, odd[:6]))})"
+                                                        if odd else "") + ".")
+    if det:
+        steps.append(f"Check the thresholds: both sides are scored at postprocess.conf_threshold "
+                     f"{m.get('conf_threshold')}; if training evaluated at another threshold, compare at that one "
+                     "(and use the same value in the manifest).")
+    return cause, fix, steps
 
 
 def _load_row(t: TierResult, run: CheckRun) -> dict:
@@ -1102,6 +1166,14 @@ def summarise(run: CheckRun) -> dict:
             if rep.tier("B2") is not None and rep.tier("B2").status == SKIP:
                 reason += "; outputs were not compared (no reference model)"
             reason += "."
+    broken = unrun_requested(run)
+    if broken:
+        # A tier the user asked for by flag did not run: whatever the others found, the answer to
+        # the question asked is unknown, so this is an error (exit 2), never a WARN that scripts read as passed.
+        verdict = ERROR
+        tier, flag = broken[0]
+        reason = (f"the {TIER_NAMES[tier]} check you asked for with {flag} could not run on {name}: "
+                  f"{rep.tier(tier).summary.rstrip('.')}. The checks that ran are below; the result is incomplete.")
     summary = {
         "model": name, "task": run.inst.bundle.task, "architecture": run.inst.bundle.architecture,
         "server": run.url, "manifest": str(run.inst.manifest_path),
@@ -1118,12 +1190,38 @@ def summarise(run: CheckRun) -> dict:
     return {"verdict": verdict, "reason": reason, "summary": summary, "details": details}
 
 
+def requested_tiers(args) -> Dict[str, str]:
+    """{tier: the flag that asked for it}. --reference / --checkpoint name the reference that B1
+    compares preprocessing with and B2 compares outputs with; --labels asks for C."""
+    out = {}
+    ref = "--reference" if getattr(args, "reference", None) else ("--checkpoint" if getattr(args, "checkpoint", None)
+                                                                  else None)
+    if ref:
+        out["B1"] = out["B2"] = ref
+    if getattr(args, "labels", None):
+        out["C"] = "--labels"
+    return out
+
+
+def unrun_requested(run: CheckRun) -> List[Tuple[str, str]]:
+    """[(tier, flag)] for each tier the user asked for by flag whose check raised (status ERROR:
+    an exception, CUDA out of memory, a missing package)."""
+    asked = requested_tiers(run.args)
+    return [(t.tier, asked[t.tier]) for t in run.report.tiers if t.status == ERROR and t.tier in asked]
+
+
 def next_steps(verdict: str, rows: List[dict], run: CheckRun) -> List[str]:
     out = []
     model = run.inst.bundle.name
+    for tier, _ in unrun_requested(run):
+        out.append(f"Make the {TIER_NAMES[tier]} check run, then re-run: its error is above (the log on stderr has the "
+                   "traceback). Out of GPU memory: --device cpu or a free GPU; a missing Python package: run it "
+                   "through `visionserve check` (the converter image has them).")
     for r in rows:
-        if r["status"] in (FAIL, WARN) and r.get("fix") and r["fix"] not in ("fix B1 first, then re-run",):
+        if r["status"] in (FAIL, WARN) and r.get("fix") and not r.get("depends_on_b1"):
             out.append(r["fix"][0].upper() + r["fix"][1:] + ".")
+        if r["status"] in (FAIL, WARN):
+            out += [s for s in r.get("steps") or [] if s not in out]
     if any(r["status"] == FAIL for r in rows) and any(".yaml" in s and "is already set in" not in s for s in out):
         out.append("Restart `visionserve serve` (it reads a manifest once), then re-run this check.")
     st = {r["tier"]: r["status"] for r in rows}
@@ -1225,6 +1323,9 @@ def main(argv=None) -> int:
     else:
         print(render_text(out))
     sys.stdout.flush()
+    if out["verdict"] == ERROR:
+        log(f"error: {out['reason']}")
+        return EXIT_SETUP
     return EXIT_FAIL if out["verdict"] == FAIL else EXIT_OK
 
 

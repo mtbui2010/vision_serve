@@ -175,6 +175,77 @@ def test_b2_and_c_rows_point_back_to_b1(tmp_path):
     assert rows["B2"]["cause"] == rows["C"]["cause"] == "the preprocessing difference found in B1"
 
 
+def _c_fail(images=200):
+    return TierResult("C", "accuracy", FAIL, "x", model="det", metrics={
+        "kind": "detection", "images": images, "map_served": 40.9, "map_ref": 44.1, "delta_map": -3.2,
+        "conf_threshold": 0.5, "unmapped_labels": ["N/A"]})
+
+
+def test_c_fail_with_b1_fail_points_back_to_b1_structurally(tmp_path):
+    out = ck.summarise(_run(tmp_path, {"letterbox_server": 5}, c=_c_fail()))
+    c = {r["tier"]: r for r in out["summary"]["checks"]}["C"]
+    assert c["depends_on_b1"] is True and c["fix"] == "fix B1 first, then re-run"
+    assert not any("fix B1 first" in s.lower() for s in out["summary"]["next_steps"])  # B1's own fix is listed
+
+
+def test_c_fail_with_b1_pass_gives_a_useful_fix_and_next_steps(tmp_path):
+    """The cause text says "... although B1 found no preprocessing difference": the fix must not be
+    chosen by spotting "B1" in that sentence (it once printed "fix B1 first" and no next steps)."""
+    b2 = TierResult("B2", "outputs", PASS, "x", model="det", metrics={
+        "matched": 26, "unmatched_ref": 0, "unmatched_srv": 0, "matched_frac": 1.0, "mean_dconf": 0.001,
+        "mean_box_px": 0.1})
+    run = _run(tmp_path, {}, status=PASS, b2=b2, c=_c_fail())
+    out = ck.summarise(run)
+    c = {r["tier"]: r for r in out["summary"]["checks"]}["C"]
+    assert out["verdict"] == FAIL and c["depends_on_b1"] is False
+    assert "although B1 found no preprocessing difference" in c["cause"]
+    assert "B1" not in c["fix"] and "labels file" in c["fix"]
+    steps = out["summary"]["next_steps"]
+    assert steps and not any("fix B1 first" in s.lower() for s in steps)
+    joined = " ".join(steps)
+    assert "labels file" in joined and "conf_threshold 0.5" in joined and "--checkpoint" in joined
+    assert "Re-run with at least 200" not in joined  # 200 photos are enough
+    # Few photos: the first suspect is noise.
+    few = ck.summarise(_run(tmp_path / "few", {}, status=PASS, b2=b2, c=_c_fail(images=40)))
+    fc = {r["tier"]: r for r in few["summary"]["checks"]}["C"]
+    assert fc["fix"].startswith("re-run with at least 200 labelled photos") and "on 40 labelled photos" in fc["cause"]
+    assert any("Check the class mapping" in s and "N/A" in s for s in few["summary"]["next_steps"])
+    # B2 differs: it leads.
+    b2w = TierResult("B2", "outputs", WARN, "x", model="det", metrics={
+        "matched": 20, "unmatched_ref": 6, "unmatched_srv": 2, "matched_frac": 0.77, "mean_dconf": 0.04,
+        "mean_box_px": 1.0})
+    d = ck.summarise(_run(tmp_path / "b2", {}, status=PASS, b2=b2w, c=_c_fail()))
+    dc = {r["tier"]: r for r in d["summary"]["checks"]}["C"]
+    assert "B2" in dc["fix"] and dc["depends_on_b1"] is False
+    # B1 did not run: the cause does not claim it found nothing.
+    run = _run(tmp_path / "skip", {}, status=PASS, b2=b2, c=_c_fail())
+    run.report.tiers[0] = TierResult("B1", "preprocessing", SKIP, "fixed by the export", model="det")
+    sc = {r["tier"]: r for r in ck.summarise(run)["summary"]["checks"]}["C"]
+    assert "not compared (B1 did not run)" in sc["cause"] and "found no" not in sc["cause"]
+
+
+def test_a_requested_tier_that_could_not_run_is_an_error(tmp_path):
+    """--checkpoint asked for B2 and --labels for C: a crash there (CUDA OOM) must not read as
+    passed (WARN, exit 0). The verdict is ERROR (exit 2) and the tiers that ran are still shown."""
+    from visionserve.convert.report import ERROR
+    b2 = TierResult("B2", "outputs", ERROR, "OutOfMemoryError: CUDA out of memory", model="det")
+    run = _run(tmp_path, {}, status=PASS, b2=b2)
+    run.args.checkpoint = "ckpt.pth"
+    out = ck.summarise(run)
+    assert out["verdict"] == ERROR
+    assert "with --checkpoint could not run" in out["reason"] and "CUDA out of memory" in out["reason"]
+    assert [r["status"] for r in out["summary"]["checks"]] == [PASS, ERROR, SKIP]
+    assert any("--device cpu" in s for s in out["summary"]["next_steps"])
+    assert ck.render_text(out).startswith("ERROR: the Outputs vs original (B2) check")
+    assert 'class="banner fail"' in hr.render_html(out, [])
+    # Not asked for by flag (B2 without a reference model cannot even run; here B1 from the
+    # architecture's recipe raised): still a warning, as before.
+    run = _run(tmp_path / "w", {}, status=PASS)
+    run.report.tiers[0] = TierResult("B1", "preprocessing", ERROR, "ValueError: x", model="det")
+    assert ck.summarise(run)["verdict"] == WARN
+    assert ck.requested_tiers(SimpleNamespace(reference=None, checkpoint=None, labels="l.json")) == {"C": "--labels"}
+
+
 def test_served_only_accuracy_is_info_and_does_not_fail(tmp_path):
     c = TierResult("C", "served accuracy", INFO, "x", model="det", metrics={
         "kind": "detection", "served_only": True, "images": 200, "map_served": 47.6, "map50_served": 59.1,
@@ -387,6 +458,23 @@ def test_check_end_to_end_wrong_letterbox_fails_with_cause(served, tmp_path, cap
     assert "`input.letterbox: false`" in text
     page = report.read_text()
     assert 'class="banner fail"' in page and "data:image/jpeg;base64," in page
+
+
+def test_check_end_to_end_labels_tier_that_crashes_exits_2(served, monkeypatch, capsys):
+    reg, photos = served("efficientnet", "false")
+    (photos / "labels.csv").write_text("image,label\np0.png,cat\np1.png,dog\n")
+
+    def oom(*a, **k):
+        raise RuntimeError("CUDA out of memory")
+    monkeypatch.setattr(ck, "served_accuracy", oom)
+    code = ck.main(["det", "--images", str(photos), "--models", str(reg), "--server", "http://fake", "--json",
+                    "--labels", str(photos / "labels.csv")])
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert code == 2 and out["verdict"] == "ERROR"
+    assert "--labels" in out["reason"] and "CUDA out of memory" in out["reason"]
+    assert [c["status"] for c in out["summary"]["checks"]] == [PASS, SKIP, "ERROR"]  # B1 still reported
+    assert "error: " in cap.err
 
 
 def test_check_end_to_end_manifest_reference_passes(served, capsys):
