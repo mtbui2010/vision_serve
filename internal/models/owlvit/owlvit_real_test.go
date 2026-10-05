@@ -64,7 +64,7 @@ func TestRealWeights(t *testing.T) {
 	}
 	defer sess.Close()
 
-	m, err := New(models.Config{Width: 960, Height: 960, ConfThresh: 0.1, MaxDet: 10, InstancePatchSize: 16})
+	m, err := New(models.Config{Width: 960, Height: 960, MaxDet: 10, InstancePatchSize: 16}) // as shipped: threshold 0.9
 	if err != nil {
 		t.Fatal(err)
 	}

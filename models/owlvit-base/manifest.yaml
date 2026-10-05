@@ -17,12 +17,14 @@ input:
     std:  [0.26862954, 0.26130258, 0.27577711]
 
 postprocess:
-  conf_threshold: 0.1    # minimum sigmoid(logit) to emit a detection
   max_detections: 10
+  # No conf_threshold: every request is template-prompted, and owlvit refuses one (the
+  # template threshold is instance.sim_threshold below).
 
 instance:
   patch_size: 16       # must match the exported variant
-  sim_threshold: 0.1     # confidence threshold (same semantics as conf_threshold)
+  sim_threshold: 0.9     # min sigmoid score of a template match (request box_threshold overrides).
+                         # HF's image-guided example uses 0.9; 0.1 is OWLv2's text-query value
   max_templates: 5       # max template images used per call (0 = no limit)
 
 runtime:

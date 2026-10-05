@@ -222,11 +222,12 @@ await fetch(client.host + "/api/templates/dog", { method: "DELETE" });
 
 ```text
 { count: 1, name: 'dog' }
-instance_detection 10 detections
+instance_detection 4 detections
 ```
 
-(`dog-crop.png` is the crop `(216, 227)`–`(274, 320)` of `dogs.jpg`, as on the
-[Python page](python.md#template_name).)
+(`dog-crop.png` is the crop `(215, 230)`–`(272, 319)` of `dogs.jpg`, as on the
+[Python page](python.md#template_name). The four boxes are the four dogs: by default a template
+match must score above 0.9; pass `boxThreshold` to change that.)
 
 ### `base64Arrays`
 

@@ -72,7 +72,7 @@ func validTaskNames() string {
 type InstanceConfig struct {
 	// MaxTemplates is the max number of template images to use per inference (0 = no limit).
 	MaxTemplates int `yaml:"max_templates"`
-	// SimThreshold is the minimum similarity score to report a detection (0 = use model default).
+	// SimThreshold is template requests' default min score, in [0, 1) (0 = model default; see validate).
 	SimThreshold float64 `yaml:"sim_threshold"`
 	// PatchSize is the ViT patch size (e.g. 16 for owlv2-base-patch16, 32 for base-patch32).
 	PatchSize int `yaml:"patch_size"`
@@ -344,6 +344,9 @@ func (m *Manifest) validate() error {
 	if err := m.validateThreads(); err != nil {
 		return err
 	}
+	if err := m.Instance.validate(); err != nil {
+		return err
+	}
 	if m.Explain != nil {
 		if m.Explain.Type != "attention" && m.Explain.Type != "score_cam" {
 			return fmt.Errorf("explain.type %q is invalid (attention/score_cam)", m.Explain.Type)
@@ -505,4 +508,24 @@ func (m *Manifest) ArchOrName() string {
 		return m.Architecture
 	}
 	return m.Name
+}
+
+// validate checks the instance block's ranges (nil = no block, nothing to check). SimThreshold is
+// the default score threshold of template requests (owlvit: 0.9 when 0); a request's
+// box_threshold overrides it, and postprocess.conf_threshold does not apply to them. A threshold
+// of 1 or more keeps nothing, and a negative count or size is a typo.
+func (c *InstanceConfig) validate() error {
+	if c == nil {
+		return nil
+	}
+	if !(c.SimThreshold >= 0 && c.SimThreshold < 1) { // also rejects NaN
+		return fmt.Errorf("instance.sim_threshold must be in [0, 1) (0 = the model's default), got %v", c.SimThreshold)
+	}
+	if c.MaxTemplates < 0 {
+		return fmt.Errorf("instance.max_templates must be >= 0 (0 = no limit), got %d", c.MaxTemplates)
+	}
+	if c.PatchSize < 0 {
+		return fmt.Errorf("instance.patch_size must be >= 0 (0 = the model's default), got %d", c.PatchSize)
+	}
+	return nil
 }

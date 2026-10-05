@@ -206,7 +206,7 @@ bugs a type checker in Python would only catch with `Literal[...]` or an `Enum`.
 A named type can even control how it is decoded. `wholeNumber` refuses `1.5` where an
 integer is expected, because yaml.v3 would otherwise truncate it silently:
 
-```go title="internal/registry/manifest.go (lines 423-437)"
+```go title="internal/registry/manifest.go (lines 426-440)"
 // wholeNumber is an int that refuses a YAML float: yaml.v3 truncates `1.5` into an int field
 // silently, and a thread count of 1 written as 1.5 should be an error, not a guess.
 type wholeNumber int
@@ -224,7 +224,7 @@ func (w *wholeNumber) UnmarshalYAML(n *yaml.Node) error {
 }
 ```
 
-[manifest.go#L423-L437 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L423-L437)
+[manifest.go#L426-L440 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L426-L440)
 
 This is the Go equivalent of a pydantic validator. yaml.v3 sees the method and calls it.
 
