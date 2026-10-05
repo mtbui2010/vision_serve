@@ -440,3 +440,10 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   `check` từng báo FAIL sai cho `scrfd` vì phía Python không áp luật legacy theo kiến trúc
   (`top_left_pad`, mean/std theo đơn vị 0..255) như Go: đã sửa (`spec.resolve_arch`, corpus chung
   `arch_resolve_sync.json` chạy ở cả hai phía), `check scrfd` đạt 0.18 mức xám.
+
+- **Số held-out phụ thuộc phiên bản cuDNN (2026-10-06).** `scripts/gpu-env.sh` (aaecfcb) nay chọn
+  ORT 1.26 của env `vseval` kèm cuDNN 9.23, thay vì cuDNN 9.10 của env `label` như trước. Cùng một
+  binary cho: cuDNN 9.10 → 89.75/49.54, 89.75/62.47, 89.75/48.11, 57.41/61.07 (đúng số trong
+  manifest); cuDNN 9.23 → 89.90/49.53, 89.90/62.39, 89.90/48.68, 57.47/61.11. Code không đổi
+  (đã chạy binary cũ và mới trên cả hai bộ thư viện). Số trong manifest được đo với cuDNN 9.10;
+  muốn tái lập đúng thì đưa `nvidia/cudnn/lib` của env `label` lên `LD_LIBRARY_PATH`.
