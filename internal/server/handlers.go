@@ -41,12 +41,12 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		if s.mgr.IsLoaded(e.Manifest.Name) {
 			state = "loaded"
 		}
-		infos = append(infos, api.ModelInfo{
+		infos = append(infos, withUsefulSide(api.ModelInfo{
 			Name:    e.Manifest.Name,
 			Task:    api.Task(e.Manifest.Task),
 			License: e.Manifest.License,
 			State:   state,
-		})
+		}, e.Manifest))
 	}
 	writeJSON(w, http.StatusOK, infos)
 }

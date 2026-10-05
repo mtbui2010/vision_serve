@@ -314,7 +314,7 @@ var licenseAllowlist = map[string]string{
 	m.License = canonLicense
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L287-L291)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L292-L296)
 
 The rest of `validate()` rejects:
 
