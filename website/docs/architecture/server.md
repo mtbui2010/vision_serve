@@ -167,7 +167,7 @@ func (s *Server) predict(w http.ResponseWriter, r *http.Request) (api.Result, st
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L143-L166)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L145-L168)
 
 The bound itself (by default `max(32, 2 × the model's inference slots)`, tunable with
 `VISIONSERVE_MAX_QUEUE`) lives in the lifecycle package; see

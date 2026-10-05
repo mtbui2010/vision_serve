@@ -519,7 +519,7 @@ By convention `ctx` is the first parameter of every function that can wait on be
 request, which is why `PredictPrompt`, `Load`, `Run` and `RunNamed` all take one.
 
 The server's admit helper does the same check around admission
-([handlers.go#L93-L110](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L93-L110)).
+([handlers.go#L95-L112](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L95-L112)).
 On shutdown, `serve` waits for SIGINT/SIGTERM on a channel and gives in-flight requests
 10 seconds with `context.WithTimeout`.
 

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Entry is a model present in the registry (a validated manifest).
@@ -22,6 +23,9 @@ type Registry struct {
 	root   string
 	mu     sync.RWMutex
 	byName map[string]*Entry
+
+	refreshMu   sync.Mutex
+	lastRefresh time.Time // last Refresh that rescanned (see Refresh)
 }
 
 // New creates a registry pointing at the root directory that holds the models.
@@ -78,6 +82,24 @@ func (r *Registry) Scan() ([]error, error) {
 }
 
 // Get returns the Entry for a model name.
+// Refresh rescans the directory when the last Refresh rescan is at least minInterval old, and
+// reports whether it did. A server lists models with it, so a model installed while the server
+// runs (pull, convert, import, a copied folder) shows up in the list at once — a client that
+// checks the list before its first request no longer misses it. The interval bounds the cost
+// (a ReadDir and one YAML parse per model) when a client polls the list.
+func (r *Registry) Refresh(minInterval time.Duration) bool {
+	r.refreshMu.Lock()
+	now := time.Now()
+	if !r.lastRefresh.IsZero() && now.Sub(r.lastRefresh) < minInterval {
+		r.refreshMu.Unlock()
+		return false
+	}
+	r.lastRefresh = now
+	r.refreshMu.Unlock()
+	r.Scan() //nolint:errcheck // scan problems are per-manifest warnings, reported at startup
+	return true
+}
+
 func (r *Registry) Get(name string) (*Entry, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

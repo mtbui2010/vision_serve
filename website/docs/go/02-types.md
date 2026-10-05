@@ -286,7 +286,7 @@ type Request struct {
 [request.go#L48-L52 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L48-L52)
 
 So the handler can write `q.Model` and `q.Encoding`
-([handlers.go#L164-L165](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L164-L165))
+([handlers.go#L166-L167](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L166-L167))
 although those fields belong to `api.PredictJSONRequest`.
 
 The tests use embedding to build a variant of a fake model that adds one method:
