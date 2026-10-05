@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from contextlib import contextmanager
 from pathlib import Path
 
 from ..common import (IMAGENET_MEAN, IMAGENET_STD, Bundle, ConvertError, canonical_license, log,
@@ -379,7 +380,8 @@ SCORE_FLOOR = 0.05   # sigmoid score; a query below it in BOTH runs is not judge
 MIN_ROW_MATCH = 0.5  # ... but at least this share of ALL queries must still match at their own row
 
 
-def detr_parity(onnx_path, feeds, reference, tol, what="", floor=SCORE_FLOOR, min_match=MIN_ROW_MATCH, real=False):
+def detr_parity(onnx_path, feeds, reference, tol, what="", floor=SCORE_FLOOR, min_match=MIN_ROW_MATCH, real=False,
+                proposal_rows=0):
     """common.parity, made aware that DETR queries are a SET chosen by a top-K.
 
     RF-DETR is two-stage: the decoder's queries are the top-K encoder proposals, and they attend to
@@ -394,12 +396,14 @@ def detr_parity(onnx_path, feeds, reference, tol, what="", floor=SCORE_FLOOR, mi
 
     So the rule compares what a detection can come from:
       1. every CONFIDENT query (best sigmoid score >= `floor` in either run) must match to `tol` —
-         at its own row, or at another row (two near-tied proposals can trade places in the top-K
-         order) — in every output;
+         at its own row, or at another row — in every output. (A proposal that moved to another
+         slot does NOT match there: each slot adds its own learned query. That case is parity_run's.)
       2. the low-score queries are not judged one by one, but at least `min_match` of ALL queries
          must match to `tol` at their own row. Near-ties move a minority; an export bug (swapped box
          coordinates, a shifted logit, a different normalisation inside the graph) moves every query.
-    Anything else raises ConvertError ("Not installed"). `real` marks a run on a real photo (report)."""
+    Anything else raises ConvertError ("Not installed"). `real` marks a run on a real photo (report).
+    A near-tie that lands on a CONFIDENT query is handled one level up, by parity_run: there the
+    reference is re-run on ONNX's proposal order (`proposal_rows` = how many rows that moved)."""
     import numpy as np
     import onnxruntime as ort
 
@@ -464,8 +468,129 @@ def detr_parity(onnx_path, feeds, reference, tol, what="", floor=SCORE_FLOOR, mi
         raise ConvertError(f"parity{what}: ONNX differs from the original: {'; '.join(why)}. Not installed.")
     from ..common import record_parity
     record_parity(what, worst, tol, confident_queries=int(confident.sum()), row_matched=int(row_ok.sum()),
-                  queries=q, low_score_differ=low_diff, real_input=bool(real))
+                  queries=q, low_score_differ=low_diff, real_input=bool(real), proposal_rows=int(proposal_rows))
     return worst
+
+
+# --------------------------------------------------------------------------------------------
+# two-stage proposal near-ties
+# --------------------------------------------------------------------------------------------
+#
+# RF-DETR's encoder scores every proposal, `torch.topk` keeps the best K (rfdetr transformer.py), and
+# decoder slot r gets the r-th kept proposal PLUS slot r's own learned query (query_feat[r],
+# refpoint_embed[r]). When two proposals score within float noise of each other, ORT and PyTorch can
+# rank them in a different order; the two slots then hold different (proposal, slot) pairs — different
+# queries, whose outputs legitimately differ, and no row of one run matches the other. Measured
+# 2026-10-05 (official COCO Medium, rfdetr 1.7.1, torch 2.10, ORT 1.26 CPU, test/testdata/sample.jpg):
+# proposals 501 and 224 score -3.635506 / -3.635507 and trade slots 190/191, both of which then score
+# >= 0.05 in one run (max|Δ|/scale 1.15e-2 at the closest row). Re-running PyTorch with ORT's order
+# forced, all 300 rows match to 1.9e-4. So when that is what happened, the reference is re-run on
+# ONNX's proposal order and every row is compared again under the usual rules.
+
+@contextmanager
+def _topk_tap(force=None):
+    """Patch `torch.topk` (the proposal selection is its only call in an rfdetr export-mode forward):
+    record (scores, indices) of every call; with `force`, return those indices for a call of that
+    shape instead. Process-global while active — the converter is single-threaded."""
+    import torch
+    orig, calls = torch.topk, []
+
+    def tap(inp, k, *a, **kw):
+        out = orig(inp, k, *a, **kw)
+        if force is not None and tuple(out.indices.shape) == tuple(force.shape):
+            idx = force.to(device=out.indices.device, dtype=out.indices.dtype)
+            out = torch.return_types.topk((torch.gather(inp, -1, idx), idx))
+        calls.append((inp.detach().cpu().numpy(), out.indices.detach().cpu().numpy()))
+        return out
+
+    torch.topk = tap
+    try:
+        yield calls
+    finally:
+        torch.topk = orig
+
+
+def proposal_probe(onnx_path, out_path):
+    """Write a copy of the exported graph that also returns the proposal selection — TopK's input (each
+    proposal's best encoder class logit) and the indices it keeps — as two extra outputs after the
+    graph's own. None unless the graph has exactly one TopK."""
+    import onnx
+    m = onnx.load(str(onnx_path))
+    tk = [n for n in m.graph.node if n.op_type == "TopK"]
+    if len(tk) != 1:
+        return None
+    for name in (tk[0].input[0], tk[0].output[1]):
+        m.graph.output.append(onnx.helper.make_empty_tensor_value_info(name))
+    onnx.save(m, str(out_path))
+    return Path(out_path)
+
+
+def check_proposal_tie(ref_scores, ref_idx, got_scores, got_idx, tol):
+    """Rows where ONNX kept a different proposal than PyTorch, provided that is a near-tie: the
+    encoder scores agree to `tol` (relative to their scale) and, at every such row, the proposal ONNX
+    kept scores (in PyTorch's run) within twice the measured score difference of PyTorch's own
+    choice — the most a correct top-K of two so-close score vectors can disagree by. Anything else
+    (an encoder that differs, a TopK that keeps the wrong proposals) raises ConvertError."""
+    import numpy as np
+    s_r, s_g = np.asarray(ref_scores, np.float64).reshape(-1), np.asarray(got_scores, np.float64).reshape(-1)
+    i_r, i_g = np.asarray(ref_idx).reshape(-1).astype(np.int64), np.asarray(got_idx).reshape(-1).astype(np.int64)
+    if s_r.shape != s_g.shape or i_r.shape != i_g.shape:
+        raise ConvertError(f"proposal selection: ONNX scores {s_g.shape} / indices {i_g.shape} vs PyTorch "
+                           f"{s_r.shape} / {i_r.shape}. Not installed.")
+    if i_g.min(initial=0) < 0 or i_g.max(initial=0) >= s_r.size:
+        raise ConvertError("proposal selection: ONNX kept a proposal index out of range. Not installed.")
+    err = float(np.abs(s_g - s_r).max()) if s_r.size else 0.0
+    scale = max(1.0, float(np.abs(s_r).max())) if s_r.size else 1.0
+    if err / scale > tol:
+        raise ConvertError(f"proposal selection: the encoder's proposal scores differ (max|Δ|/scale "
+                           f"{err / scale:.2e} > tolerance {tol:g}). Not installed.")
+    rows = np.nonzero(i_r != i_g)[0]
+    gap = np.abs(s_r[i_r[rows]] - s_r[i_g[rows]])
+    eps = 2 * err + 1e-6 * scale
+    if (gap > eps).any():
+        k = int(rows[int(gap.argmax())])
+        raise ConvertError(f"proposal selection: at slot {k} ONNX kept proposal {int(i_g[k])} (score "
+                           f"{s_r[i_g[k]]:.6f}) where PyTorch kept {int(i_r[k])} ({s_r[i_r[k]]:.6f}); a "
+                           f"gap of {float(gap.max()):.2e} is not a near-tie (scores differ by at most "
+                           f"{err:.2e}). Not installed.")
+    return [int(r) for r in rows]
+
+
+def parity_run(exp, onnx_path, input_name, x, tol, what, real=False, workdir=None):
+    """Tier A for one input: detr_parity of the ONNX graph against `exp` (the PyTorch module that was
+    exported). If that fails and the reason is a proposal near-tie (see above), compare again
+    against `exp` re-run on ONNX's proposal order; otherwise the original failure stands."""
+    import numpy as np
+    import onnxruntime as ort
+    import torch
+
+    xt = torch.from_numpy(x)
+    with torch.no_grad(), _topk_tap() as taps:
+        ref = [t.detach().cpu().numpy() for t in exp(xt)]
+    feeds = {input_name: x}
+    try:
+        return detr_parity(onnx_path, feeds, ref, tol, what, real=real)
+    except ConvertError:
+        if len(taps) != 1 or workdir is None:
+            raise
+        probe = Path(workdir) / "proposal-probe.onnx"
+        if not probe.exists() and proposal_probe(onnx_path, probe) is None:
+            raise
+        sess = lambda p: ort.InferenceSession(str(p), providers=["CPUExecutionProvider"])  # noqa: E731
+        plain, outs = sess(onnx_path).run(None, feeds), sess(probe).run(None, feeds)
+        if len(outs) != len(plain) + 2 or not all(np.array_equal(a, b) for a, b in zip(plain, outs)):
+            raise  # the probe does not reproduce the graph: its indices say nothing about this run
+        rows = check_proposal_tie(taps[0][0], taps[0][1], outs[-2], outs[-1], tol)
+        if not rows:
+            raise  # same proposals in the same slots: the difference is elsewhere
+        forced = torch.from_numpy(np.asarray(outs[-1]).astype(np.int64))
+        with torch.no_grad(), _topk_tap(force=forced) as taps2:
+            ref2 = [t.detach().cpu().numpy() for t in exp(xt)]
+        if len(taps2) != 1:
+            raise
+    log(f"  parity{what}: near-tied encoder proposals ranked differently (slots {rows[:10]}"
+        f"{' ...' if len(rows) > 10 else ''}); comparing against PyTorch re-run on ONNX's proposal order")
+    return detr_parity(onnx_path, feeds, ref2, tol, what, real=real, proposal_rows=len(rows))
 
 
 def convert(args, workdir: Path):
@@ -534,9 +659,7 @@ def convert(args, workdir: Path):
 
     # ---- parity: PyTorch (export mode) vs ORT, two synthetic images + one real photo ----
     for label, x, real in parity_inputs(R, getattr(args, "images", None)):
-        with torch.no_grad():
-            ref = [t.detach().cpu().numpy() for t in exp(torch.from_numpy(x))]
-        detr_parity(onnx_path, {ins[0][0]: x}, ref, args.tolerance, f" rfdetr[{label}]", real=real)
+        parity_run(exp, onnx_path, ins[0][0], x, args.tolerance, f" rfdetr[{label}]", real=real, workdir=workdir)
 
     notes = [f"rfdetr {src.name} ({VARIANTS[variant]}, variant from {how})",
              f"input {R}x{R} squashed (rfdetr trains with square_resize_div_64 — BUGS_TO_FIX.md #1); "
