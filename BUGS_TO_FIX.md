@@ -119,7 +119,8 @@ difference in gray levels against the reference preprocessing (more than 8 costs
 | `efficientnet-b0` | timm eval transform (crop_pct 0.875, bicubic) | **40.5** | top-1 agrees 4/8 | not measured | FAIL | reported, not fixed |
 | `mobilenet-v3` | torchvision `IMAGENET1K_V1.transforms()` (resize 256, crop 224) | **39.9** | top-1 agrees 3/8 | not measured | FAIL | reported, not fixed |
 | `midas` | manifest only (no reference) | 0.22 | — | — | server code only | — |
-| `scrfd` | manifest only (no reference) | 22137 | — | — | false FAIL (check bug) | reported |
+| `scrfd` | manifest only (no reference) | 22137 | — | — | false FAIL (check bug) | **fixed** in `check` |
+| `scrfd` (check fixed) | manifest, resolved per architecture | 0.18 | — | — | PASS | — |
 | `grasp-rfdetr` (was letterbox) | served detections vs COCO GT (`check` cannot run grasp) | — | — | 45.50 (`rf-detr` 47.77) | FAIL | **fixed** (squash) |
 | `grasp-rfdetr` (squash) | same | — | — | 47.77 (= `rf-detr`) | PASS | — |
 
@@ -128,11 +129,18 @@ difference in gray levels against the reference preprocessing (more than 8 costs
   squash the whole photo. The reference scripts load no weights (B2 runs the installed ONNX on
   both tensors), and there is no labelled ImageNet set here for C, so the cost is not measured:
   not fixed. Fix candidate: `crop: center` with the right resize ratio, after a top-1 run.
-- **`scrfd`: a bug in `check`, not in the manifest.** `check.py` builds its manifest reference with
-  the generic `spec_from_manifest`, which reads SCRFD's legacy `letterbox: true` as a centred
-  letterbox and its 0..255 mean/std as 0..1 units; Go resolves both per architecture
-  (`top_left_pad`, `NoRescale`). The report then tells the user to set a field that is already
-  set. Fix: resolve the architecture's legacy rules on the Python side too (shared fixture).
+- **`scrfd`: a bug in `check`, not in the manifest — fixed.** `check.py` built its manifest
+  reference with the generic `spec_from_manifest`, which read SCRFD's legacy `letterbox: true` as a
+  centred letterbox and its 0..255 mean/std as 0..1 units; Go resolves both per architecture
+  (`top_left_pad`, `NoRescale`). The report then told the user to set a field that was already
+  set. Now `convert/spec.py resolve_arch` mirrors each Go `Arch.Resolve` and the packages' own
+  rules (SCRFD's units, CLIP's defaults, the fixed-by-export SAM family and PaddleOCR), pinned by
+  a shared corpus run on both sides (`internal/vision/preprocess/testdata/arch_resolve_sync.json`:
+  `TestArchResolveSyncCorpus`, `test_arch_resolution_corpus`, and `test_arch_modes_match_go`
+  against the Go `Arch{...}` literals). `check scrfd` now passes B1 at 0.18 gray levels; the
+  bundle's mean/std are converted to [0,1] units, which is what turned a 0.0014 tensor difference
+  into "22137 gray levels". A fix never names a value the manifest already has: it says how the
+  architecture serves it instead (e.g. "scrfd cannot serve letterbox (it serves top left pad)").
 - **Not run:** `paddle-ocr` (no reference), `owlvit-base`, `grounding-dino(-fixed)` and the
   open-vocab pipelines (`check --checkpoint` takes HF object detection only for task
   `detection`), the text towers, the segmentation models and the grasp models other than `grasp-rfdetr` (below).

@@ -22,12 +22,13 @@ It runs in the converter image, like `visionserve convert` (Docker), and talks t
 
 | Check | Runs when | Compares |
 |---|---|---|
-| Preprocessing (B1) | always | `/api/preprocess` with a reference preprocessing of your `--images`: your `--reference SCRIPT.py`, else the `--checkpoint`'s own pipeline, else the architecture's known recipe (RF-DETR: squash + ImageNet mean/std, what the `rfdetr` package does), else what the manifest declares (then it checks only the server's code, and says so) |
+| Preprocessing (B1) | always | `/api/preprocess` with a reference preprocessing of your `--images`: your `--reference SCRIPT.py`, else the `--checkpoint`'s own pipeline, else the architecture's known recipe (RF-DETR: squash + ImageNet mean/std, what the `rfdetr` package does), else what the manifest declares, read the way its architecture reads it (SCRFD's legacy `letterbox: true` is its top-left pad in 0..255 units; a SAM-family or PaddleOCR model, whose export fixes the preprocessing, is skipped) — then it checks only the server's code, and says so |
 | Outputs (B2) | `--checkpoint` or `--reference` | `/api/predict` with the original model on the same photos |
 | Accuracy (C) | `--labels` | mAP (COCO json) or top-1 (folder per class, or a CSV `image,label`); served vs the original model, or the served number alone |
 
 The first line is the verdict, then one row per check with the likely cause and the fix of each
-FAIL or WARN, next steps, and the detailed tier table of section 3. A real run (CPU, 5 COCO
+FAIL or WARN (a fix never asks for a value the manifest already has: then it says how the
+architecture serves that value instead), next steps, and the detailed tier table of section 3. A real run (CPU, 5 COCO
 photos) on a copy of the `rf-detr` manifest with `letterbox: true`, the mistake of
 [section 3](#tier-b1-catching-a-preprocessing-mistake); the scratch registry's path is shortened
 to `…/reg`:

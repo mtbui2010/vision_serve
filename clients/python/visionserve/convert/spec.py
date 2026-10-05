@@ -9,10 +9,13 @@ converter's tier B1 compares the server against the declared spec directly:
                            `preprocess:` block, the legacy input.* fields as aliases, a field
                            declared on both sides must agree (registry.Manifest.PreprocessSpec);
   spec_from_legacy(...)    the legacy fields alone (Spec.legacy = True);
+  resolve_arch(spec, arch) what that architecture's Go model applies for it (Arch.Resolve and
+                           the package's own rules: SCRFD's legacy letterbox + 0..255 units, …);
   apply_spec(pil, spec)    -> (tensor, meta), the geometry exactly as Go computes it.
 
-Both sides run the shared corpora internal/registry/testdata/preprocess_sync.json (resolution)
-and internal/vision/preprocess/testdata/geometry_sync.json (tensor shape + meta per mode); see
+Both sides run the shared corpora internal/registry/testdata/preprocess_sync.json (resolution),
+internal/vision/preprocess/testdata/arch_resolve_sync.json (per architecture) and
+internal/vision/preprocess/testdata/geometry_sync.json (tensor shape + meta per mode); see
 tests/test_go_python_sync.py. Pixels differ from Go only by the resampler (PIL vs imaging, the
 same filters), which is what B1 measures.
 
@@ -263,6 +266,101 @@ def validate(s: Spec) -> None:
         raise SpecError(f"preprocess: mean and std need 3 values each (RGB), got {len(s.mean)} and {len(s.std)}")
     if s.std and any(v == 0 or v != v for v in s.std):
         raise SpecError(f"preprocess: std values must be non-zero numbers, got {s.std}")
+
+
+# --------------------------------------------------------------------------------------------
+# Per-architecture resolution (preprocess.Arch.Resolve + each model package's spec())
+# --------------------------------------------------------------------------------------------
+
+@dataclasses.dataclass(frozen=True)
+class Arch:
+    """vision/preprocess.Arch: the modes an architecture serves (modes[0] is its default) and the
+    name its errors carry."""
+    name: str
+    modes: tuple
+
+
+# Registered architecture (manifest `architecture:`) -> its Arch, as the Go model packages declare
+# them (internal/models/<pkg>/preprocess.go). tests/test_go_python_sync.py checks the modes
+# against the Go source and every case of internal/vision/preprocess/testdata/arch_resolve_sync.json.
+ARCHS = {
+    "rf-detr": Arch("rfdetr", ("squash", "letterbox")),
+    "rt-detr": Arch("rtdetr", ("squash", "letterbox")),
+    "efficientnet": Arch("classification", ("squash",)),
+    "mobilenet-v3": Arch("classification", ("squash",)),
+    "clip": Arch("clip", ("squash", "center_crop")),
+    "midas": Arch("depth", ("squash", "keep_aspect")),
+    "depth-anything-v2": Arch("depth", ("squash", "keep_aspect")),
+    "scrfd": Arch("scrfd", ("top_left_pad",)),
+}
+
+# Architectures whose export fixes the preprocessing (preprocess.FixedByExport): a declared block
+# is refused, the legacy input.* fields are reference only.
+FIXED_BY_EXPORT = ("mobile-sam", "efficient-sam", "sam2", "nano-sam", "paddle-ocr")
+
+CLIP_MEAN = [0.48145466, 0.4578275, 0.40821073]  # internal/models/clip defaultMean / defaultStd
+CLIP_STD = [0.26862954, 0.26130258, 0.27577711]
+
+
+def resolve_arch(s: Spec, architecture: str) -> Optional[Spec]:
+    """The spec `architecture` really applies for the manifest's spec `s` (spec_from_manifest), as
+    the Go model does: its Arch.Resolve, after the package's own adjustments.
+
+      - a legacy spec keeps the architecture's historical reading: a mode it never honoured falls
+        back to its default (SCRFD's `letterbox: true` is its top-left pad; rf-detr ignores
+        `crop: center`), and input.layout is never read (NCHW);
+      - a declared block must use one of its modes ("" = the default), else SpecError;
+      - scrfd: a legacy normalize is in 0..255 units (rescale off); clip: CLIP's mean/std when
+        none is declared, 224 when no size is.
+
+    Returns None for an architecture whose export fixes the preprocessing (its input.* fields
+    are reference only; a declared block raises SpecError), and `s` unchanged for one that does
+    not resolve a manifest's preprocessing through an Arch (a pipeline, or a model the converter
+    generated with the generic default)."""
+    if architecture in FIXED_BY_EXPORT:
+        if not s.legacy:
+            raise SpecError(f"preprocess: {architecture}'s preprocessing is fixed by its export and does not "
+                            "read a preprocess: block — remove the block (see docs/manifest-spec.md)")
+        return None
+    a = ARCHS.get(architecture)
+    if a is None:
+        return s
+    s = dataclasses.replace(s, mean=None if s.mean is None else list(s.mean),
+                            std=None if s.std is None else list(s.std))
+    if architecture == "scrfd" and s.legacy and (s.mean or s.std):
+        s.rescale = False
+    if architecture == "clip":
+        s.width = s.width if s.width > 0 else 224
+        s.height = s.height if s.height > 0 else 224
+        s.mean = s.mean or list(CLIP_MEAN)
+        s.std = s.std or list(CLIP_STD)
+    if s.legacy:
+        if s.resize not in a.modes:
+            s.resize = a.modes[0]
+        s.layout = "NCHW"
+    else:
+        if not s.resize:
+            s.resize = a.modes[0]
+        if s.resize not in a.modes:
+            raise SpecError(f'preprocess: {a.name} does not support resize "{s.resize}" (supported: '
+                            f'{", ".join(a.modes)})')
+    try:
+        validate(s)
+    except SpecError as e:
+        raise SpecError(f"{a.name}: {e}") from None
+    return s
+
+
+def unit_normalisation(s: Spec):
+    """(mean, std) in [0,1] units giving the same tensor as the spec: v = (p/255 - mean) / std.
+    A spec with rescale off (mean/std in 0..255 units, or raw pixels) is converted; a rescaled one
+    is returned as declared (None when it declares none)."""
+    if s.rescale:
+        return s.mean, s.std
+    if not s.mean and not s.std:
+        return [0.0, 0.0, 0.0], [1.0 / 255] * 3  # raw 0..255: v = p
+    m, sd = _channels(s.mean, s.std, 255.0)
+    return [float(v) for v in m], [float(v) for v in sd]
 
 
 # --------------------------------------------------------------------------------------------

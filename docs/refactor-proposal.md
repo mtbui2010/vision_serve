@@ -421,7 +421,7 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   điểm proposal khớp tới tolerance và mỗi slot đổi là near-tie, rồi so lại với PyTorch chạy theo
   thứ tự của ORT bằng luật cũ. Lỗi export thật (cạnh một tie hay không) vẫn FAIL, có test.
 - Manifest so với cách model được train, audit bằng `visionserve check` (2026-10-05): **đã
-  sửa 3, còn báo 2.** Cùng loại lỗi với BUGS_TO_FIX.md #1. `rf-detr-nano` letterbox trong khi
+  sửa 4, còn báo 1.** Cùng loại lỗi với BUGS_TO_FIX.md #1. `rf-detr-nano` letterbox trong khi
   RF-DETR train bằng squash: so với checkpoint chính thức chạy bằng `rfdetr` (CPU, 200 ảnh COCO
   val2017) B1 lệch 46.6 mức xám, B2 31/36 box, mAP 40.92 so với 44.09 (−3.16); squash: 0.4,
   38/38, 43.80 (−0.29). `rt-detr` letterbox và chuẩn hóa ImageNet trong khi RT-DETR train bằng
@@ -435,5 +435,6 @@ sánh trực tiếp bản cũ (efcf9de) với bản mới trên weights thật. 
   GT đúng lớp 86.1% → 87.6%. Đã đổi sang squash (manifest, catalog).
   Còn mở: `efficientnet-b0` và `mobilenet-v3` squash cả ảnh trong khi timm/torchvision resize rồi
   cắt giữa (B1 ≈ 40 mức xám, top-1 trùng 4/8 và 3/8), chưa đo top-1 nên chưa sửa;
-  `check` báo FAIL sai cho `scrfd` vì phía Python không áp luật legacy theo kiến trúc
-  (`top_left_pad`, mean/std theo đơn vị 0..255) như Go.
+  `check` từng báo FAIL sai cho `scrfd` vì phía Python không áp luật legacy theo kiến trúc
+  (`top_left_pad`, mean/std theo đơn vị 0..255) như Go: đã sửa (`spec.resolve_arch`, corpus chung
+  `arch_resolve_sync.json` chạy ở cả hai phía), `check scrfd` đạt 0.18 mức xám.

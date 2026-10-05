@@ -48,7 +48,7 @@ CLAUDE.md carries the one-line version; this file is the "why" and "where".
 
 | Rule | The bug it prevents | Guard |
 |---|---|---|
-| Any rule implemented in both Go and Python (preprocessing, manifest parsing, licence allowlist) has **one** shared fixture set and a sync test on both sides. | Python read YAML booleans, null keys and short normalisation lists differently from Go. | `test_spec_from_manifest_reads_yaml_like_go`, `test_odd_legacy_normalize_matches_go`, `internal/vision/preprocess/sync_test.go` |
+| Any rule implemented in both Go and Python (preprocessing, manifest parsing, licence allowlist) has **one** shared fixture set and a sync test on both sides. | Python read YAML booleans, null keys and short normalisation lists differently from Go; `check` read SCRFD's legacy `letterbox: true` as a centred letterbox in 0..1 units (Go: top-left pad, 0..255) and reported a false FAIL. | `test_spec_from_manifest_reads_yaml_like_go`, `test_odd_legacy_normalize_matches_go`, `internal/vision/preprocess/sync_test.go`, `TestArchResolveSyncCorpus` / `test_arch_resolution_corpus` |
 | One code path per concern: a request option resolved by one endpoint is resolved by the shared helper for all. | `/api/preprocess` did not resolve `template_name` like `/api/predict`. | `TestPreprocessResolvesTemplateName` |
 | Never write a test that pins today's output without a reference; a test must encode the *correct* behaviour. | A Python test pinned the Go/Python divergence itself. | review |
 
