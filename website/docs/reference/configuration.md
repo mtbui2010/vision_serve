@@ -52,7 +52,7 @@ visionserve version
 `check` needs a running server (`--server`, default `$VISIONSERVE_HOST` or
 `http://localhost:11435`) and prints a `PASS`, `WARN` or `FAIL` verdict first; it exits `0` for
 PASS or WARN, `1` for FAIL and `2` for a usage or setup error. See
-[Inspect and verify a model](../guides/inspect.md#quick-way-visionserve-check).
+[Check it behaves like training](../guides/check-training.md).
 
 `run` takes the options of `POST /api/predict` as flags named after the form fields
 (`box_threshold` → `--box-threshold`; meanings in the [option table](../clients/python.md#every-option-at-a-glance)).
@@ -64,13 +64,15 @@ images directly, since there is no server to register a `template_name` with.
 `inspect` and `import` share one output format: the first line is `PASS|WARN|FAIL: <reason>`,
 then a short summary and the details; `--json` prints one object `{verdict, reason, summary,
 details}` and nothing else; `--report` writes a self-contained HTML file. They exit 0 on PASS or
-WARN, 1 on FAIL, 2 on a usage error. See [Inspect and verify a model](../guides/inspect.md).
+WARN, 1 on FAIL, 2 on a usage error. See [See what a model takes and returns](../guides/see-a-model.md) and
+[Use a model you trained](../guides/use-your-model.md).
 
 `bench`, `sensitivity` and `optimize` print a verdict line first (`PASS|WARN|FAIL: ...`), exit
 `0` on PASS/WARN, `1` on FAIL and `2` on a usage or setup error, print one JSON object with
 `--json`, and write a self-contained HTML page with `--report`. `sensitivity` and `optimize` run
 the converter (Docker image, or a local Python with `--python`). See
-[Make a model fast and small for Jetson](../guides/edge.md).
+[Measure speed](../guides/measure-speed.md) and
+[Make it smaller and faster for Jetson](../guides/jetson.md).
 
 The source of truth for flags is `visionserve help` and
 [`internal/cli`](https://github.com/mtbui2010/vision_serve/tree/main/internal/cli).

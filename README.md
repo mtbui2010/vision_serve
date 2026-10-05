@@ -11,7 +11,9 @@ model gallery, HTTP API, and a Go tutorial built on this code base.
 |---|---|
 | Install it (Docker or from source, GPU setup) | [Getting started](https://mtbui2010.github.io/vision_serve/getting-started/) |
 | Choose a model and run it | [Models and performance](https://mtbui2010.github.io/vision_serve/reference/models/) · [What the models do](https://mtbui2010.github.io/vision_serve/concepts/tasks/) · [Run your first request](https://mtbui2010.github.io/vision_serve/getting-started/#4-make-a-request) |
-| Inspect a model: input sizes, preprocessing, postprocessing | [Inspect and verify a model](https://mtbui2010.github.io/vision_serve/guides/inspect/) |
+| Use a model you trained (convert a checkpoint, import an ONNX file) | [Use a model you trained](https://mtbui2010.github.io/vision_serve/guides/use-your-model/) · [Getting started, step 6](https://mtbui2010.github.io/vision_serve/getting-started/#6-use-a-model-you-trained) |
+| Inspect a model: what it takes and returns, does it behave like training | [See what a model takes and returns](https://mtbui2010.github.io/vision_serve/guides/see-a-model/) · [Check it behaves like training](https://mtbui2010.github.io/vision_serve/guides/check-training/) · [Worse than in training?](https://mtbui2010.github.io/vision_serve/guides/worse-than-training/) |
+| Make it fast on Jetson (Orin, Thor) | [Make it smaller and faster for Jetson](https://mtbui2010.github.io/vision_serve/guides/jetson/) · [Measure speed](https://mtbui2010.github.io/vision_serve/guides/measure-speed/) |
 | Call it from Python / JavaScript, with every parameter explained | [Clients](https://mtbui2010.github.io/vision_serve/clients/) · [Python](https://mtbui2010.github.io/vision_serve/clients/python/) |
 | Call the HTTP API directly | [HTTP API](https://mtbui2010.github.io/vision_serve/reference/api/) |
 | Understand or change the code | [How it works](https://mtbui2010.github.io/vision_serve/architecture/) · [Go for this project](https://mtbui2010.github.io/vision_serve/go/) |

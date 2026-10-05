@@ -1,5 +1,10 @@
 # Reduced precision: FP16, INT8, INT4, mixed per layer, and per-layer sensitivity
 
+!!! info "This is a deep dive"
+    For a Jetson, [Make it smaller and faster for Jetson](jetson.md) does this for you with one
+    command (`visionserve optimize`). This page describes the converter flags behind it, how a
+    reduced model is judged, and what each format cost on a real model.
+
 `visionserve convert` can shrink a model after exporting it. Everything here is **opt-in**: with
 no `--precision` flag the output is the FP32 ONNX file it always was.
 

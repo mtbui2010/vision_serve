@@ -1,4 +1,10 @@
-# Make a model fast and small for Jetson Orin / Thor
+# Jetson details: bench, sensitivity, optimize
+
+!!! info "This is a deep dive"
+    The short versions, one command each:
+    [Make it smaller and faster for Jetson](jetson.md) (`visionserve optimize`) and
+    [Measure speed](measure-speed.md) (`visionserve bench`). This page has every line of their
+    output explained, the presets, more measurements, and what is known about Orin and Thor.
 
 Three commands, used in this order:
 
@@ -203,6 +209,13 @@ What this says, in plain terms:
   preprocessing, so the Δ vs FP32 columns compare precisions fairly; the absolute mAP is lower than
   the fixed manifest gives. A variant made by `optimize --install` copies its source's
   preprocessing, so one made before the fix letterboxes too: set `input.letterbox: false` in it.
+- **Re-run with the fixed preprocessing** (5 October 2026, the same official checkpoint
+  converted again as `my-detector`, squashed; `--gpu`, no `--tensorrt`; 100 COCO val2017 images;
+  shown in [Make it smaller and faster for Jetson](jetson.md)): FP32 47.03 mAP, FP16 47.11, INT8
+  43.01, mixed 47.32. FP16 was again slower than FP32 on the CUDA EP (36.3 vs 19.9 ms p50 here;
+  `bench` 40.4 vs 18.5 ms), so the verdict was again "keep FP32 for speed". `sensitivity` on that
+  export measured 140 layers and found 29 sensitive to INT8 (the export of the run in section 2
+  had 115 layers).
 
 Installing a variant anyway and benching it, as you would on the device:
 
@@ -262,10 +275,16 @@ including a C/C++ tarball with `libonnxruntime.so` and its CUDA and TensorRT pro
 `ORT_DYLIB_PATH` at that library and check with `visionserve bench MODEL --ep cuda` that the
 device line says `gpu:0`.
 
-The Docker image for JetPack 6 is `deploy/Dockerfile.edge`. Its `ORT_SOURCE=jetson` path defaults
-to `nvcr.io/nvidia/l4t-ml:r36.3.0`, a tag that does not exist on NGC (l4t-ml stops at r36.2.0,
-l4t-base at r36.2.0): pass `--build-arg L4T_ML_IMAGE=...` with an image that exists, or install
-ONNX Runtime from the Jetson AI Lab tarball.
+The Docker image for JetPack 6 is `deploy/Dockerfile.edge` with `--build-arg ORT_SOURCE=jetson`.
+It runs on NVIDIA's `nvcr.io/nvidia/l4t-jetpack:r36.4.0` (JetPack 6.1 / 6.2: CUDA 12.6, cuDNN 9.3
+and TensorRT 10.3 inside the image) with the ONNX Runtime 1.24.0 libraries of the Jetson AI Lab
+`jp6/cu126` `onnxruntime-gpu` wheel (CUDA and TensorRT providers), pinned by SHA-256. Until
+5 October 2026 it defaulted to `nvcr.io/nvidia/l4t-ml:r36.3.0`, a tag that does not exist on NGC;
+the `l4t-ml:r36.2.0-py3` that does exist ships ONNX Runtime 1.16.3, older than the 1.20 C API
+this binary needs. The image builds with `docker buildx --platform linux/arm64` on an x86-64 PC
+without QEMU (checked on 5 October 2026: every library the CUDA and TensorRT providers link
+against is in the image), but it has **not run on an Orin** yet: check `visionserve bench MODEL
+--ep cuda` there, as for Thor below.
 
 ## Jetson Thor (JetPack 7): untested
 
