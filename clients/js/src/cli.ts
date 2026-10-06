@@ -86,45 +86,6 @@ Examples:
   visionserve ps --host http://10.0.0.5:11435
 `;
 
-// --------------------------------------------------------------------------- //
-// Wire serialization (match pkg/api/types.go exactly: `class`, omitempty arrays)
-// --------------------------------------------------------------------------- //
-function resultToWire(res: Result): Record<string, unknown> {
-  const out: Record<string, unknown> = { task: res.task, model: res.model };
-  if (res.device) out.device = res.device;
-  if (res.detections.length) {
-    out.detections = res.detections.map((d) => ({ bbox: d.bbox, class: d.cls, conf: d.conf }));
-  }
-  if (res.masks.length) {
-    out.masks = res.masks.map((m) => ({ rle: m.rle, bbox: m.bbox, conf: m.conf }));
-  }
-  if (res.grasps.length) {
-    out.grasps = res.grasps.map((g) => {
-      const item: Record<string, unknown> = {
-        x: g.x,
-        y: g.y,
-        theta: g.theta,
-        width: g.width,
-        quality: g.quality,
-      };
-      if (g.cls) item.class = g.cls;
-      if (g.conf) item.conf = g.conf;
-      return item;
-    });
-  }
-  if (res.classifications.length) {
-    out.classifications = res.classifications.map((c) => ({ class: c.cls, conf: c.conf }));
-  }
-  if (res.embeddings.length) out.embeddings = res.embeddings;
-  if (res.depthMap.length) {
-    out.depth_map = res.depthMap;
-    out.depth_width = res.depthWidth;
-    out.depth_height = res.depthHeight;
-  }
-  out.duration_ms = res.durationMs;
-  return out;
-}
-
 /** Build a self-describing output name: `<stem>.js.<model>.<task>.svg`. */
 function autoName(imagePath: string, model: string, task: string, ext: string): string {
   const stem = path.basename(imagePath, path.extname(imagePath)) || "image";
@@ -264,7 +225,7 @@ async function cmdPredict(client: Client, positionals: string[], values: Values)
   }
 
   // stdout: result JSON (wire-faithful, pipe-friendly).
-  const wire = resultToWire(res);
+  const wire = res.toJSON(); // the server's wire shape: `class`, omitempty, duration_ms, ...
   process.stdout.write(
     (values.compact ? JSON.stringify(wire) : JSON.stringify(wire, null, 2)) + "\n",
   );
@@ -292,9 +253,6 @@ async function cmdPredict(client: Client, positionals: string[], values: Values)
         `client=${clientMs.toFixed(1)}ms server=${serverMs.toFixed(1)}ms  ${summaryCounts(res)}\n`,
     );
     if (savedPath) process.stderr.write(`saved: ${savedPath}\n`);
-    if (res.grasps.length) {
-      process.stderr.write("note: SVG overlay does not draw grasps; see the JSON for grasp data\n");
-    }
   }
   return 0;
 }
@@ -416,7 +374,7 @@ async function main(argv: string[]): Promise<number> {
   const { values, positionals } = parsed as { values: Values; positionals: string[] };
 
   if (values.version) {
-    process.stdout.write("visionserve-client 0.1.4\n");
+    process.stdout.write("visionserve-client 0.2.0\n");
     return 0;
   }
   const command = positionals[0];

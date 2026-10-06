@@ -1,6 +1,6 @@
 {
   "name": "visionserve",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "TypeScript/JavaScript client SDK for the VisionServe HTTP server (talks to the Go runtime over HTTP).",
   "type": "module",
   "main": "./dist/index.js",
