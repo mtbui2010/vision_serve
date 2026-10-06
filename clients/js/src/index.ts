@@ -11,7 +11,7 @@ export { Result, Detection, Mask, Grasp, ModelInfo, Classification } from "./typ
 export type { Task, ModelState } from "./types.js";
 export { filterBySize, getDepthAtDetection } from "./filter.js";
 export type { SizeFilterOptions, DepthAtDetectionOptions, DepthMode } from "./filter.js";
-export { toSVG, classColour } from "./visualize.js";
+export { toSVG, classColour, classColourMap } from "./visualize.js";
 export type { SVGOptions } from "./visualize.js";
 export {
   backproject,

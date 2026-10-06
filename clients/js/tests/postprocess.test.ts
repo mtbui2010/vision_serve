@@ -19,6 +19,9 @@ import {
   type SelectObjectOptions,
 } from "../src/index.js";
 
+/** assert.ok with a message: without one, a failing assert.ok re-parses the TS source and can hang under tsx. */
+const ok = (cond: unknown, msg = "expected a truthy value"): void => assert.ok(cond, msg);
+
 // Shared cases generated from the Python SDK (clients/testdata/gen_postprocess_sync.py); Python
 // checks the same file in clients/python/tests/test_postprocess_sync.py.
 const fx = JSON.parse(readFileSync(new URL("../../testdata/postprocess_sync.json", import.meta.url), "utf8"));
@@ -39,9 +42,9 @@ function close(got: unknown, want: unknown, what: string, rel = 1e-6): void {
   if (typeof want === "number") {
     assert.equal(typeof got, "number", `${what}: got ${String(got)}, want ${want}`);
     const g = got as number;
-    assert.ok(Math.abs(g - want) <= rel * Math.max(1, Math.abs(want)), `${what}: got ${g}, want ${want}`);
+    ok(Math.abs(g - want) <= rel * Math.max(1, Math.abs(want)), `${what}: got ${g}, want ${want}`);
   } else if (Array.isArray(want)) {
-    assert.ok(Array.isArray(got) && got.length === want.length, `${what}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
+    ok(Array.isArray(got) && got.length === want.length, `${what}: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
     want.forEach((w, i) => close((got as unknown[])[i], w, `${what}[${i}]`, rel));
   } else {
     assert.deepEqual(got, want, what);

@@ -1,8 +1,10 @@
 import { encodePalettePNG } from "./png.js";
 import { Detection, Grasp, Mask, Result, bytesToBase64, topGraspsPerObject } from "./types.js";
 
-/** Colour palette of the Go server's overlay and the Python client. */
-const PALETTE: Array<[number, number, number]> = [
+type RGB = [number, number, number];
+
+/** Index palette (`colorBy: "index"`): the Go server's overlay palette, as in the Python client. */
+const PALETTE: RGB[] = [
   [255, 59, 59],
   [255, 165, 0],
   [50, 205, 50],
@@ -13,8 +15,31 @@ const PALETTE: Array<[number, number, number]> = [
   [255, 99, 71],
 ];
 
+/**
+ * Class palette (`colorBy: "class"`): the Python client's 16 well-separated colours
+ * (Trubetskoy's list without near-white, grey, black, navy and maroon).
+ */
+const CLASS_PALETTE: RGB[] = [
+  [230, 25, 75], // red
+  [60, 180, 75], // green
+  [255, 225, 25], // yellow
+  [0, 130, 200], // blue
+  [245, 130, 48], // orange
+  [145, 30, 180], // purple
+  [70, 240, 240], // cyan
+  [240, 50, 230], // magenta
+  [210, 245, 60], // lime
+  [250, 190, 212], // pink
+  [0, 128, 128], // teal
+  [220, 190, 255], // lavender
+  [170, 110, 40], // brown
+  [170, 255, 195], // mint
+  [128, 128, 0], // olive
+  [255, 215, 180], // apricot
+];
+
 /** Highlight colour of the selected target box and grasp. */
-const TARGET: [number, number, number] = [255, 0, 0];
+const TARGET: RGB = [255, 0, 0];
 
 /** Options for {@link toSVG}. */
 export interface SVGOptions {
@@ -42,12 +67,21 @@ export interface SVGOptions {
    */
   targetBox?: Detection | Mask | readonly number[] | null;
   /**
-   * `"class"` (default): every object of one label has one colour, from a stable hash of the
-   * label, so a class keeps its colour across frames and results. `"index"`: the i-th
-   * detection / mask / classification gets palette colour i (the Python SDK's colouring).
-   * Masks without a label (no detection with the same box) always use the index colour.
+   * `"class"` (default, as Python's `draw()`): every item of one class gets one colour of a
+   * 16-colour palette, picked by a stable hash of the class name (FNV-1a), so a class keeps its
+   * colour across pictures and frames; when two classes of one picture land on the same colour,
+   * the one later in alphabetical order takes the next free one. Items without a class (masks
+   * no detection labels) fall back to their index. `"index"`: item i gets colour i of the
+   * server's 8-colour overlay palette.
    */
   colorBy?: "class" | "index";
+  /**
+   * Label font size in pixels of the photo. Default: scaled with the photo's shorter side
+   * (`max(12, min(160, round(short / 30)))`: 14 on a 640 x 426 photo), as Python's `draw()`.
+   */
+  fontSize?: number;
+  /** Box line width in pixels of the photo. Default `max(1, min(40, round(short / 210)))`: 2 on 640 x 426. */
+  lineWidth?: number;
 }
 
 /**
@@ -77,8 +111,10 @@ export interface SVGOptions {
  */
 export function toSVG(result: Result, width: number, height: number, opts: SVGOptions = {}): string {
   const alpha = clamp01(opts.alpha ?? 0.45);
-  const byClass = (opts.colorBy ?? "class") === "class";
+  const colorBy = opts.colorBy ?? "class";
+  if (colorBy !== "class" && colorBy !== "index") throw new Error(`colorBy must be "class" or "index", got ${JSON.stringify(colorBy)}`);
   const maxGrasps = opts.maxGraspsPerObject === undefined ? 3 : opts.maxGraspsPerObject;
+  const st = style(width, height, opts.fontSize, opts.lineWidth);
   const parts: string[] = [];
 
   const target = opts.targetBox ?? null;
@@ -86,14 +122,17 @@ export function toSVG(result: Result, width: number, height: number, opts: SVGOp
   const isTarget = (it: Detection | Mask) =>
     target != null && (it === target || (targetBBox != null && sameBox(it.bbox, targetBBox)));
 
+  // Colours: by class (a per-picture map, so two classes never share one) or by index.
+  const classCols =
+    colorBy === "class"
+      ? classColourMap([...result.detections.map((d) => d.cls), ...result.classifications.map((c) => c.cls)].filter(Boolean))
+      : new Map<string, RGB>();
+  const itemColour = (i: number, cls: string): RGB =>
+    colorBy === "class" && cls ? (classCols.get(cls) ?? classColour(cls)) : PALETTE[i % PALETTE.length]!;
   // Masks carry no class: one whose box equals a detection's box takes that detection's label.
   const detLabel = new Map<string, string>();
   for (const d of result.detections) if (!detLabel.has(boxKey(d.bbox))) detLabel.set(boxKey(d.bbox), d.cls);
-  const detColour = (d: Detection, i: number) => (byClass ? classColour(d.cls) : indexColour(i));
-  const maskColour = (m: Mask, i: number) => {
-    const label = detLabel.get(boxKey(m.bbox));
-    return byClass && label !== undefined ? classColour(label) : indexColour(i);
-  };
+  const maskColour = (m: Mask, i: number) => itemColour(i, detLabel.get(boxKey(m.bbox)) ?? "");
 
   // 1. Mask fills: every mask in ONE palette PNG (later masks win where they overlap).
   if (opts.masks !== false && result.masks.length && width > 0 && height > 0) {
@@ -113,11 +152,12 @@ export function toSVG(result: Result, width: number, height: number, opts: SVGOp
       targetDet = det;
       return;
     }
-    parts.push(box(det.bbox, detColour(det, i), 2), label(det.bbox[0] ?? 0, det.bbox[1] ?? 0, detText(det), detColour(det, i)));
+    const c = itemColour(i, det.cls);
+    parts.push(box(det.bbox, c, st.lw), label(st, det.bbox[0] ?? 0, det.bbox[1] ?? 0, detText(det), c));
   });
   if (targetDet) {
     const d: Detection = targetDet;
-    parts.push(box(d.bbox, TARGET, 4), label(d.bbox[0] ?? 0, d.bbox[1] ?? 0, detText(d), TARGET));
+    parts.push(box(d.bbox, TARGET, 2 * st.lw), label(st, d.bbox[0] ?? 0, d.bbox[1] ?? 0, detText(d), TARGET));
   }
 
   // 3. Boxes of the masks no detection labels.
@@ -127,32 +167,35 @@ export function toSVG(result: Result, width: number, height: number, opts: SVGOp
     const t = isTarget(m);
     if (!maskBoxes && !t) return;
     const c = t ? TARGET : maskColour(m, i);
-    parts.push(box(m.bbox, c, t ? 4 : 2), label(m.bbox[0] ?? 0, m.bbox[1] ?? 0, `mask ${pct(m.conf)}`, c));
+    parts.push(box(m.bbox, c, t ? 2 * st.lw : st.lw), label(st, m.bbox[0] ?? 0, m.bbox[1] ?? 0, `mask ${pct(m.conf)}`, c));
   });
 
   // 4. Grasps: the best few per object; the target on top.
   if (result.grasps.length) {
     const shown =
       maxGrasps == null || maxGrasps <= 0 ? result.grasps.slice() : topGraspsPerObject(result.grasps, result.detections, result.masks, maxGrasps);
-    for (const g of shown) if (g !== opts.targetGrasp) parts.push(graspGlyph(g, false));
-    if (opts.targetGrasp && shown.includes(opts.targetGrasp)) parts.push(graspGlyph(opts.targetGrasp, true));
+    for (const g of shown) if (g !== opts.targetGrasp) parts.push(graspGlyph(st, g, false));
+    if (opts.targetGrasp && shown.includes(opts.targetGrasp)) parts.push(graspGlyph(st, opts.targetGrasp, true));
   }
 
   // 5. Classification labels, top-left, on a dark band.
+  const cfs = Math.round((st.font * 16) / 14);
+  const margin = Math.round((st.font * 20) / 14);
+  const lineHeight = Math.round((st.font * 30) / 14);
+  const cpad = Math.max(2, Math.round((st.font * 4) / 14));
   result.classifications.forEach((c, i) => {
     const text = `${c.cls} ${pct(c.conf)}`;
-    const fs = 16;
-    const ty = 20 + i * 30;
-    const tw = textWidth(text, fs);
+    const ty = margin + i * lineHeight;
+    const tw = textWidth(text, cfs);
     parts.push(
-      `<rect x="16" y="${ty - 3}" width="${n(tw + 8)}" height="${fs + 8}" fill="rgb(20,20,20)"/>` +
-        `<text x="20" y="${n(ty + fs * 0.82)}" font-family="sans-serif" font-size="${fs}" fill="${rgb(byClass ? classColour(c.cls) : indexColour(i))}" ` +
+      `<rect x="${n(margin - cpad)}" y="${n(ty - cpad)}" width="${n(tw + 2 * cpad)}" height="${n(cfs + 2 * cpad)}" fill="rgb(20,20,20)"/>` +
+        `<text x="${margin}" y="${n(ty + cfs * 0.8)}" font-family="sans-serif" font-size="${cfs}" fill="${rgb(itemColour(i, c.cls))}" ` +
         `textLength="${n(tw)}" lengthAdjust="spacingAndGlyphs">${escapeXML(text)}</text>`,
     );
   });
 
   // 6. A target box that is none of this result's items (e.g. chosen on another result).
-  if (targetBBox && ![...result.detections, ...result.masks].some(isTarget)) parts.push(box(targetBBox, TARGET, 4));
+  if (targetBBox && ![...result.detections, ...result.masks].some(isTarget)) parts.push(box(targetBBox, TARGET, 2 * st.lw));
 
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">` +
@@ -161,22 +204,78 @@ export function toSVG(result: Result, width: number, height: number, opts: SVGOp
   );
 }
 
-/** Palette colour of a class label: FNV-1a (32-bit) of its UTF-8 bytes, modulo the palette. */
-export function classColour(label: string): [number, number, number] {
+/** Font size, line width and picture size shared by every drawing step. */
+interface Style {
+  font: number;
+  lw: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Sizes for a picture (Python's `_auto_sizes`): proportional to its shorter side, clamped, so
+ * labels read the same on a thumbnail and on a 4000 x 3000 photo. Explicit values win.
+ */
+function style(width: number, height: number, fontSize?: number, lineWidth?: number): Style {
+  const short = Math.max(1, Math.min(Math.trunc(width), Math.trunc(height)));
+  const font = fontSize != null ? Math.trunc(fontSize) : Math.max(12, Math.min(160, roundHalfEven(short / 30)));
+  const lw = lineWidth != null ? Math.trunc(lineWidth) : Math.max(1, Math.min(40, roundHalfEven(short / 210)));
+  if (!(font >= 1) || !(lw >= 1)) throw new Error(`fontSize and lineWidth must be >= 1, got ${fontSize} and ${lineWidth}`);
+  return { font, lw, width, height };
+}
+
+/** Python's `round()`: half to even. */
+function roundHalfEven(x: number): number {
+  const r = Math.round(x);
+  return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
+}
+
+/** 32-bit FNV-1a of the UTF-8 bytes: a stable hash, the same in every SDK. */
+function fnv1a(text: string): number {
   let h = 0x811c9dc5;
-  for (const b of new TextEncoder().encode(label)) {
+  for (const b of new TextEncoder().encode(text)) {
     h ^= b;
     h = Math.imul(h, 0x01000193) >>> 0;
   }
-  return PALETTE[h % PALETTE.length]!;
+  return h;
 }
 
-function indexColour(i: number): [number, number, number] {
-  return PALETTE[i % PALETTE.length]!;
+/**
+ * `{ class: colour }` for the classes of one picture (Python's `_class_colour_map`): each class
+ * starts at `CLASS_PALETTE[fnv1a(name) % 16]`; when two land on the same colour, the one later in
+ * alphabetical order takes the next free colour (up to 16 classes are always distinct).
+ */
+export function classColourMap(names: Iterable<string>): Map<string, RGB> {
+  const k = CLASS_PALETTE.length;
+  const used = new Set<number>();
+  const out = new Map<string, RGB>();
+  // Python's sorted(): by code point (not localeCompare).
+  for (const name of [...new Set(names)].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))) {
+    let idx = fnv1a(name) % k;
+    while (used.has(idx) && used.size < k) idx = (idx + 1) % k;
+    used.add(idx);
+    out.set(name, CLASS_PALETTE[idx]!);
+  }
+  return out;
+}
+
+/**
+ * A class's own colour (`[r, g, b]`): `CLASS_PALETTE[fnv1a(utf8(label)) % 16]`, the same in the
+ * Python SDK. In one picture `toSVG` may move a class to the next free colour when two classes
+ * collide ({@link classColourMap}).
+ */
+export function classColour(label: string): RGB {
+  return CLASS_PALETTE[fnv1a(label) % CLASS_PALETTE.length]!;
+}
+
+/** Black or white, whichever reads better on `bg` (Python's `_text_colour`). */
+function textColour(bg: RGB): RGB {
+  const lum = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2];
+  return lum > 150 ? [0, 0, 0] : [255, 255, 255];
 }
 
 /** Grasp quality in [0, 1] → red → yellow → green (Python's `_quality_colour`). */
-function qualityColour(q: number): [number, number, number] {
+function qualityColour(q: number): RGB {
   q = clamp01(q);
   if (q < 0.5) return [255, Math.trunc(255 * (q / 0.5)), 0];
   return [Math.trunc(255 * (1 - (q - 0.5) / 0.5)), 255, 0];
@@ -188,7 +287,7 @@ function maskImage(
   width: number,
   height: number,
   alpha: number,
-  colourOf: (m: Mask, i: number) => [number, number, number],
+  colourOf: (m: Mask, i: number) => RGB,
 ): string | null {
   const pixels = new Uint8Array(width * height);
   const palette: Array<[number, number, number, number]> = [[0, 0, 0, 0]];
@@ -251,11 +350,13 @@ function paintMask(pixels: Uint8Array, m: Mask, width: number, height: number, v
   return true;
 }
 
-function graspGlyph(g: Grasp, isTarget: boolean): string {
-  const c = rgb(isTarget ? TARGET : qualityColour(g.quality));
-  const lw = isTarget ? 3 : 2;
+function graspGlyph(st: Style, g: Grasp, isTarget: boolean): string {
+  const colour = isTarget ? TARGET : qualityColour(g.quality);
+  const c = rgb(colour);
+  const extra = Math.max(1, Math.floor(st.lw / 2));
+  const lw = isTarget ? st.lw + extra : st.lw;
   const [x0, y0, x1, y1] = g.contactsFlat();
-  const plate = Math.max(6, Math.min(g.width * 0.35, 22));
+  const plate = Math.max(3 * st.lw, Math.min(g.width * 0.35, 11 * st.lw));
   const px = (-Math.sin(g.theta) * plate) / 2;
   const py = (Math.cos(g.theta) * plate) / 2;
   const line = (ax: number, ay: number, bx: number, by: number, w: number) =>
@@ -266,28 +367,34 @@ function graspGlyph(g: Grasp, isTarget: boolean): string {
     line(x0, y0, x1, y1, lw) +
     line(x0 - px, y0 - py, x0 + px, y0 + py, lw + 1) +
     line(x1 - px, y1 - py, x1 + px, y1 + py, lw + 1) +
-    `<circle cx="${n(g.x)}" cy="${n(g.y)}" r="${isTarget ? 3 : 2}" fill="${c}"/>` +
-    label(g.x, g.y - 4, text, isTarget ? TARGET : qualityColour(g.quality)) +
+    `<circle cx="${n(g.x)}" cy="${n(g.y)}" r="${isTarget ? st.lw + extra : st.lw}" fill="${c}"/>` +
+    label(st, g.x, g.y - 2 * st.lw, text, colour) +
     `</g>`
   );
 }
 
 /** A box outline `[x, y, w, h]`. */
-function box(bbox: readonly number[], colour: [number, number, number], thickness: number): string {
+function box(bbox: readonly number[], colour: RGB, thickness: number): string {
   const [x = 0, y = 0, w = 0, h = 0] = bbox;
   return `<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}" fill="none" stroke="${rgb(colour)}" stroke-width="${thickness}"/>`;
 }
 
-/** A label on a coloured band just above `(x, y)`, white text (Python's `_draw_label`). */
-function label(x: number, y: number, text: string, colour: [number, number, number]): string {
-  const fs = 14;
+/**
+ * A label on a band of `colour` just above `(x, y)`, kept inside the picture (at the top edge it
+ * overlaps the box), black or white text (Python's `_draw_label`).
+ */
+function label(st: Style, x: number, y: number, text: string, colour: RGB): string {
+  const fs = st.font;
+  const pad = Math.max(2, Math.floor(fs / 7));
   const tw = textWidth(text, fs);
-  const th = fs;
-  const ty = Math.max(0, y - th - 4);
+  const bw = tw + 2 * pad;
+  const bh = fs + 2 * pad;
+  const tx = Math.max(0, Math.min(x, st.width - bw));
+  const ty = Math.max(0, Math.floor(y) - bh);
   // textLength makes the browser fit the text to the band whatever font it picks.
   return (
-    `<rect x="${n(x)}" y="${n(ty)}" width="${n(tw + 4)}" height="${th + 4}" fill="${rgb(colour)}" fill-opacity="0.78"/>` +
-    `<text x="${n(x + 2)}" y="${n(ty + 2 + fs * 0.82)}" font-family="sans-serif" font-size="${fs}" fill="#fff" ` +
+    `<rect x="${n(tx)}" y="${n(ty)}" width="${n(bw)}" height="${n(bh)}" fill="${rgb(colour)}"/>` +
+    `<text x="${n(tx + pad)}" y="${n(ty + pad + fs * 0.8)}" font-family="sans-serif" font-size="${fs}" fill="${rgb(textColour(colour))}" ` +
     `textLength="${n(tw)}" lengthAdjust="spacingAndGlyphs">${escapeXML(text)}</text>`
   );
 }

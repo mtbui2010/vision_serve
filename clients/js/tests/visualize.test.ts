@@ -6,6 +6,9 @@ import { ClientResize, Mask, Result, classColour, selectTargetGrasp, toSVG } fro
 import { encodePalettePNG, zlibCompress } from "../src/png.js";
 import { mapResult } from "../src/resize.js";
 
+/** assert.ok with a message: without one, a failing assert.ok re-parses the TS source and can hang under tsx. */
+const ok = (cond: unknown, msg = "expected a truthy value"): void => assert.ok(cond, msg);
+
 /** Decode the palette PNG `toSVG` embeds (test-only, with node:zlib): indices, palette, alpha. */
 function decodePNG(png: Uint8Array): { width: number; height: number; pixels: Uint8Array; plte: Uint8Array; trns: Uint8Array } {
   assert.deepEqual([...png.subarray(0, 8)], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -38,7 +41,7 @@ function decodePNG(png: Uint8Array): { width: number; height: number; pixels: Ui
 /** The base64 PNG of the first <image> of an SVG, decoded. */
 function maskPNG(svg: string) {
   const m = svg.match(/<image href="data:image\/png;base64,([^"]+)"/);
-  assert.ok(m, "no mask image in the SVG");
+  ok(m, "no mask image in the SVG");
   return decodePNG(new Uint8Array(Buffer.from(m[1]!, "base64")));
 }
 
@@ -79,7 +82,7 @@ test("zlibCompress is a valid zlib stream for runs, rows and noise", () => {
     assert.deepEqual(new Uint8Array(inflateSync(z)), data);
   }
   // Runs compress to almost nothing.
-  assert.ok(zlibCompress(new Uint8Array(100_000)).length < 700); // 13 bits per 258 bytes
+  ok(zlibCompress(new Uint8Array(100_000)).length < 700); // 13 bits per 258 bytes
 });
 
 test("encodePalettePNG round-trips indices, palette and transparency", () => {
@@ -125,22 +128,22 @@ test("toSVG paints mask pixels, one colour per class, from the column-major RLE"
   }
   // Boxes and labels in the class colours; masks with a detection's box get no second label.
   assert.equal(count(svg, "text"), 2);
-  assert.ok(svg.includes(`stroke="${rgb(dog)}"`) && svg.includes(`stroke="${rgb(cat)}"`));
-  assert.ok(svg.includes(">dog 60%<") && svg.includes(">cat 70%<"));
+  ok(svg.includes(`stroke="${rgb(dog)}"`) && svg.includes(`stroke="${rgb(cat)}"`));
+  ok(svg.includes(">dog 60%<") && svg.includes(">cat 70%<"));
   // alpha, masks: false.
   assert.equal(maskPNG(toSVG(res, W, H, { alpha: 1 })).trns[1], 255);
   assert.equal(count(toSVG(res, W, H, { masks: false }), "image"), 0);
   // A class keeps its colour in another result; colorBy "index" colours by position instead.
   const other = Result.fromJSON({ task: "detection", detections: [{ bbox: [0, 0, 1, 1], class: "x", conf: 1 }, { bbox: [0, 0, 2, 2], class: "dog", conf: 1 }] });
-  assert.ok(toSVG(other, W, H).includes(`stroke="${rgb(dog)}"`));
-  assert.ok(toSVG(other, W, H, { colorBy: "index" }).includes(`stroke="rgb(255,165,0)"`)); // palette[1]
+  ok(toSVG(other, W, H).includes(`stroke="${rgb(dog)}"`));
+  ok(toSVG(other, W, H, { colorBy: "index" }).includes(`stroke="rgb(255,165,0)"`)); // palette[1]
 });
 
 test("toSVG: unlabelled masks get a box and 'mask conf%'; maskBoxes: false hides it", () => {
   const res = Result.fromJSON({ task: "segmentation", masks: [{ rle: "3 3", bbox: [1, 0, 1, 3], conf: 0.98 }] });
   const svg = toSVG(res, 2, 3);
   assert.equal(count(svg, "image"), 1);
-  assert.ok(svg.includes(">mask 98%<"));
+  ok(svg.includes(">mask 98%<"));
   const fills = maskPNG(svg).pixels;
   assert.deepEqual([...fills], [0, 1, 0, 1, 0, 1]); // column x = 1
   const bare = toSVG(res, 2, 3, { maskBoxes: false });
@@ -171,33 +174,33 @@ test("toSVG draws grasps: the best 3 per object by default, the target in red on
   // A glyph = closing line + two jaw plates + centre dot + label.
   assert.equal(count(svg, "line"), 3 * 4); // 3 bowl grasps + the class-agnostic one
   assert.equal(count(svg, "circle"), 4);
-  assert.ok(svg.includes(">bowl q0.90<") && !svg.includes(">bowl q0.60<"));
+  ok(svg.includes(">bowl q0.90<") && !svg.includes(">bowl q0.60<"));
   assert.equal(count(toSVG(res, 400, 400, { maxGraspsPerObject: null }), "circle"), 6);
   assert.equal(count(toSVG(res, 400, 400, { maxGraspsPerObject: 1 }), "circle"), 2);
   // The jaw line runs between the two contacts.
   const g = res.grasps[4]!;
   const [x0, y0, x1, y1] = g.contactsFlat().map((v) => String(Math.round(v * 100) / 100));
-  assert.ok(svg.includes(`<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"`));
+  ok(svg.includes(`<line x1="${x0}" y1="${y0}" x2="${x1}" y2="${y1}"`));
   // Quality colours as Python computes them (int() of 50.99... for 0.9): green-ish, red-ish.
-  assert.ok(svg.includes('stroke="rgb(50,255,0)"'));
-  assert.ok(svg.includes('stroke="rgb(255,102,0)"'));
+  ok(svg.includes('stroke="rgb(50,255,0)"'));
+  ok(svg.includes('stroke="rgb(255,102,0)"'));
 
   const target = selectTargetGrasp(res.grasps, { targetPoint: [300, 300] })!;
   const t = toSVG(res, 400, 400, { targetGrasp: target });
   const lastGlyph = t.slice(t.lastIndexOf("<g>"));
-  assert.ok(lastGlyph.includes('stroke="rgb(255,0,0)" stroke-width="3"'));
-  assert.ok(lastGlyph.includes(">q0.20<"));
+  ok(lastGlyph.includes('stroke="rgb(255,0,0)" stroke-width="3"'));
+  ok(lastGlyph.includes(">q0.20<"));
 });
 
 test("toSVG draws instance_detection and classification results; labels are escaped", () => {
   const inst = Result.fromJSON({ task: "instance_detection", detections: [{ bbox: [215, 230, 57, 89], class: "<dog&co>", conf: 0.93 }] });
   const svg = toSVG(inst, 640, 426);
   assert.equal(count(svg, "rect"), 2);
-  assert.ok(svg.includes(">&lt;dog&amp;co&gt; 93%<"));
+  ok(svg.includes(">&lt;dog&amp;co&gt; 93%<"));
   const cls = Result.fromJSON({ task: "classification", classifications: [{ class: "tusker", conf: 0.5 }, { class: "elephant", conf: 0.3 }] });
   const c = toSVG(cls, 640, 426);
   assert.equal(count(c, "text"), 2);
-  assert.ok(c.includes('fill="rgb(20,20,20)"') && c.includes(">tusker 50%<"));
+  ok(c.includes('fill="rgb(20,20,20)"') && c.includes(">tusker 50%<"));
 });
 
 test("toSVG highlights the target box, its own item or a standalone box", () => {
@@ -207,15 +210,16 @@ test("toSVG highlights the target box, its own item or a standalone box", () => 
   });
   const own = toSVG(res, 50, 50, { targetBox: res.detections[1]! });
   assert.equal(count(own, "rect"), 4);
-  assert.ok(own.includes('<rect x="20" y="0" width="10" height="10" fill="none" stroke="rgb(255,0,0)" stroke-width="4"/>'));
+  // 50 x 50: line width 1, the target twice as thick.
+  ok(own.includes('<rect x="20" y="0" width="10" height="10" fill="none" stroke="rgb(255,0,0)" stroke-width="2"/>'), own);
   const byBox = toSVG(res, 50, 50, { targetBox: [20, 0, 10, 10] });
   assert.equal(byBox, own);
   const standalone = toSVG(res, 50, 50, { targetBox: [1, 2, 3, 4] });
   assert.equal(count(standalone, "rect"), 5);
-  assert.ok(standalone.endsWith('<rect x="1" y="2" width="3" height="4" fill="none" stroke="rgb(255,0,0)" stroke-width="4"/></svg>'));
+  ok(standalone.endsWith('<rect x="1" y="2" width="3" height="4" fill="none" stroke="rgb(255,0,0)" stroke-width="2"/></svg>'), standalone);
   // A target mask keeps its red box even with maskBoxes: false.
   const seg = Result.fromJSON({ task: "segmentation", masks: [{ bbox: [1, 1, 2, 2], conf: 0.5 }, { bbox: [3, 3, 1, 1], conf: 0.4 }] });
   const m = toSVG(seg, 8, 8, { maskBoxes: false, targetBox: seg.masks[1] as Mask });
   assert.equal(count(m, "rect"), 2);
-  assert.ok(m.includes('stroke="rgb(255,0,0)" stroke-width="4"'));
+  ok(m.includes('stroke="rgb(255,0,0)" stroke-width="2"'), m);
 });

@@ -4,6 +4,9 @@ import assert from "node:assert/strict";
 import { ClientResize, Classification, Detection, Grasp, Mask, Result } from "../src/index.js";
 import { mapResult } from "../src/resize.js";
 
+/** assert.ok with a message: without one, a failing assert.ok re-parses the TS source and can hang under tsx. */
+const ok = (cond: unknown, msg = "expected a truthy value"): void => assert.ok(cond, msg);
+
 /** float32 values (what the server computes), so base64 round trips are exact. */
 const f32 = (xs: number[]) => Array.from(Float32Array.from(xs));
 const b64 = (xs: number[]) => Buffer.from(Float32Array.from(xs).buffer).toString("base64");
@@ -113,7 +116,7 @@ test("Grasp pose and jaw contacts", () => {
   const g = new Grasp(10, 20, Math.PI / 2, 8, 0.9, "cup", 0.7);
   assert.deepEqual(g.pose, [10, 20, 8, Math.PI / 2]);
   const [[x0, y0], [x1, y1]] = g.contacts();
-  assert.ok(Math.abs(x0 - 10) < 1e-12 && Math.abs(x1 - 10) < 1e-12);
+  ok(Math.abs(x0 - 10) < 1e-12 && Math.abs(x1 - 10) < 1e-12);
   assert.deepEqual([y0, y1], [16, 24]);
   assert.deepEqual(g.contactsFlat(), [x0, y0, x1, y1]);
 });
