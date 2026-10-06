@@ -83,7 +83,9 @@ levels, 38 of 38 boxes, mAP 43.80 against 44.09.
 opened): the summary, what the model sees next to the reference with a heatmap of the difference,
 the boxes of both models on the photos where they disagree most, and the details. `--json` prints
 one object, `{"verdict", "reason", "summary", "details"}`, for scripts. The exit code is 0 for
-PASS or WARN, 1 for FAIL, 2 for a usage or setup error.
+PASS or WARN, 1 for FAIL, 2 for a usage or setup error, and also 2 (verdict `ERROR`) when a check
+you asked for by flag could not run (`--reference`/`--checkpoint`: B1 and B2, `--labels`: C), for
+example out of GPU memory; the checks that did run are still printed.
 
 ```mermaid
 flowchart LR

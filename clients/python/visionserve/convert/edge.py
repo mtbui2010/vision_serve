@@ -442,10 +442,47 @@ class Variant:
     map: Optional[float] = None
     map50: Optional[float] = None
     eval_error: str = ""
+    sens_measured: tuple = ()     # mixed: formats measured here because the --sensitivity file lacked them
+    warn: str = ""                # a WARN finding for the report (e.g. the mixed candidate was skipped)
 
     @property
     def label(self) -> str:
         return self.fmt + (" (TensorRT)" if self.ep == "tensorrt" else "")
+
+
+def complete_scores(m: InstalledModel, scores, ladder: Sequence[str], feeds, method: str, gpu: bool, v: Variant,
+                    source: str):
+    """Scores covering every format of the mixed `ladder`: the given ones (a --sensitivity file),
+    plus the formats they lack measured here and merged in per layer. Returns (scores, the formats
+    measured). When measuring is impossible, sets v.warn (a WARN naming the fix) and raises, so the
+    mixed candidate is skipped and the other candidates still run."""
+    from .precision import parse_formats
+    have = {f for s in scores for f in s.errs}
+    missing = [f for f in parse_formats(list(ladder)) if f not in have]
+    if not missing:
+        return scores, ()
+    fix = f"`visionserve sensitivity {m.name} --formats {','.join(ladder)} --save FILE`"
+    log(f"edge: {source} has no {', '.join(missing)} scores (only {', '.join(sorted(have)) or 'none'}); measuring "
+        f"{', '.join(missing)} here for the mixed candidate and reusing the rest")
+    try:
+        extra, _ = measure(m, feeds, missing, method, gpu)
+    except Exception as e:  # noqa: BLE001 — the mixed row says why; the other candidates go on
+        v.warn = (f"mixed skipped: {source} has no {', '.join(missing)} scores and measuring them here failed "
+                  f"({type(e).__name__}: {e}). Re-run {fix} and pass that file to --sensitivity")
+        raise ConvertError(v.warn) from e
+    by_name = {s.name: s for s in extra}
+    if by_name and not any(s.name in by_name for s in scores):
+        v.warn = (f"mixed skipped: the layers in {source} are not this model's ({m.onnx.name}); re-run {fix} for "
+                  f"{m.name} and pass that file to --sensitivity")
+        raise ConvertError(v.warn)
+    merged = []
+    for s in scores:
+        add = by_name.pop(s.name, None)
+        merged.append(dataclasses.replace(s, errs={**s.errs, **(add.errs if add is not None else {})}))
+    # Layers the file did not score (e.g. a MatMul INT8 skips) but the new format applies to.
+    for i, s in enumerate(sorted(by_name.values(), key=lambda s: s.rank), len(merged) + 1):
+        merged.append(dataclasses.replace(s, rank=i))
+    return merged, tuple(missing)
 
 
 def _size(p) -> int:
@@ -483,9 +520,12 @@ def build_variants(m: InstalledModel, preset: Preset, feeds, args, workdir: Path
                 v.note = f"INT4 weight-only on {len(ok4)} MatMul(s) (RTN, block 32); the rest FP32"
             elif fmt == "mixed":
                 ladder = list(preset.mixed_formats)
+                sfeeds = feeds[:max(1, args.sens_images)]
                 if scores is None:
-                    sfeeds = feeds[:max(1, args.sens_images)]
                     scores, _ = measure(m, sfeeds, P.parse_formats(ladder), method, args.gpu)
+                else:
+                    scores, v.sens_measured = complete_scores(m, scores, ladder, sfeeds, method, args.gpu, v,
+                                                              getattr(args, "sensitivity", None) or "the given scores")
                 missing = [f for f in ladder if not any(f in s.errs for s in scores)]
                 if missing:
                     raise ConvertError(f"the sensitivity scores do not cover {', '.join(missing)}; re-run "
@@ -500,6 +540,9 @@ def build_variants(m: InstalledModel, preset: Preset, feeds, args, workdir: Path
                 cnt = {f: sum(1 for x in asg.values() if x == f) for f in ("int4", "int8", "fp16", "fp32")}
                 v.note = ("per layer " + " ".join(f"{f}={c}" for f, c in cnt.items() if c)
                           + f" (sensitivity-driven, target error {fmt_num(args.max_output_err)}, {len(steps)} builds)")
+                if v.sens_measured:
+                    v.note += (f"; {', '.join(v.sens_measured)} sensitivity measured here, the rest reused from "
+                               f"{args.sensitivity}")
             else:
                 raise ConvertError(f"unknown candidate {fmt}")
             r = cmp(dst)
@@ -820,6 +863,14 @@ def run_optimize(args) -> Report:
             pick = pick_
         rep = optimize_report(m, preset, variants, pick, rule, status, args, ev, len(feeds), time.time() - t0,
                               installed, server_error, trt_pick)
+        for v in variants:
+            if v.warn and v.ep == "default":
+                rep.notes.append((WARN, v.warn))
+            elif v.sens_measured and v.ep == "default":
+                rep.notes.append(f"{args.sensitivity} has no {', '.join(v.sens_measured)} scores: the mixed candidate "
+                                 f"measured them here ({len(feeds[:max(1, args.sens_images)])} image(s)) and reused "
+                                 "the file's other scores. Save both with `visionserve sensitivity --formats "
+                                 f"{','.join(preset.mixed_formats)} --save FILE` to skip that next time.")
         if install_note:
             rep.notes.append((WARN, install_note))
             if rep.verdict == PASS:

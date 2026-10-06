@@ -353,6 +353,20 @@ def test_running_server_with_the_model_is_used(tmp_path):
     assert h is not None and not h.temporary and h.url == "http://h:1"
 
 
+def test_model_listed_late_after_install_is_not_another_registry(tmp_path):
+    """A server that rescans /api/models at most once a second lists a model just installed only
+    on the next try: asked again after ~1.1 s, it is used, with no 'different registry' warning."""
+    answers, slept = [[], ["m"]], []
+    h, log = _acq(tmp_path, url="http://h:1", health=lambda u: True, listed=lambda u: answers.pop(0),
+                  sleep=slept.append)
+    assert h is not None and not h.temporary and "different registry" not in log and "WARNING" not in log
+    assert slept == [serverctl.LIST_RETRY_SECONDS] and serverctl.LIST_RETRY_SECONDS > 1.0
+    # Listed at once: no wait.
+    slept.clear()
+    _acq(tmp_path, url="http://h:1", health=lambda u: True, listed=lambda u: ["m"], sleep=slept.append)
+    assert slept == []
+
+
 def test_server_on_another_registry_is_not_used(tmp_path):
     started = []
 

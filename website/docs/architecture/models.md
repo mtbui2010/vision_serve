@@ -289,7 +289,7 @@ reported as a warning; it never crashes the server. Folders whose name starts wi
 		}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/registry.go#L65-L69)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/registry.go#L98-L102)
 
 The license check is the first rule that matters. The allowlist is keyed by the lowercased SPDX
 id, so `apache-2.0` copied from a HuggingFace model card is accepted and stored back as

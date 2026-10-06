@@ -51,7 +51,10 @@ visionserve version
 
 `check` needs a running server (`--server`, default `$VISIONSERVE_HOST` or
 `http://localhost:11435`) and prints a `PASS`, `WARN` or `FAIL` verdict first; it exits `0` for
-PASS or WARN, `1` for FAIL and `2` for a usage or setup error. See
+PASS or WARN, `1` for FAIL and `2` for a usage or setup error. A check you asked for by flag
+(`--reference`/`--checkpoint`: preprocessing and outputs; `--labels`: accuracy) that could not run,
+for example out of GPU memory, is an `ERROR` verdict with exit `2`, not a WARN; the checks that did
+run are still printed. See
 [Check it behaves like training](../guides/check-training.md).
 
 `run` takes the options of `POST /api/predict` as flags named after the form fields

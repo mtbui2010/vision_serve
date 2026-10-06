@@ -4,7 +4,8 @@ Order:
   1. --no-server                      -> no server; tiers B/C/server-speed are SKIPPED, with the reason.
   2. --server URL / $VISIONSERVE_HOST / http://localhost:11435, if it answers /api/health AND lists
      every model just installed (GET /api/models). A server only sees ITS OWN registry directory:
-     one that answers but does not list the model is serving another --models dir, so it is
+     one that answers but does not list the model (asked twice, ~1 s apart, as a model just
+     installed may not be listed yet by an older server) is serving another --models dir, so it is
      reported and not used.
   3. otherwise a TEMPORARY local server on the registry the model was installed into:
         $VISIONSERVE_BIN serve --models DIR --addr 127.0.0.1:<free port> --idle-unload-seconds 0
@@ -24,6 +25,10 @@ from pathlib import Path
 from typing import Callable, List, Optional, Sequence
 
 DEFAULT_URL = "http://localhost:11435"
+# A server rescans its registry for GET /api/models at once when a model folder appeared (newer
+# servers), else at most once a second: a model missing from the list is asked for once more
+# after this long before the server is judged to serve another registry.
+LIST_RETRY_SECONDS = 1.1
 
 
 class ServerHandle:
@@ -128,6 +133,12 @@ def acquire(names: Sequence[str], models_dir, *, url: Optional[str] = None, no_s
     if health(target):
         try:
             have = set(listed(target))
+            missing = [n for n in names if n not in have]
+            if missing:
+                # Just installed: an older server rescans its registry for /api/models at most once
+                # a second, so ask once more after that before concluding it serves another registry.
+                sleep(LIST_RETRY_SECONDS)
+                have = set(listed(target))
         except Exception as e:  # noqa: BLE001
             have = set()
             log(f"server: {target} answers /api/health but GET /api/models failed ({e})")

@@ -99,7 +99,8 @@ func parseCheckArgs(args []string) (checkOpts, error) {
 // against a RUNNING server, exactly like `convert` runs the image: host paths mounted (inputs
 // read-only, the --report directory read-write, the registry read-only), --network host so the
 // container reaches the server on localhost, the calling user's uid/gid. Exit status: 0 PASS or
-// WARN, 1 FAIL, 2 usage or setup error.
+// WARN, 1 FAIL, 2 usage or setup error or an asked-for tier that could not run (ERROR verdict;
+// checkExit passes the container's 2 through).
 func runCheck(args []string) error {
 	if len(args) == 0 || args[0] == "-h" || args[0] == "--help" || args[0] == "help" {
 		fmt.Print(checkUsage)
@@ -352,7 +353,8 @@ Flags:
   --image IMAGE         converter image (default $VISIONSERVE_CONVERT_IMAGE or ` + defaultConvertImage + `)
 
 Runs in the converter image (Docker), like convert. Exit status: 0 PASS or WARN, 1 FAIL, 2 usage or
-setup error (no server running, model not installed, missing file).
+setup error (no server running, model not installed, missing file), or a check asked for by flag
+that could not run (verdict ERROR; --reference/--checkpoint: B1 and B2, --labels: C).
 
 Examples:
   visionserve check rf-detr --images ./photos

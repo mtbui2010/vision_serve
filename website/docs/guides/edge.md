@@ -121,7 +121,9 @@ WARN: 9 of 114 layers are sensitive to INT8; the worst is …/encoder/encoder/en
 FP16 costs nothing measurable on any layer of this model; INT8 hurts nine of them, most of them
 the MLP layers of the backbone. Those are the layers to keep in FP32, which is what `optimize`'s
 `mixed` candidate does. `--save` writes the scores so that `optimize --sensitivity sens.json` does
-not measure them again. `--formats int8,fp8,fp4` also *simulates* the formats Thor adds (nothing is
+not measure them again. A file that lacks a format the target's `mixed` candidate needs (saved with
+`--formats int8` only, while `jetson-orin` mixes INT8 and FP16) is completed: `optimize` measures
+the missing format, reuses the rest, and says so in its output. `--formats int8,fp8,fp4` also *simulates* the formats Thor adds (nothing is
 built: ONNX Runtime cannot run them).
 
 ## 3. optimize: the best variant for a target
