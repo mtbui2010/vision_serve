@@ -459,6 +459,8 @@ export class ModelInfo {
    */
   readonly maxUsefulSide: number | null;
   readonly maxUsefulShortSide: number | null;
+  /** Whether the model reads an uploaded depth map (`accepts_depth`; false on an older server). */
+  readonly acceptsDepth: boolean;
 
   constructor(
     name: string,
@@ -467,6 +469,7 @@ export class ModelInfo {
     state: ModelState,
     maxUsefulSide: number | null = null,
     maxUsefulShortSide: number | null = null,
+    acceptsDepth = false,
   ) {
     this.name = name;
     this.task = task;
@@ -474,6 +477,7 @@ export class ModelInfo {
     this.state = state;
     this.maxUsefulSide = maxUsefulSide;
     this.maxUsefulShortSide = maxUsefulShortSide;
+    this.acceptsDepth = acceptsDepth;
   }
 
   static fromJSON(d: Record<string, unknown>): ModelInfo {
@@ -484,6 +488,7 @@ export class ModelInfo {
       String(d.state ?? ""),
       positiveInt(d.max_useful_side),
       positiveInt(d.max_useful_short_side),
+      d.accepts_depth === true,
     );
   }
 

@@ -9,7 +9,7 @@ import (
 // (api.ModelInfo.MaxUsefulSide / MaxUsefulShortSide): the manifest's runtime.max_useful_side
 // when it sets one (N > 0 bounds the longer side, 0 = never resize), else what the
 // architecture derives from the manifest's preprocessing (models.RegisterUsefulSide). An
-// architecture that registers nothing — masks, OCR, depth-aligned grasping, crop namers,
+// architecture that registers nothing — masks, OCR, grasp (full-resolution masks), crop namers,
 // templates, anything not reasoned about — gets the zero value: send full resolution.
 //
 // It reads only the manifest: no weights, no model is built, so listing stays cheap and a model

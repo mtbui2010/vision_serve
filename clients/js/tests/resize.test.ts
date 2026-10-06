@@ -308,3 +308,10 @@ test("mapResult maps masks, grasps and keeps the mask at the sent size", () => {
   assert.equal(r.clientResize, cr);
   assert.equal(r.filterByConf(0, 1).clientResize, cr); // carried through the helpers
 });
+
+test("ModelInfo reads accepts_depth (false when absent)", () => {
+  const withDepth = ModelInfo.fromJSON({ name: "background", task: "segmentation", license: "Apache-2.0", state: "available", accepts_depth: true });
+  assert.equal(withDepth.acceptsDepth, true);
+  const old = ModelInfo.fromJSON({ name: "rf-detr", task: "detection", license: "Apache-2.0", state: "loaded" });
+  assert.equal(old.acceptsDepth, false);
+});
