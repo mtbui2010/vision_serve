@@ -358,6 +358,328 @@ dog 0.400
 
 The dog in front (0.697) is closer to the camera than the person behind it (0.309).
 
+## Visualize results
+
+The JS SDK has one drawing helper: `toSVG(result, width, height)`. It returns an SVG string
+with boxes and labels, to lay over the photo. It does not decode or change the photo, so it
+cannot paint masks; you do that yourself (below). The examples in this section and in
+[Utilities](#utilities) were run in Node 20 against a server on one NVIDIA RTX A6000 (CUDA),
+port 11820, with the SDK in this repository.
+
+| Result | What `toSVG` draws |
+|---|---|
+| `task` `detection` or `open_vocab` (Grounded-SAM too) | A box and the label `class conf%` per detection. |
+| `task` `segmentation` | The **box** of each mask and `mask conf%`; not the mask's pixels. |
+| `task` `classification` | The labels in the top-left corner. |
+| `grasp`, `instance_detection`, `depth`, `embed` | Nothing: an empty `<svg>`. |
+
+The boxes are written in the photo's pixels and the SVG has no `viewBox`, so pass the photo's
+**own** size as `width` and `height` (not the size it is shown at).
+
+```ts
+import { Client, toSVG } from "visionserve";
+
+const client = new Client();
+const runs: Array<[string, string, object]> = [
+  ["rf-detr", "dogs.jpg", {}],
+  ["grounding-dino", "cat.jpg", { prompt: "cat. laptop." }],
+  ["grounded-sam", "dogs.jpg", { prompt: "dog." }],
+  ["mobile-sam", "cat.jpg", { box: [310, 175, 310, 195] }],
+  ["efficientnet-b0", "elephant.jpg", {}],
+  ["grasp-rfdetr", "food.jpg", {}],
+  ["midas", "dogs.jpg", {}],
+];
+for (const [model, photo, opts] of runs) {
+  const res = await client.predict(model, photo, opts);
+  const svg = toSVG(res, 640, 480);
+  const count = (tag: string) => (svg.match(new RegExp("<" + tag, "g")) ?? []).length;
+  console.log(model.padEnd(16), res.task.padEnd(15), "rect", count("rect"), "text", count("text"));
+}
+```
+
+```text
+rf-detr          detection       rect 7 text 7
+grounding-dino   open_vocab      rect 2 text 2
+grounded-sam     open_vocab      rect 4 text 4
+mobile-sam       segmentation    rect 1 text 1
+efficientnet-b0  classification  rect 0 text 5
+grasp-rfdetr     grasp           rect 0 text 0
+midas            depth           rect 0 text 0
+```
+
+(`grasp-rfdetr` returns 3 detections, 3 masks and 60 grasps here, and `toSVG` draws none of
+them, because its task is `grasp`.)
+
+### In Node: one SVG file with the photo
+
+`probeHeader(bytes)` reads a JPEG's or PNG's size from its header (EXIF rotation applied), so
+you need no image library:
+
+```ts
+import { readFile, writeFile } from "node:fs/promises";
+import { Client, probeHeader, toSVG } from "visionserve";
+
+const client = new Client();
+const bytes = new Uint8Array(await readFile("dogs.jpg"));
+const { width: w, height: h } = probeHeader(bytes)!;          // the photo's size, no decoder needed
+const res = await client.predict("rf-detr", bytes);
+const overlay = toSVG(res, w, h);                              // "<svg ...>boxes + labels</svg>"
+console.log(w, h, (overlay.match(/<rect/g) ?? []).length, "boxes");
+
+// One standalone SVG file: the photo as an <image>, the overlay on top. Open it in a browser.
+const photo = `<image href="data:image/jpeg;base64,${Buffer.from(bytes).toString("base64")}" width="${w}" height="${h}"/>`;
+await writeFile("dogs-boxes.svg", overlay.replace(">", ">" + photo));
+```
+
+```text
+640 426 7 boxes
+```
+
+`dogs-boxes.svg` opens in any browser. To get a PNG or JPEG, convert it with a tool such as
+`rsvg-convert`, or render it in a headless browser.
+
+### In a browser: an overlay on the `<img>`
+
+```html
+<div style="position: relative; display: inline-block">
+  <img id="photo" src="dogs.jpg" style="display: block; width: 480px">
+  <div id="overlay" style="position: absolute; inset: 0"></div>
+</div>
+```
+
+```ts
+const img = document.querySelector("#photo") as HTMLImageElement;
+const blob = await (await fetch(img.src)).blob();
+const res = await client.predict("rf-detr", blob);
+const [w, h] = [img.naturalWidth, img.naturalHeight];        // the photo's own pixels
+// viewBox + 100 % size: the overlay follows the <img> however large it is shown.
+document.querySelector("#overlay")!.innerHTML = toSVG(res, w, h)
+  .replace("<svg ", `<svg viewBox="0 0 ${w} ${h}" style="width: 100%; height: 100%" `);
+```
+
+(The page itself was not run. The overlay part was checked in headless Chrome: with the
+`viewBox`, the boxes of a 640-pixel result sit on the dogs of the photo shown 480 pixels wide.)
+
+### Masks on a canvas
+
+`Mask.toMask(width, height)` gives one byte per pixel (1 = inside), row by row. Mix a colour into
+the pixels of a canvas with it. The function below works on any RGBA buffer; here it ran in Node
+on a white buffer, and in a browser you pass `ctx.getImageData(0, 0, w, h).data`:
+
+```ts
+import { Client, Result } from "visionserve";
+
+/** Tint every mask of `res` into an RGBA pixel buffer (row-major, 4 bytes per pixel). */
+function paintMasks(rgba: Uint8ClampedArray, res: Result, w: number, h: number, alpha = 0.5) {
+  const colours = [[255, 59, 59], [255, 165, 0], [50, 205, 50], [0, 191, 255]];
+  res.masks.forEach((m, i) => {
+    const [r, g, b] = colours[i % colours.length]!;
+    const bits = m.toMask(w, h);                          // 1 inside, row-major
+    for (let k = 0; k < bits.length; k++) {
+      if (!bits[k]) continue;
+      rgba[4 * k] = rgba[4 * k]! * (1 - alpha) + r! * alpha;
+      rgba[4 * k + 1] = rgba[4 * k + 1]! * (1 - alpha) + g! * alpha;
+      rgba[4 * k + 2] = rgba[4 * k + 2]! * (1 - alpha) + b! * alpha;
+    }
+  });
+}
+
+const client = new Client();
+const res = await client.predict("grounded-sam", "dogs.jpg", { prompt: "dog." });
+const [w, h] = [640, 426];
+const rgba = new Uint8ClampedArray(w * h * 4).fill(255);  // stand-in for a canvas's pixels
+paintMasks(rgba, res, w, h);
+let tinted = 0;
+for (let k = 0; k < w * h; k++) if (rgba[4 * k + 1] !== 255 || rgba[4 * k] !== 255) tinted++;
+console.log(res.masks.length, "masks,", tinted, "pixels tinted");
+```
+
+```text
+4 masks, 9217 pixels tinted
+```
+
+In a browser:
+
+```ts
+const canvas = document.querySelector("canvas")!;
+const ctx = canvas.getContext("2d")!;
+ctx.drawImage(img, 0, 0);                                     // canvas.width/height = the photo's size
+const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+paintMasks(pixels.data, res, canvas.width, canvas.height);
+ctx.putImageData(pixels, 0, 0);
+```
+
+(Not run in a browser either; the `paintMasks` part is the code run above.)
+
+### Draw it yourself: masks, boxes and grasps as SVG
+
+For grasps, or your own style, write the SVG elements yourself. A mask becomes one 1-pixel-high
+`<rect>` per run of pixels in a row; a grasp is the line between its two jaws:
+
+```ts
+import { readFile, writeFile } from "node:fs/promises";
+import { Client, probeHeader } from "visionserve";
+
+const client = new Client();
+const bytes = new Uint8Array(await readFile("food.jpg"));
+const { width: w, height: h } = probeHeader(bytes)!;
+const res = await client.predict("grasp-rfdetr", bytes);
+const parts: string[] = [`<image href="data:image/jpeg;base64,${Buffer.from(bytes).toString("base64")}" width="${w}" height="${h}"/>`];
+res.masks.forEach((m) => {                                   // masks: one 1-px-high rect per run of a row
+  const bits = m.toMask(w, h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++) {
+      if (!bits[y * w + x] || bits[y * w + x - 1] && x > 0) continue;
+      let e = x;
+      while (e < w && bits[y * w + e]) e++;
+      parts.push(`<rect x="${x}" y="${y}" width="${e - x}" height="1" fill="#00e0ff" opacity="0.4"/>`);
+    }
+});
+for (const d of res.detections) {                            // boxes + labels
+  const [x, y, bw, bh] = d.bbox as [number, number, number, number];
+  parts.push(`<rect x="${x}" y="${y}" width="${bw}" height="${bh}" fill="none" stroke="yellow" stroke-width="3"/>`);
+  parts.push(`<text x="${x + 4}" y="${y + 18}" fill="yellow" font-family="sans-serif" font-size="16">${d.cls} ${d.conf.toFixed(2)}</text>`);
+}
+for (const g of res.grasps) {                                // grasps: a line between the two jaws
+  const dx = (Math.cos(g.theta) * g.width) / 2, dy = (Math.sin(g.theta) * g.width) / 2;
+  parts.push(`<line x1="${g.x - dx}" y1="${g.y - dy}" x2="${g.x + dx}" y2="${g.y + dy}" stroke="red" stroke-width="3"/>`);
+}
+await writeFile("food-custom.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">${parts.join("")}</svg>`);
+console.log(res.masks.length, "masks,", res.detections.length, "boxes,", res.grasps.length, "grasps");
+```
+
+```text
+3 masks, 3 boxes, 60 grasps
+```
+
+The file shows the three masks in light blue, yellow boxes with labels, and 60 red grasp lines
+(the JS SDK keeps every grasp the server sends). Every row of a mask adds elements, so the file
+grows with the masks: 390 KB here, 300 KB of it the embedded photo. For many or large masks, use
+a canvas instead.
+
+## Utilities
+
+These helpers work on results in your program and never call the server.
+
+| Where | Helper | What it does | Use it when |
+|---|---|---|---|
+| `Result` | `filterByConf(minConf = 0, maxConf = 1)` | Keeps detections, masks and classifications whose `conf` is in the range. | Hiding weak guesses. |
+| module | `filterBySize(result, { minSize, maxSize, imageWidth, imageHeight })` (also `client.filterBySize`) | Keeps detections and masks by box area: **fractions** (0–1) of the photo when both sizes are given, else pixels². `0` = no limit. | Dropping tiny or huge boxes. |
+| `Result` | `sortByConf(descending = true)`, `topK(k)` | Orders by `conf`; keeps the `k` best of each list. | Only the best few. |
+| `Result` | `nms(iouThreshold = 0.5)` | Greedy non-maximum suppression on detections (masks are kept). | Merged results with overlapping boxes. |
+| `Result` | `groupByClass()` | `{ label: Result }`; a mask joins the detection with the same box, other masks go under `""`. Each group keeps the result's depth map, embeddings and all grasps. | Handling each class apart. |
+| `Result` | `Result.fromJSON(obj)` | Builds a `Result` from the server's JSON (`class`, `depth_map`, ...). | Results saved from an HTTP call. |
+| `Mask` | `toMask(width, height)`, `toMask2D(width, height)` | The mask as a row-major `Uint8Array` (1 = inside), or `boolean[height][width]`. | Area, union, painting pixels. |
+| module | `getDepthAtDetection(depthResult, detResult, { imageWidth, imageHeight, mode })` | The depth model's value under each box (relative 0–1, larger = closer). | "Which object is nearer?" |
+| module | `toSVG(result, width, height)` | Boxes and labels as an SVG string ([above](#visualize-results)). | Drawing. |
+| module | `probeHeader(bytes)` | `{ width, height, isJpeg, orientation }` from a JPEG or PNG header, EXIF rotation applied, or `null`. | The photo's size without an image library. |
+| module | `targetSize(width, height, { maxSide, maxShortSide, region })` | The size a photo would be shrunk to. | Planning uploads. |
+| `Client` | `usefulSide(model)` | `[maxSide, maxShortSide]`: the model's size hint, `null` = none. | Knowing how big a photo is worth sending. |
+| module | `ClientResize` (`res.clientResize`) | What was uploaded: `originalWidth/Height`, `sentWidth/Height`, `jpegQuality`, `reason`, `resized`, `toSentX/Y()`, `toOriginalX/Y()`. | Checking the client-side resize. |
+| module | `normalizePrompt(model, prompt)`, `isLoopback(host)` | The prompt `predict` sends; whether a host is this machine. | Debugging prompts and resizing. |
+
+Not in the JS SDK (use the [Python SDK](python.md#utilities) or write a few lines): grasp
+helpers (`filterGrasps`, a grasp's pose or jaw points; the SVG example above has the jaw maths), camera and
+robot helpers (back-projection, distances in metres, target selection), and a `toJSON` in the
+server's format: `JSON.stringify(res)` writes the object's own names (`cls`, `depthMap`, ...),
+which `Result.fromJSON` does not read back.
+
+### Filters and depth
+
+```ts
+import { Client, filterBySize, getDepthAtDetection } from "visionserve";
+
+const client = new Client();
+const res = await client.predict("rf-detr", "dogs.jpg");
+const [W, H] = [640, 426];
+console.log(res.detections.length, "detections");
+console.log(res.filterByConf(0.8).detections.map((d) => d.cls));
+console.log(filterBySize(res, { minSize: 0.02, imageWidth: W, imageHeight: H }).detections.map((d) => d.cls));
+console.log(filterBySize(res, { maxSize: 3000 }).detections.length, "boxes of at most 3000 px²");
+console.log(res.topK(3).detections.map((d) => +d.conf.toFixed(2)));
+console.log(Object.fromEntries(Object.entries(res.groupByClass()).map(([k, v]) => [k, v.detections.length])));
+console.log(res.nms(0.5).detections.length, "after nms(0.5)");
+
+const depth = await client.predict("midas", "dogs.jpg");
+const near = getDepthAtDetection(depth, res, { imageWidth: W, imageHeight: H, mode: "median" });
+console.log(near.slice(0, 4).map((v) => +v!.toFixed(3)));
+```
+
+```text
+7 detections
+[ 'person', 'dog', 'dog', 'person', 'dog', 'dog' ]
+[ 'person', 'person', 'bench' ]
+1 boxes of at most 3000 px²
+[ 0.94, 0.92, 0.9 ]
+{ person: 2, dog: 4, bench: 1 }
+7 after nms(0.5)
+[ 0.309, 0.697, 0.401, 0.301 ]
+```
+
+The filters return a new `Result`, so they chain (`res.filterByConf(0.5).topK(2)`).
+
+### Masks: area and union
+
+```ts
+import { Client } from "visionserve";
+
+const client = new Client();
+const res = await client.predict("grounded-sam", "dogs.jpg", { prompt: "dog." });
+const [W, H] = [640, 426];
+const masks = res.masks.map((m) => m.toMask(W, H));          // Uint8Array, 1 inside, row-major
+const area = (bits: Uint8Array) => bits.reduce((s, b) => s + b, 0);
+console.log("areas:", masks.map(area));
+const union = new Uint8Array(W * H);
+for (const bits of masks) bits.forEach((b, k) => { if (b) union[k] = 1; });
+console.log("union:", area(union), "px =", ((100 * area(union)) / (W * H)).toFixed(2), "% of the photo");
+const grid = res.masks[0]!.toMask2D(W, H);                    // boolean[H][W]
+console.log(grid.length, grid[0]!.length, grid[150]![295]);
+```
+
+```text
+areas: [ 1297, 2417, 3380, 2123 ]
+union: 9217 px = 3.38 % of the photo
+426 640 true
+```
+
+### Sizes and the client-side resize
+
+```ts
+import { Client, ClientResize, targetSize } from "visionserve";
+
+const client = new Client();
+console.log(await client.usefulSide("grounding-dino"), await client.usefulSide("mobile-sam"));
+console.log(targetSize(4000, 3000, { maxSide: 1333 }), targetSize(4000, 3000, { maxShortSide: 800 }));
+const res = await client.predict("grounding-dino", "dogs.jpg", { prompt: "dog.", resize: 320 });
+console.log(res.clientResize);              // null: Node without sharp has no codec, sent as given
+const cr = new ClientResize(640, 426, 320, 213, 90, "resize=320");   // what a codec would report
+console.log(cr.resized, cr.toSentX(640), cr.toOriginalX(160), cr.toOriginalY(100));
+```
+
+```text
+[ null, 1600 ] [ null, null ]
+[ 1333, 1000 ] [ 1067, 800 ]
+null
+true 320 320 200
+```
+
+### JSON
+
+```ts
+import { Client, Result } from "visionserve";
+
+const client = new Client();
+const res = await client.predict("grounded-sam", "dogs.jpg", { prompt: "dog." });
+console.log(Object.keys(JSON.parse(JSON.stringify(res))).slice(0, 6));   // the object's own names
+const back = Result.fromJSON({ task: "detection", model: "m", detections: [{ bbox: [1, 2, 3, 4], class: "dog", conf: 0.9 }] });
+console.log(back.detections[0]!.cls, back.detections[0]!.bbox);
+```
+
+```text
+[ 'task', 'model', 'detections', 'masks', 'grasps', 'classifications' ]
+dog [ 1, 2, 3, 4 ]
+```
+
 ## Errors
 
 Non-2xx answers and network failures reject with `VisionServeError`:

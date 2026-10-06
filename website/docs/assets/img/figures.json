@@ -227,6 +227,86 @@
       "device": "gpu:0"
     },
     {
+      "file": "clients-draw-automask-389381.jpg",
+      "generated_by": "website/tools/clients_utils_figures.py",
+      "figure": "automatic masks with and without their boxes",
+      "model": "mobile-sam",
+      "request": {},
+      "image": {
+        "dataset": "COCO val2017",
+        "coco_id": 389381,
+        "file": "000000389381.jpg",
+        "flickr_url": "http://farm3.staticflickr.com/2544/4007091102_031486bd66_z.jpg",
+        "license": "CC BY 2.0",
+        "credit": "Photo: COCO val2017 #389381, Flickr http://farm3.staticflickr.com/2544/4007091102_031486bd66_z.jpg, CC BY 2.0"
+      },
+      "masks": 52,
+      "duration_ms": 614.8,
+      "device": "gpu:0"
+    },
+    {
+      "file": "clients-draw-depth-372819.jpg",
+      "generated_by": "website/tools/clients_utils_figures.py",
+      "figure": "a photo and draw() of its midas depth map (red = near)",
+      "model": "midas",
+      "request": {},
+      "image": {
+        "dataset": "COCO val2017",
+        "coco_id": 372819,
+        "file": "000000372819.jpg",
+        "flickr_url": "http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg",
+        "license": "CC BY 2.0",
+        "credit": "Photo: COCO val2017 #372819, Flickr http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg, CC BY 2.0"
+      },
+      "depth_size": [
+        256,
+        256
+      ],
+      "duration_ms": 7.8,
+      "device": "gpu:0"
+    },
+    {
+      "file": "clients-draw-grasp-389381.jpg",
+      "generated_by": "website/tools/clients_utils_figures.py",
+      "figure": "draw() on a grasp result, target object and grasp in red",
+      "model": "grasp-rfdetr",
+      "request": {
+        "max_grasps_per_object": 3
+      },
+      "image": {
+        "dataset": "COCO val2017",
+        "coco_id": 389381,
+        "file": "000000389381.jpg",
+        "flickr_url": "http://farm3.staticflickr.com/2544/4007091102_031486bd66_z.jpg",
+        "license": "CC BY 2.0",
+        "credit": "Photo: COCO val2017 #389381, Flickr http://farm3.staticflickr.com/2544/4007091102_031486bd66_z.jpg, CC BY 2.0"
+      },
+      "grasps": 9,
+      "duration_ms": 126.4,
+      "device": "gpu:0"
+    },
+    {
+      "file": "clients-draw-grounded-sam-372819.jpg",
+      "generated_by": "website/tools/clients_utils_figures.py",
+      "figure": "draw(res, photo) on a Grounded-SAM result",
+      "model": "grounded-sam",
+      "request": {
+        "prompt": "dog. bench."
+      },
+      "image": {
+        "dataset": "COCO val2017",
+        "coco_id": 372819,
+        "file": "000000372819.jpg",
+        "flickr_url": "http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg",
+        "license": "CC BY 2.0",
+        "credit": "Photo: COCO val2017 #372819, Flickr http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg, CC BY 2.0"
+      },
+      "detections": 6,
+      "masks": 6,
+      "duration_ms": 240.5,
+      "device": "gpu:0"
+    },
+    {
       "file": "clients-roi-372819.jpg",
       "generated_by": "website/tools/clients_figures.py",
       "figure": "roi: the model runs on the dashed crop; boxes come back in photo pixels",

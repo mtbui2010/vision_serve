@@ -379,7 +379,7 @@ def select_target_object(
     * ``"distance"`` — TRUE 3D camera→object distance close to ``target_distance``
       (needs ``depth_result`` + ``intrinsics``). Objects whose camera distance is
       near ``target_distance`` score higher (Gaussian, width ``distance_sigma`` —
-      default ``0.15 * target_distance``).
+      default ``0.5 * target_distance``; the grasp selector uses ``0.15``).
 
     By default the single most-specific available criterion is used
     (distance > near > conf). Pass ``weights={"conf": .., "near": .., ...}`` to
@@ -427,7 +427,6 @@ def select_target_object(
         dl = object_distances(depth_result, result, intrinsics, mode=mode, depth_scale=depth_scale)
         cam_d = {i: (dl[i] if i < len(dl) else None) for i in cand}
         if distance_sigma is None:
-            # distance_sigma = max(1e-6, 0.15 * abs(target_distance))
             distance_sigma = max(1e-6, 0.5 * abs(target_distance))
 
     w = _resolve_weights(weights, has_near=bool(pt), has_distance=target_distance is not None,

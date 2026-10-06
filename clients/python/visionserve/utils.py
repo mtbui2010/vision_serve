@@ -41,6 +41,7 @@ def get_valid_depth_locs(depth, mask=None, box=None, bound_pixels=False):
         raise ValueError("bound_pixels=True requires a mask")
     if mask is not None:
         cv2 = _cv2()
+        mask = (_as_numpy(mask) > 0).astype("uint8")  # OpenCV refuses bool (Mask.to_ndarray)
         k_big   = np.ones((21, 21), "uint8")
         k_small = np.ones((5, 5), "uint8")
         region = (
@@ -50,7 +51,7 @@ def get_valid_depth_locs(depth, mask=None, box=None, bound_pixels=False):
         )
         valid_depth = region.astype("float32") * depth
     elif box is not None:
-        x0, y0, x1, y1 = box
+        x0, y0, x1, y1 = (int(v) for v in box)  # corners [x0, y0, x1, y1], not [x, y, w, h]
         valid_depth = np.zeros_like(depth)
         valid_depth[y0:y1, x0:x1] = depth[y0:y1, x0:x1]
     else:
@@ -79,16 +80,18 @@ def Ixy2xyz(Ix, Iy, Z, cam_params):
 
 
 def xyz2Ixy(x, y, z, cam_params, eps=1e-10):
-    """3D camera-frame coordinates → pixel coordinates."""
+    """3D camera-frame coordinates → pixel coordinates, rounded to the nearest pixel (plain
+    ``int`` for numbers, ``int`` arrays for arrays)."""
     fx, fy, cx, cy = cam_params[:4]
-    Ix = np.divide(x, z + eps) * fx + cx
-    Iy = np.divide(y, z + eps) * fy + cy
-    try:
-        return Ix.astype("int"), Iy.astype("int")
-    except AttributeError:
+    # Round, not truncate: (0.25 / (1.5 + eps)) * 600 + 320 is 419.99..., i.e. pixel 420.
+    Ix = np.rint(np.divide(x, z + eps) * fx + cx)
+    Iy = np.rint(np.divide(y, z + eps) * fy + cy)
+    if np.ndim(Ix) == 0 and np.ndim(Iy) == 0:
         return int(Ix), int(Iy)
+    return Ix.astype("int"), Iy.astype("int")
 
 def show_mask_on_rgb(rgb, mask):
+    """A copy of ``rgb`` with the pixels where ``mask > 0`` tinted one fixed light colour (OpenCV)."""
     cv2 = _cv2()
     rgb, mask = _as_numpy(rgb), _as_numpy(mask)
     locs = np.where(mask > 0)
@@ -102,7 +105,9 @@ def show_mask_on_rgb(rgb, mask):
 
 
 def show_masks_on_rgb(rgb, masks, colors=None):
-    if not masks:
+    """A copy of ``rgb`` with each mask (a list or an ``(N, H, W)`` array) blended 40 % with its
+    colour (``n2colormap`` by default). numpy only, no OpenCV."""
+    if masks is None or len(masks) == 0:  # a list, or an (N, H, W) array
         return rgb
     rgb = _as_numpy(rgb)
     colors = n2colormap(len(masks)) if colors is None else colors
@@ -115,9 +120,12 @@ def show_masks_on_rgb(rgb, masks, colors=None):
 
 
 def show_box_on_rgb(rgb, box, color=(0, 255, 0), thick=1, label=None):
+    """A copy of ``rgb`` (numpy or PIL) with one rectangle (OpenCV). ``box`` is CORNERS
+    ``[x0, y0, x1, y1]``, not VisionServe's ``[x, y, w, h]``; ``label`` is written in red at the
+    top-left corner."""
     cv2 = _cv2()
     x0, y0, x1, y1 = (int(v) for v in box)
-    out = cv2.rectangle(rgb.copy(), (x0, y0), (x1, y1), color, thick)
+    out = cv2.rectangle(_as_numpy(rgb).copy(), (x0, y0), (x1, y1), color, thick)
     # out = cv2.drawMarker(out, ((x0 + x1) // 2, (y0 + y1) // 2),
     #                      color, cv2.MARKER_TILTED_CROSS, 10, 2)
     if label is not None:
@@ -126,26 +134,30 @@ def show_box_on_rgb(rgb, box, color=(0, 255, 0), thick=1, label=None):
 
 
 def show_boxes_on_rgb(rgb, boxes, color=(0, 255, 0), thick=1):
-    out = rgb.copy()
+    """:func:`show_box_on_rgb` for several CORNER boxes ``[x0, y0, x1, y1]``, one colour."""
+    out = _as_numpy(rgb).copy()
     for box in boxes:
         out = show_box_on_rgb(out, box, color=color, thick=thick)
     return out
 
 
 def show_line_on_rgb(rgb, line, color=(0, 255, 0), thick=1):
+    """A copy of ``rgb`` with a line ``[x0, y0, x1, y1]`` (e.g. ``Grasp.contacts_flat()``) (OpenCV)."""
     cv2 = _cv2()
     x0, y0, x1, y1 = [int(el) for el in line]
-    return cv2.line(rgb.copy(), (x0, y0), (x1, y1), color, thick)
+    return cv2.line(_as_numpy(rgb).copy(), (x0, y0), (x1, y1), color, thick)
 
 
 def show_text_on_rgb(rgb, text, org, size=0.4, color=(0, 255, 0), thick=1):
+    """A copy of ``rgb`` with ``text`` whose baseline starts at ``org = (x, y)`` (OpenCV)."""
     cv2 = _cv2()
-    return cv2.putText(rgb.copy(), text, (int(org[0]), int(org[1])),
+    return cv2.putText(_as_numpy(rgb).copy(), text, (int(org[0]), int(org[1])),
                        cv2.FONT_HERSHEY_COMPLEX, size, color, thick)
 
 
 def show_texts_on_rgb(rgb, texts, orgs, size=0.4, color=(0, 255, 0), thick=1):
-    out = rgb.copy()
+    """:func:`show_text_on_rgb` for several texts, one ``org`` each."""
+    out = _as_numpy(rgb).copy()
     for text, org in zip(texts, orgs):
         out = show_text_on_rgb(out, text, org, size, color, thick)
     return out

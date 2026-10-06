@@ -1070,6 +1070,629 @@ The `postprocess` module adds robotics helpers that combine results with a depth
 importable from `visionserve`. They refuse a `midas` depth result for anything in metres, since it
 has no scale. `visionserve.utils` has optional OpenCV drawing helpers (`pip install opencv-python`).
 
+## Visualize results
+
+`draw(result, image)` draws a result on the photo and returns a **new** PIL image; your photo
+is not changed. It needs Pillow, and numpy for masks (`pip install "visionserve[images]"`).
+`res.visualize(image, ...)` and `from visionserve import draw` are the same function.
+
+!!! note "How the examples in this section and in Utilities were run"
+    With the SDK in this repository (version 0.2.0) against a server on one NVIDIA RTX A6000
+    (CUDA), port 11820; `Client()`'s default host pointed there. Same photos as the rest of the
+    page. The pictures below are the real output of these calls, made by
+    `website/tools/clients_utils_figures.py`.
+
+```python title="clients/python/visionserve/visualize.py"
+def draw(
+    result: "Result",
+    image: Any,
+    *,
+    alpha: float = 0.45,
+    max_grasps_per_object: Optional[int] = 3,
+    target_grasp: Optional[Any] = None,
+    target_box: Optional[Any] = None,
+    mask_boxes: bool = True,
+) -> Any:
+```
+
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/visualize.py#L80-L89)
+
+| Argument | Default | What it does |
+|---|---|---|
+| `result` | | A `Result` from `predict`. |
+| `image` | | The photo the result belongs to: a path, `bytes`, a PIL image or a numpy array (read as **RGB**). A JPEG given as a path or bytes is turned upright by its EXIF tag, as the server does, so the boxes land on the right pixels. A PIL image or an array is drawn as it is. |
+| `alpha` | `0.45` | Strength of the mask colours: `0` = invisible, `1` = solid. |
+| `max_grasps_per_object` | `3` | Draw only the best N grasps of each object; `None` draws every grasp. |
+| `target_grasp` | `None` | One `Grasp` **from this result** to draw in red, on top of the others. |
+| `target_box` | `None` | One `Detection` or `Mask` (or an `[x, y, w, h]` box) to draw in red with a thick line, for example what `select_target_object` chose. |
+| `mask_boxes` | `True` | `False` colours the masks without drawing their boxes and labels. |
+
+What it draws for each kind of result:
+
+| Result | What you see |
+|---|---|
+| detection, open vocabulary (`detections`) | A box per detection and the label `class conf%`. |
+| segmentation (`masks`) | Each mask as a see-through colour, with its box and the label `mask conf%`. |
+| Grounded-SAM, grasp models (`detections` + `masks`) | The mask colour, then the detection's box and class. The mask has the same box, so it is labelled only once. |
+| grasps (`grasps`) | Each grasp as a gripper: a line between the two jaws, a short bar at each jaw and a dot at the centre, coloured by quality (red = low, yellow, green = high), with the label `class qN.NN`. |
+| classification (`classifications`) | The labels in the top-left corner, on a dark band. |
+| depth (`depth_map`) | **Only** the depth map as a colour picture: blue = far, red = near. It has the model's size (256 × 256 for `midas`), not the photo's, and the photo is not used. |
+| embeddings | Nothing: you get the photo back. |
+
+Item `i` gets colour `i` of a fixed list of 8 colours (the same as the server's own overlay).
+
+### Boxes and masks
+
+```python
+from visionserve import Client
+from visionserve.visualize import draw
+
+c = Client()
+res = c.predict("grounded-sam", "dogs.jpg", prompt="dog. bench.")
+img = draw(res, "dogs.jpg")              # a new PIL image; dogs.jpg is not changed
+print(type(img).__name__, img.size, img.mode)
+img.save("dogs-drawn.jpg", quality=90)   # any format Pillow writes: .jpg, .png, .webp
+same = res.visualize("dogs.jpg")         # the same picture, as a Result method
+```
+
+```text
+Image (640, 426) RGB
+```
+
+![draw() on a Grounded-SAM result: four dogs and two benches, each with its mask colour and one labelled box](../assets/img/clients-draw-grounded-sam-372819.jpg)
+
+Automatic masks (no prompt) can be dozens of overlapping regions. Their boxes and labels then
+hide the photo; `mask_boxes=False` keeps only the colours:
+
+```python
+from visionserve import Client
+from visionserve.visualize import draw
+
+c = Client()
+sam = c.predict("mobile-sam", "cat.jpg", box=[310, 175, 310, 195])
+draw(sam, "cat.jpg", alpha=0.6).save("cat-mask.jpg")            # stronger colour
+
+auto = c.predict("mobile-sam", "food.jpg")                     # no prompt: automatic masks
+print(len(auto.masks), "masks")
+draw(auto, "food.jpg").save("food-masks-boxes.jpg")            # a box + label per mask
+draw(auto, "food.jpg", mask_boxes=False).save("food-masks.jpg")  # colour only: easier to read
+```
+
+```text
+52 masks
+```
+
+![The same 52 automatic masks drawn with their boxes and labels (left) and with mask_boxes=False (right)](../assets/img/clients-draw-automask-389381.jpg)
+
+Every filter of the [Utilities](#utilities) returns a new `Result`, so you can draw only part of
+a result:
+
+```python
+from visionserve import Client
+from visionserve.visualize import draw
+
+c = Client()
+res = c.predict("grounding-dino", "living-room.jpg", prompt="chair. lamp. book. vase.")
+print([(d.cls, round(d.conf, 2)) for d in res.detections])
+sure = res.filter_by_conf(0.5)                     # draw only the confident ones
+draw(sure, "living-room.jpg").save("living-room-sure.jpg")
+print(len(sure.detections), "drawn")
+```
+
+```text
+[('lamp', 0.79), ('lamp', 0.59), ('chair', 0.78), ('chair', 0.75), ('book', 0.42), ('book', 0.53), ('vase', 0.45), ('vase', 0.43)]
+5 drawn
+```
+
+### Grasps
+
+```python
+from visionserve import Client, select_target_grasp, select_target_object
+from visionserve.visualize import draw
+
+c = Client()
+g = c.predict("grasp-rfdetr", "food.jpg")       # keeps the best 3 grasps per object
+print(len(g.detections), "objects,", len(g.masks), "masks,", len(g.grasps), "grasps")
+obj = select_target_object(g, cls="broccoli")
+best = select_target_grasp(g.grasps, cls="broccoli")
+print(obj.cls, [round(v) for v in obj.bbox], "| grasp", [round(v, 2) for v in best.pose])
+img = draw(g, "food.jpg", target_box=obj, target_grasp=best, max_grasps_per_object=1)
+img.save("food-grasp.jpg")
+```
+
+```text
+3 objects, 3 masks, 9 grasps
+broccoli [373, 278, 105, 129] | grasp [424.0, 332.5, 76.53, 3.02]
+```
+
+![A grasp result: three objects with boxes, the chosen broccoli box and its best grasp in red](../assets/img/clients-draw-grasp-389381.jpg)
+
+The gripper glyphs are small: zoom in. Two things to know:
+
+- `target_grasp` is matched by identity (`is`), so pass a grasp taken from `g.grasps`, and it
+  must be one of the grasps that are drawn (the best `max_grasps_per_object` of each object).
+  `select_target_grasp` with no other criterion picks the highest quality, which normally is.
+- "Per object" means per box: a grasp belongs to the smallest box that contains its centre.
+  Above, a `bowl` grasp sits inside the carrot's box, so with `max_grasps_per_object=1` it takes
+  the carrot's place and two `bowl` labels appear.
+
+### Depth
+
+`draw` returns the depth map alone, at the model's size. Resize it to the photo yourself to put
+the two side by side:
+
+```python
+from PIL import Image
+from visionserve import Client
+from visionserve.visualize import draw
+
+c = Client()
+depth = c.predict("midas", "dogs.jpg")
+pic = draw(depth, "dogs.jpg")             # the depth map alone, at the MODEL's size
+print(pic.size, (depth.depth_width, depth.depth_height))
+
+photo = Image.open("dogs.jpg").convert("RGB")
+pic = pic.resize(photo.size)              # stretch it to the photo's size
+both = Image.new("RGB", (photo.width * 2 + 8, photo.height), "white")
+both.paste(photo, (0, 0))
+both.paste(pic, (photo.width + 8, 0))
+both.save("dogs-depth.jpg")
+```
+
+```text
+(256, 256) (256, 256)
+```
+
+![A photo of four dogs and two people, and its midas depth map stretched to the same size: red at the bottom (near), blue at the top (far)](../assets/img/clients-draw-depth-372819.jpg)
+
+The colours only rank the pixels from far to near inside one photo: the map is relative, without
+units ([why](#the-result-object)). For another colour map, use `res.depth_array()` with
+matplotlib (next section).
+
+### Classification
+
+```python
+from visionserve import Client
+from visionserve.visualize import draw
+
+c = Client()
+res = c.predict("efficientnet-b0", "elephant.jpg")
+print([(x.cls, round(x.conf, 2)) for x in res.classifications])
+draw(res.top_k(3), "elephant.jpg").save("elephant-labels.jpg")   # top 3 labels, top left
+```
+
+```text
+[('tusker', 0.46), ('African elephant', 0.45), ('Indian elephant', 0.02), ('water buffalo', 0.0), ('warthog', 0.0)]
+```
+
+### numpy, OpenCV, matplotlib and Jupyter
+
+`draw` accepts the same image types as `predict` and always returns a PIL image. Convert it
+for other libraries:
+
+```python
+import cv2
+import numpy as np
+from PIL import Image
+from visionserve import Client
+from visionserve.visualize import draw
+
+c = Client()
+frame = cv2.imread("dogs.jpg")                      # OpenCV: a BGR numpy array
+rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)        # the SDK reads arrays as RGB
+res = c.predict("rf-detr", rgb)
+
+for image in ["dogs.jpg", open("dogs.jpg", "rb").read(), Image.open("dogs.jpg"), rgb]:
+    print(type(image).__name__, draw(res, image).size)
+
+out = np.asarray(draw(res, rgb))                    # PIL -> numpy RGB (H, W, 3) uint8
+bgr = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)          # back to BGR for OpenCV
+cv2.imwrite("dogs-cv.jpg", bgr)                     # or: cv2.imshow("result", bgr); cv2.waitKey(0)
+print(out.shape, out.dtype)
+```
+
+```text
+str (640, 426)
+bytes (640, 426)
+JpegImageFile (640, 426)
+ndarray (640, 426)
+(426, 640, 3) uint8
+```
+
+OpenCV works in **BGR** order; VisionServe and PIL in RGB. Convert on the way in (before
+`predict`) and on the way out (before `cv2.imshow` / `cv2.imwrite`), as above.
+
+With matplotlib, pass the PIL image to `imshow`. A depth map can use any matplotlib colour map:
+
+```python
+import matplotlib.pyplot as plt
+from visionserve import Client
+from visionserve.visualize import draw
+
+c = Client()
+res = c.predict("rf-detr", "dogs.jpg")
+depth = c.predict("midas", "dogs.jpg")
+
+fig, (a, b) = plt.subplots(1, 2, figsize=(10, 3.5))
+a.imshow(draw(res, "dogs.jpg"))
+a.set_title("rf-detr")
+b.imshow(depth.depth_array(), cmap="inferno")       # bright = near
+b.set_title("midas (relative depth)")
+for ax in (a, b):
+    ax.axis("off")
+fig.savefig("dogs-plot.png", bbox_inches="tight")   # or plt.show()
+```
+
+In a Jupyter notebook, a PIL image on the last line of a cell is shown below it, so
+`draw(res, "dogs.jpg")` alone is enough.
+
+### Draw it yourself
+
+For your own style (colours, fonts, line width, only some classes), draw with PIL directly.
+Boxes are `[x, y, w, h]` in the photo's pixels, and `Mask.to_ndarray` gives a `bool` array of the
+photo's size:
+
+```python
+import numpy as np
+from PIL import Image, ImageDraw
+from visionserve import Client
+
+c = Client()
+res = c.predict("grounded-sam", "cat.jpg", prompt="cat. laptop.")
+img = Image.open("cat.jpg").convert("RGB")
+pix = np.asarray(img).copy()
+for m in res.masks:
+    inside = m.to_ndarray(img.width, img.height)                 # bool (H, W)
+    pix[inside] = pix[inside] // 2 + np.array([0, 100, 0], np.uint8)  # darker + green
+img = Image.fromarray(pix)
+d = ImageDraw.Draw(img)
+for det in res.detections:
+    x, y, w, h = det.bbox                                        # photo pixels
+    d.rectangle([x, y, x + w, y + h], outline="yellow", width=4)
+    d.text((x + 8, y + 6), f"{det.cls} {det.conf:.2f}", fill="yellow", font_size=24)
+img.save("cat-custom.jpg")
+```
+
+This makes the cat and the laptop dark green with thick yellow boxes and big labels.
+(`font_size=` needs Pillow 10.1 or newer; on older versions pass
+`font=ImageFont.truetype("DejaVuSans.ttf", 24)`.)
+
+## Utilities
+
+The SDK ships small helpers that work on results in your own program. They never call the
+server. Each one is listed here; examples follow.
+
+**Install:** the `Result` helpers need nothing extra. Masks, arrays, depth and `draw` need numpy
+and Pillow (`pip install "visionserve[images]"`). The functions marked **cv2** in
+`visionserve.utils` also need OpenCV (`pip install opencv-python`); `import visionserve` never
+imports that module, so OpenCV stays optional.
+
+| Where | Helper | What it does | Use it when |
+|---|---|---|---|
+| `Result` | `filter_by_conf(min_conf=0.0, max_conf=1.0)` | Keeps detections, masks and classifications whose `conf` is in the range. | You want to hide weak guesses after the call. |
+| `Result` | `filter_by_size(min_size=, max_size=, image_width=, image_height=)` | Keeps detections and masks by box area: **fractions** (0–1) of the photo when you give its size, else pixels². | Dropping tiny or huge boxes. (The server's `min_size` / `max_size` options do this in percent.) |
+| `Result` | `sort_by_conf(descending=True)`, `top_k(k)` | Orders by `conf`; keeps the `k` best of each list. | You only want the best few. |
+| `Result` | `nms(iou_threshold=0.5)` | Greedy non-maximum suppression on detections (masks are kept). | You merged several results and boxes overlap. |
+| `Result` | `filter_grasps(max_per_object)` | Keeps the best N grasps per object box (what `predict(max_grasps_per_object=)` does). | You asked for every grasp and now want a few. |
+| `Result` | `group_by_class()` | `{label: Result}`. A mask joins the detection with the same box; other masks go under `""`. | Counting or handling each class apart. |
+| `Result` | `depth_array()`, `embeddings_array()` | numpy `float32` `(H, W)` / `(N, D)`, or `None`. | Any maths on depth maps or embeddings. |
+| `Result` | `to_json(encoding="json")`, `Result.from_json(d)` | The server's JSON shape as a `dict`, and back. `encoding="base64"` packs the float arrays. | Saving results to a file, or sending them on. |
+| `Result` | `visualize(image, **kw)` | Same as `draw(result, image, **kw)`. | Drawing ([above](#visualize-results)). |
+| `Mask` | `to_ndarray(width, height)` | The mask as a `bool` numpy array `(height, width)`. Pass the photo's (upright) size. | Area, union, cut-outs, saving a PNG. |
+| `Grasp` | `pose`, `contacts()`, `contacts_flat()` | `[x, y, width, theta]`; the two jaw points `[[x0, y0], [x1, y1]]`; the same as `[x0, y0, x1, y1]`. | Sending a grasp to a robot; drawing it as a line. |
+| items | `Detection` / `Mask` / `Grasp` / `Classification` `.to_json()` | One item in the wire format (`class`, not `cls`). | Writing your own JSON. |
+| `visionserve` | `FloatArray` | How `depth_map` / `embeddings` arrive with `Client(base64_arrays=True)`: list-like, `numpy.asarray(x)` without a copy, `.tolist()`, `.shape`. | Large depth maps or many embeddings. |
+| `visionserve.visualize` | `draw(result, image, ...)` | Draws a result on the photo, returns a PIL image. | [Visualize results](#visualize-results). |
+| `visionserve` | `CameraIntrinsics(fx, fy, cx, cy)` | Your camera's focal lengths and centre, in pixels. | Anything in metres. |
+| `visionserve` | `backproject(u, v, z, K)` | Pixel `(u, v)` at depth `z` → `(X, Y, Z)` in the camera frame. | A 3D point for one pixel. |
+| `visionserve` | `camera_distance(u, v, z, K)` | Distance from the camera to that 3D point. | "How far is this pixel?" |
+| `visionserve` | `get_depth_at_detection(depth, det_result, mode="median", depth_scale=None, image_size=None)` | The depth under each box (or each mask box when there are no detections). A depth **array** gives metres; a depth **Result** gives relative 0–1 values and needs `image_size=(W, H)`. | "Which object is nearest?" or "How far is it?" |
+| `visionserve` | `object_distances(depth, det_result, intrinsics, mode="median", depth_scale=None)` | Camera → object distance in metres per box (needs a metric depth array). | Picking an object at a given distance. |
+| `visionserve` | `grasp_distances(depth, grasps, intrinsics, window=2, depth_scale=None)` | Camera → grasp centre distance in metres per grasp. | The same for grasps. |
+| `visionserve` | `select_target_object(result, cls=, min_conf=, near_point=, image_size=, depth_result=, intrinsics=, target_distance=, distance_sigma=, weights=, return_index=)` | Picks one detection (or mask): the best `conf`, or the nearest to a point, or the closest to a distance, or a weighted mix (`conf`, `area`, `near`, `distance`). | "Which object should the robot take?" |
+| `visionserve` | `select_target_grasp(grasps, cls=, gripper_min=, gripper_max=, target_point=, depth_result=, intrinsics=, target_distance=, distance_sigma=, window=, weights=, return_index=)` | Picks one grasp: drops grasps too wide or too narrow for your gripper, then the best `quality`, nearest, closest to a distance, or a mix (`quality`, `near`, `distance`, `width`). | "Which grasp should the robot use?" |
+| `visionserve.utils` | `n2colormap(n)` | `n` different RGB colours. | Colours for your own drawing. |
+| `visionserve.utils` | `show_masks_on_rgb(rgb, masks, colors=None)` | Blends each mask (a list or an `(N, H, W)` array) into a copy of the photo. numpy only. | Quick mask overlays on numpy images. |
+| `visionserve.utils` | `show_mask_on_rgb(rgb, mask)` **cv2** | Tints one mask with a fixed light colour. | One mask. |
+| `visionserve.utils` | `show_box_on_rgb(rgb, box, color=(0, 255, 0), thick=1, label=None)`, `show_boxes_on_rgb(rgb, boxes, ...)` **cv2** | Draws rectangles. `box` is **corners** `[x0, y0, x1, y1]`, not `[x, y, w, h]`. | Boxes on numpy images. |
+| `visionserve.utils` | `show_line_on_rgb(rgb, line, color, thick)` **cv2** | Draws a line `[x0, y0, x1, y1]`. | A grasp: `g.contacts_flat()`. |
+| `visionserve.utils` | `show_text_on_rgb(rgb, text, org, size=0.4, color, thick)`, `show_texts_on_rgb(...)` **cv2** | Writes text whose baseline starts at `org = (x, y)`. | Labels. |
+| `visionserve.utils` | `Ixy2xyz(Ix, Iy, Z, cam_params)`, `xyz2Ixy(x, y, z, cam_params)` | Pixel + depth → 3D and back, with `cam_params = [fx, fy, cx, cy]`. Work on numbers or arrays; `xyz2Ixy` rounds to whole pixels. | Many points at once. |
+| `visionserve.utils` | `get_valid_depth_locs(depth, mask=None, box=None, bound_pixels=False)` (**cv2** with `mask`) | Pixel positions `(ys, xs)` with a usable depth inside a mask (its inside, a few pixels in from the edge) or a **corner** box, outliers removed (IQR rule). `bound_pixels=True` takes a ring around the mask instead. | A robust depth for one object. |
+| `visionserve.utils` | `get_mask_locs_with_stride(mask, stride=5)` | Mask pixels on a grid, every `stride` pixels. | Fewer points for a plane fit. |
+| `visionserve.utils` | `calc_normalvector(points, weights=None)` | Unit normal of the plane through `(N, 3)` points (its sign is arbitrary). | The surface direction of an object. |
+| `visionserve.resize` | `ClientResize` (`res.client_resize`) | What the SDK did to the photo before upload: `original_width/height`, `sent_width/height`, `jpeg_quality`, `reason`, `resized`, `scale_x/y`, `to_sent_x/y()`, `to_original_x/y()`. `None` = sent as given. | Checking or undoing the [client-side resize](#client-side-resizing-on-by-default). |
+| `visionserve.resize` | `target_size(width, height, max_side=, max_short_side=, region=)` | The size a photo would be shrunk to. | Planning uploads. |
+| `visionserve.resize` | `roi_region(roi, width, height)` | The `(w, h)` in pixels of the region the server crops for `roi`. | Checking a `roi`. |
+
+The rest of `visionserve.resize` (`prepare_upload`, `scale_boxes`, `map_result`, ...) is what
+`Client` uses inside; you do not need it.
+
+### Filters
+
+```python
+from visionserve import Client
+
+c = Client()
+res = c.predict("rf-detr", "dogs.jpg")
+W, H = 640, 426                                         # the photo's size
+print(len(res.detections), "detections")
+print([d.cls for d in res.filter_by_conf(0.8).detections])          # conf >= 0.8
+big = res.filter_by_size(min_size=0.02, image_width=W, image_height=H)  # >= 2 % of the photo
+print([d.cls for d in big.detections])
+print(len(res.filter_by_size(max_size=3000).detections), "boxes of at most 3000 px²")
+print([round(d.conf, 2) for d in res.top_k(3).detections])
+print({k: len(v.detections) for k, v in res.group_by_class().items()})
+chain = res.filter_by_conf(0.5).filter_by_size(min_size=0.02, image_width=W, image_height=H).top_k(2)
+print([(d.cls, round(d.conf, 2)) for d in chain.detections])
+```
+
+```text
+7 detections
+['person', 'dog', 'dog', 'person', 'dog', 'dog']
+['person', 'person', 'bench']
+1 boxes of at most 3000 px²
+[0.94, 0.92, 0.9]
+{'person': 2, 'dog': 4, 'bench': 1}
+[('person', 0.94), ('person', 0.9)]
+```
+
+The filters return a new `Result`, so they chain. They never change the original.
+
+### Masks: area, union, overlap
+
+The SDK has no helper for these on purpose: with `to_ndarray` they are one numpy line each.
+
+```python
+import numpy as np
+from PIL import Image
+from visionserve import Client
+
+c = Client()
+res = c.predict("grounded-sam", "dogs.jpg", prompt="dog.")
+W, H = Image.open("dogs.jpg").size
+masks = [m.to_ndarray(W, H) for m in res.masks]        # one bool (H, W) array per mask
+print(masks[0].shape, masks[0].dtype)
+print("areas:", [int(m.sum()) for m in masks])           # pixels inside each mask
+union = np.logical_or.reduce(masks)                    # every dog together
+print("union:", int(union.sum()), "px =", round(100 * union.mean(), 2), "% of the photo")
+ys, xs = np.nonzero(masks[0])
+print("centre of mask 0:", round(xs.mean(), 1), round(ys.mean(), 1))
+a, b = masks[0], masks[1]
+print("IoU 0-1:", round((a & b).sum() / (a | b).sum(), 3))
+Image.fromarray(union.astype(np.uint8) * 255).save("dogs-union.png")   # black and white PNG
+```
+
+```text
+(426, 640) bool
+areas: [1297, 2417, 3380, 2123]
+union: 9217 px = 3.38 % of the photo
+centre of mask 0: 294.9 150.3
+IoU 0-1: 0.0
+```
+
+### Depth and 3D points
+
+Two kinds of depth give two kinds of answer. A depth **model** (`midas`, `depth-anything-v2`)
+gives relative values (0–1, larger = closer), good for "which one is nearer". A depth
+**camera** gives metres, needed for "how far" and for a robot.
+
+```python
+import numpy as np
+from visionserve import (CameraIntrinsics, Client, backproject, camera_distance,
+                         get_depth_at_detection, object_distances)
+
+c = Client()
+det = c.predict("rf-detr", "dogs.jpg")
+print([d.cls for d in det.detections[:4]])
+
+# 1) Relative depth from a depth model: larger = closer, no units.
+rel = c.predict("midas", "dogs.jpg")
+print([round(v, 3) for v in get_depth_at_detection(rel, det, image_size=(640, 426))[:4]])
+
+# 2) Metric depth from a depth camera, aligned to the photo (here a made-up frame):
+#    the ground 3 m away, a box of pixels 1.5 m away around the first dog.
+depth_mm = np.full((426, 640), 3000, np.uint16)        # uint16 millimetres, 0 = no reading
+depth_mm[227:320, 216:274] = 1500
+K = CameraIntrinsics(fx=600, fy=600, cx=320, cy=213)   # from your camera's calibration
+print([round(v, 3) for v in get_depth_at_detection(depth_mm, det)[:4]])  # metres (uint16 x 0.001)
+print([round(v, 3) for v in object_distances(depth_mm, det, K)[:4]])  # camera -> object, metres
+print(backproject(420, 213, 1.5, K), round(camera_distance(420, 213, 1.5, K), 3))
+```
+
+```text
+['person', 'dog', 'dog', 'person']
+[0.309, 0.697, 0.401, 0.301]
+[3.0, 1.5, 3.0, 3.0]
+[3.163, 1.519, 3.019, 3.312]
+(0.25, 0.0, 1.5) 1.521
+```
+
+The same maths in `visionserve.utils`, which also takes arrays of points, and a robust depth for
+one mask:
+
+```python
+import numpy as np
+from visionserve import Client
+from visionserve.utils import Ixy2xyz, get_valid_depth_locs, xyz2Ixy
+
+cam = [600, 600, 320, 213]                              # fx, fy, cx, cy
+print(Ixy2xyz(420, 213, 1.5, cam))                      # pixel + depth -> (X, Y, Z)
+print(xyz2Ixy(0.25, 0.0, 1.5, cam))                     # (X, Y, Z) -> pixel, rounded
+xs, ys, zs = Ixy2xyz([320, 420], [213, 313], [1.5, 1.5], cam)   # lists work too
+print(xs, ys)
+
+c = Client()
+res = c.predict("grounded-sam", "dogs.jpg", prompt="dog.")
+mask = res.masks[0].to_ndarray(640, 426)
+depth = np.full((426, 640), 3.0, np.float32)
+depth[mask] = 1.5
+depth[mask & (np.arange(640)[None, :] % 50 == 0)] = 9.0  # a few bad readings
+ys, xs = get_valid_depth_locs(depth, mask=mask)          # interior pixels, outliers removed
+print(len(ys), "of", int(mask.sum()), "pixels;", np.median(depth[ys, xs]), "m")
+```
+
+```text
+(0.25, 0.0, 1.5)
+(420, 213)
+[0.   0.25] [0.   0.25]
+857 of 1297 pixels; 1.5 m
+```
+
+### Choosing an object and a grasp
+
+```python
+from visionserve import Client, select_target_grasp, select_target_object
+
+c = Client()
+res = c.predict("grasp-rfdetr", "food.jpg", max_grasps_per_object=None)   # every grasp
+print(len(res.grasps), "grasps;", [(d.cls, round(d.conf, 2)) for d in res.detections])
+
+print(select_target_object(res).cls)                                       # highest conf
+print(select_target_object(res, near_point="center", image_size=(640, 543)).cls)  # nearest centre
+print(select_target_object(res, weights={"conf": 1, "area": 1}).cls)      # confident AND large
+obj, i = select_target_object(res, cls=["carrot", "bowl"], return_index=True)
+print(obj.cls, i)
+
+g = select_target_grasp(res.grasps, cls="broccoli", gripper_min=60, gripper_max=76)  # fits the gripper
+print("pose [x, y, width, theta]:", [round(v, 2) for v in g.pose])
+print("jaw contacts:", [[round(v, 1) for v in p] for p in g.contacts()])
+print("flat:", [round(v, 1) for v in g.contacts_flat()])
+near = select_target_grasp(res.grasps, target_point=(320, 270))
+print(near.cls, round(near.quality, 2))
+```
+
+```text
+60 grasps; [('broccoli', 0.88), ('carrot', 0.76), ('bowl', 0.72)]
+broccoli
+bowl
+bowl
+carrot 1
+pose [x, y, width, theta]: [423.0, 329.5, 74.55, 3.02]
+jaw contacts: [[460.0, 325.0], [386.0, 334.0]]
+flat: [460.0, 325.0, 386.0, 334.0]
+bowl 0.99
+```
+
+`near_point="center"` chose the bowl (its box centre is closest to the photo's centre). With a
+depth camera, `target_distance` picks what is at that distance (here a made-up frame, as above):
+
+```python
+import numpy as np
+from visionserve import CameraIntrinsics, Client, grasp_distances, select_target_grasp
+
+c = Client()
+res = c.predict("grasp-rfdetr", "food.jpg")
+depth_mm = np.full((543, 640), 600, np.uint16)          # the table, 600 mm away
+depth_mm[278:407, 373:478] = 560                       # the broccoli, 40 mm closer
+K = CameraIntrinsics(fx=615, fy=615, cx=320, cy=271)
+print([round(d, 3) if d else d for d in grasp_distances(depth_mm, res.grasps, K)][:6])
+g = select_target_grasp(res.grasps, depth_result=depth_mm, intrinsics=K, target_distance=0.56)
+print(g.cls, round(g.quality, 2))
+```
+
+```text
+[0.571, 0.571, 0.57, 0.606, 0.606, 0.606]
+broccoli 0.96
+```
+
+### OpenCV-style overlays: `visionserve.utils`
+
+These functions take a numpy image (a PIL image works too) and return a **new** numpy array.
+Colours are in your array's channel order: `(255, 0, 0)` is red on an RGB array, blue on a BGR
+one. Boxes are **corners** `[x0, y0, x1, y1]`: convert VisionServe's `[x, y, w, h]` first.
+
+```python
+import numpy as np
+from PIL import Image
+from visionserve import Client
+from visionserve.utils import (n2colormap, show_box_on_rgb, show_line_on_rgb, show_masks_on_rgb,
+                               show_text_on_rgb)
+
+c = Client()
+res = c.predict("grasp-rfdetr", "food.jpg", max_grasps_per_object=1)
+rgb = np.asarray(Image.open("food.jpg").convert("RGB"))
+W, H = rgb.shape[1], rgb.shape[0]
+colors = n2colormap(len(res.masks))
+print(colors)
+out = show_masks_on_rgb(rgb, [m.to_ndarray(W, H) for m in res.masks], colors)  # numpy only
+for det, col in zip(res.detections, colors):
+    x, y, w, h = det.bbox
+    out = show_box_on_rgb(out, [x, y, x + w, y + h], color=col, thick=2)       # CORNERS!
+    out = show_text_on_rgb(out, det.cls, (x + 4, y + 16), size=0.5, color=col)
+for g in res.grasps:
+    out = show_line_on_rgb(out, g.contacts_flat(), color=(255, 255, 255), thick=3)
+Image.fromarray(out).save("food-utils.jpg")
+print(type(out).__name__, out.shape, out.dtype)
+```
+
+```text
+[(255, 25, 25), (25, 255, 25), (25, 25, 255)]
+ndarray (543, 640, 3) uint8
+```
+
+### What the client sent: `ClientResize`
+
+```python
+from visionserve import Client
+from visionserve.resize import target_size
+
+c = Client()
+res = c.predict("grounding-dino", "dogs.jpg", prompt="dog.", resize=320)  # longest side 320
+cr = res.client_resize
+print(cr)
+print(cr.resized, cr.scale_x, cr.to_sent_x(640), cr.to_original_x(320))
+print([round(v, 1) for v in res.detections[0].bbox])     # still in the 640 x 426 photo's pixels
+print(c.predict("grounding-dino", "dogs.jpg", prompt="dog.").client_resize)   # not shrunk: None
+print(c.useful_side("grounding-dino"), c.useful_side("mobile-sam"))
+print(target_size(4000, 3000, max_side=1333), target_size(4000, 3000, max_short_side=800))
+```
+
+```text
+ClientResize(original_width=640, original_height=426, sent_width=320, sent_height=213, jpeg_quality=90, reason='resize=320')
+True 0.5 320.0 640.0
+[427.2, 195.1, 39.6, 82.6]
+None
+(None, 1600) (None, None)
+(1333, 1000) (1067, 800)
+```
+
+The boxes are always in your photo's pixels; `client_resize` only tells you what went over the
+network. `useful_side` gives `(max_side, max_short_side)`: `grounding-dino` uses at most 1600
+pixels on the short side, `mobile-sam` wants the full photo.
+
+### Arrays and JSON
+
+```python
+import json
+import numpy as np
+from visionserve import Client, Result
+
+fast = Client(base64_arrays=True)
+emb = fast.predict("clip", "dogs.jpg")
+print(emb.embeddings, emb.embeddings_array().shape)
+v = np.asarray(emb.embeddings)                          # no copy
+print(v.dtype, round(float(np.linalg.norm(v[0])), 3))
+print(type(emb.embeddings.tolist()).__name__, len(emb.embeddings.tolist()[0]))
+
+res = Client().predict("grounded-sam", "dogs.jpg", prompt="dog.")
+text = json.dumps(res.to_json())                        # the server's JSON shape
+print(len(text), "characters;", list(res.to_json())[:5])
+back = Result.from_json(json.loads(text))
+print(back == res)
+small = json.dumps(emb.to_json(encoding="base64"))       # arrays as base64 float32
+print(len(json.dumps(emb.to_json())), "->", len(small), "characters")
+```
+
+```text
+FloatArray(shape=(1, 512)) (1, 512)
+float32 1.0
+list 512
+2500 characters; ['task', 'model', 'device', 'detections', 'masks']
+True
+11432 -> 2862 characters
+```
+
 ## Other methods
 
 | Method | HTTP | Returns |
