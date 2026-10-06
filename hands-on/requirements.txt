@@ -3,7 +3,7 @@
 #
 # The VisionServe Python SDK (the client). If this version is not on PyPI yet,
 # install it from this repository instead:  pip install -e clients/python
-visionserve>=0.2.0
+visionserve>=0.3.1
 jupyterlab
 ipywidgets
 matplotlib
