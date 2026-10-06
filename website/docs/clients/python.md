@@ -99,7 +99,7 @@ keyword-only:
     ) -> Result:
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L134-L162)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L136-L164)
 
 An option left at `None` is not sent at all, and the server then uses the model's own default
 (from its `manifest.yaml`, or a built-in value). An option a model does not read is ignored
@@ -458,7 +458,7 @@ The rule, from the SDK:
     return text
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L815-L823)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L898-L906)
 
 CLIP and SigLIP prompts are sent unchanged, because a comma is part of a sentence there
 (`"a photo of a cat, sleeping"`). GroundingDINO reads at most 256 text tokens per pass; a longer
@@ -1075,11 +1075,13 @@ has no scale. `visionserve.utils` has optional OpenCV drawing helpers (`pip inst
 | Method | HTTP | Returns |
 |---|---|---|
 | `health()` | `GET /api/health` | `{"status": "ok"}` |
-| `list_models()` | `GET /api/models` | `list[ModelInfo]`: `name`, `task`, `license`, `state` (`not_downloaded`, `available`, `loaded`), `max_useful_side`, `max_useful_short_side` |
+| `list_models()` | `GET /api/models` | `list[ModelInfo]`: `name`, `task`, `license`, `state` (`not_downloaded`, `available`, `loaded`), `max_useful_side`, `max_useful_short_side`, `accepts_depth` |
 | `ps()` | `GET /api/models` | only the loaded ones |
 | `load(model)` / `unload(model)` | `POST /api/load` / `/api/unload` | `{"model", "state"}`: load now (so the first `predict` is fast), or free the memory |
 | `preprocess(model, image=None, *, prompt=, box=, point=, resize="off", jpeg=, jpeg_quality=)` | `POST /api/preprocess` | `PreprocessResult`: the exact input tensors the model would get, as numpy arrays, without running it. The photo is sent as given unless you pass `resize="auto"` (then `res.client_resize` says what was sent) |
 | `useful_side(model)` | `GET /api/models` (cached) | `(max_useful_side, max_useful_short_side)`: the model's size hint, `(None, None)` for none |
+| `accepts_depth(model)` | `GET /api/models` (cached) | `True` when the model reads an uploaded depth image (`background`), `False` when it ignores one, `None` when the server does not say |
+| `watch(source, model, **options)` | `POST /api/predict` per frame | a generator of `Result`s from a camera or video: see [Watching a camera or video](#watching-a-camera-or-video) |
 | `tokenize(model, text)` | `POST /api/preprocess` | the token ids a text model gets |
 
 ```python
@@ -1097,7 +1099,7 @@ print(c.tokenize("clip-text", "a photo of a dog")[0, :8])
 ```
 
 ```text
-[ModelInfo(name='rf-detr', task='detection', license='Apache-2.0', state='loaded', max_useful_side=None, max_useful_short_side=1120), ModelInfo(name='rf-detr-nano', task='detection', license='Apache-2.0', state='available', max_useful_side=None, max_useful_short_side=768)]
+[ModelInfo(name='rf-detr', task='detection', license='Apache-2.0', state='loaded', max_useful_side=None, max_useful_short_side=1120, accepts_depth=False), ModelInfo(name='rf-detr-nano', task='detection', license='Apache-2.0', state='available', max_useful_side=None, max_useful_short_side=768, accepts_depth=False)]
 {'model': 'midas', 'state': 'unloaded'} {'model': 'midas', 'state': 'loaded'}
 ['background', 'clip', 'clip-text', 'gdino-siglip', 'grasp-gd']
 PreprocessResult(model='rf-detr', inputs={'input': (1, 3, 560, 560)}, meta={'orig_width': 640, 'orig_height': 426, 'scale_x': 0.875, 'scale_y': 1.3145539906103287, 'pad_x': 0, 'pad_y': 0})
@@ -1146,6 +1148,261 @@ print([(d.cls, [round(v) for v in d.bbox]) for d in res.detections[:2]])   # mod
 `/api/infer_tensor` knows nothing about the original photo, so its boxes are in the pixels of
 the **tensor** (560 × 560 here), not of the photo: compare the person box with the one from
 `predict` in the [quick start](#quick-start).
+
+## Watching a camera or video
+
+`watch()` runs a model on a camera, a video file or a stream and gives you one `Result` per
+processed frame. The server keeps no state between frames: every frame is an ordinary
+`predict()` call, so every option of `predict()` works here too. What `watch()` adds is the
+plumbing around it: reading the camera on its own thread, skipping frames it cannot keep up with,
+pacing the requests, sending depth only where it is used, and an optional tracker.
+
+!!! note "How the examples in this section were run"
+    With SDK 0.3.0 on 6 October 2026, against a server on an RTX A6000 shared with other jobs
+    (CUDA, port 11800). The machine has no camera: the outputs come from a video file and from
+    made-up RGB-D frames. The two snippets that open an RTSP stream and a RealSense show the
+    calls only; the RealSense, Orbbec and ROS 2 adapters are tested against stand-ins of their
+    SDKs, the OpenCV and GStreamer ones for real.
+
+```python
+from visionserve import Client
+
+c = Client()
+c.load("rf-detr")
+for res in c.watch("slideshow.mp4", "rf-detr", fps=5, track=True, max_frames=6):
+    print(res.frame_id, round(res.timestamp, 1),
+          [(d.cls, round(d.conf, 2), d.track_id) for d in res.detections[:3]])
+```
+
+```text
+0 0.0 [('laptop', 0.94, 1), ('cat', 0.81, 2), ('person', 0.56, 3)]
+4 0.4 [('laptop', 0.95, 1), ('cat', 0.83, 2), ('person', 0.54, 3)]
+6 0.6 [('laptop', 0.95, 1), ('cat', 0.83, 2), ('person', 0.54, 3)]
+9 0.9 [('laptop', 0.95, 1), ('cat', 0.83, 2), ('person', 0.54, 3)]
+10 1.0 [('broccoli', 0.85, 5), ('bowl', 0.73, 6), ('carrot', 0.71, 7)]
+13 1.3 [('broccoli', 0.84, 5), ('bowl', 0.75, 6), ('carrot', 0.71, 7)]
+```
+
+`slideshow.mp4` is a 4-second, 10 fps clip made from four photos of this page (`cat.jpg`,
+`food.jpg`, `dogs.jpg`, `living-room.jpg`, one second each). A video file plays at its own speed,
+like a camera, so the frames that arrive while a request runs are skipped: frame 0 took longer
+(the first request after loading), so frames 1 to 3 were never sent. The tracker keeps the ids
+of objects that stay put, and gives new ids when the scene changes.
+
+### Sources
+
+The first argument says where the frames come from. Each camera kind has a small adapter that
+imports its vendor package only when you use it, so `import visionserve` never needs any of them.
+
+| `source` | Opens | Install | Depth |
+|---|---|---|---|
+| `0`, `"0"`, `"/dev/video0"` | a webcam / V4L2 device (OpenCV) | `pip install 'visionserve[opencv]'` | no |
+| `"clip.mp4"` (any file OpenCV reads) | a video file, played at its own frame rate | same | no |
+| `"rtsp://..."`, `"http(s)://..."` | an IP camera or stream; reconnects when it drops | same | no |
+| `"gst:<pipeline>"` | any GStreamer pipeline, run by `gst-launch-1.0` (hardware decoding, industrial cameras, Jetson CSI) | GStreamer from your OS (`apt install gstreamer1.0-tools ...`) | no |
+| `"realsense"`, `"realsense:<serial>"` | an Intel RealSense, depth aligned to colour (`rs.align`) | `pip install 'visionserve[realsense]'` | yes, `uint16`, the device's `depth_scale` |
+| `"orbbec"`, `"orbbec:<index>"` | an Orbbec Gemini / Femto / Astra (SDK v2), depth aligned to colour | `pip install 'visionserve[orbbec]'` | yes, `uint16`, the frame's scale |
+| `"ros2:<color_topic>[,<depth_topic>]"` | ROS 2 `sensor_msgs/Image` topics (a colour topic ending in `/compressed` is a `CompressedImage`), paired by time | a sourced ROS 2 install (`rclpy` is not on PyPI) | with a depth topic: `16UC1` (mm) or `32FC1` (m) |
+| any object with `read()` | your own source | none | if your frames carry it |
+
+The packages are all permissive: OpenCV (`opencv-python-headless`) Apache-2.0, `pyrealsense2`
+Apache-2.0, `pyorbbecsdk2` Apache-2.0, ROS 2 Apache-2.0. The OpenCV wheels bundle FFmpeg
+(LGPL-2.1) as shared libraries.
+
+For options, open the source yourself with `visionserve.open_source(spec, **options)` (or the
+adapter classes in `visionserve.sources`) and pass it in: `OpenCVSource` takes `width`,
+`height`, `fps` (for a camera), `realtime=False` (read a file as fast as it decodes), `reconnect`;
+`GStreamerSource` takes `width`, `height`, `sync`, `restart`; `RealSenseSource` takes `width`,
+`height`, `fps`, `depth`; `ROS2Source` takes `camera_info_topic` (for intrinsics) and `slop`. A
+source opened from a spec is closed when `watch()` ends; a source object you pass in stays open,
+so use it in a `with` block:
+
+```python
+from visionserve import Client, open_source
+
+with open_source("rtsp://192.168.1.20:554/stream1", reconnect=True) as cam:
+    for res in Client().watch(cam, "rf-detr", fps=2):
+        ...
+```
+
+Every source hands out `visionserve.Frame` objects: `color` (an `(H, W, 3)` `uint8` RGB array,
+not OpenCV's BGR), `depth` (`(H, W)`, aligned to `color`, or `None`), `depth_scale` (metres per
+`uint16` unit), `timestamp` (seconds: the device or message clock when there is one, the position
+in a video file, else the time it was read), `frame_id` (its index in the stream) and
+`intrinsics` (`{"fx", "fy", "cx", "cy"}` of the colour camera, when the device reports them).
+
+### Keeping up: latest frame, `fps`, `in_flight`
+
+A reader thread takes frames from the source as fast as it delivers them and keeps only the
+**latest** one. When a request finishes, the next one takes whatever frame is newest; frames in
+between are skipped. Results are therefore never more than one request behind the camera, and
+memory does not grow. A gap in `res.frame_id` is the number of frames skipped.
+
+| Option | Default | Effect |
+|---|---|---|
+| `fps` | `None` | Request starts are at least `1 / fps` seconds apart. `None`: the next request starts as soon as an answer is back. A request waits for a new frame, and frames arrive on the camera's own clock, so the real rate can be lower: the [command-line run](#from-the-command-line) below got 3.5 results per second at `--fps 5` from a 10 fps clip, on a GPU shared with other jobs. |
+| `in_flight` | `1` | How many requests run at once. `2` overlaps uploading one frame with the inference of the previous one; results still come back in frame order. |
+| `max_frames` | `None` | Stop after sending this many frames. |
+| `duration` | `None` | Stop sending after this many seconds; answers already in flight still come back. |
+| `drop_frames` | `True` | `False` sends **every** frame and reads the source only as fast as answers come back: use it to process a video file offline (open it with `realtime=False` too). |
+| `return_frames` | `False` | Attach the `Frame` to each result as `res.frame` (colour, depth, intrinsics). |
+| `track` | `False` | `True` adds `track_id` to each detection (below). |
+| `depth` | `"auto"` | Whether to upload the frame's depth (below). |
+
+Every result also carries `res.frame_id` and `res.timestamp` from its frame.
+
+### Depth
+
+Only `background` reads an uploaded depth image today (it replaces the MiDaS estimate in its
+`depth` and `auto` methods); the server says so per model in `GET /api/models` as
+`accepts_depth`. The grasp models plan from the colour image only.
+
+| `depth` | Sends the frame's depth |
+|---|---|
+| `"auto"` (default) | only to models with `accepts_depth` (one `GET /api/models`, cached); a server that does not report it gets colour only |
+| `"always"` | to every model; a frame without depth is an error |
+| `"never"` | never |
+
+What goes on the wire: a `uint16` depth goes up unchanged (the server reads `0` as "no reading",
+like every RGB-D camera, and the plane fit of `background` only needs relative values, so the
+scale is not needed there); a float depth goes up as `float32` metres (multiplied by
+`depth_scale` if there is one), with NaN, infinity and values ≤ 0 sent as `0` ("no reading";
+ROS `32FC1` images mark out-of-range pixels with NaN or infinity). The depth must have the colour
+image's size; the adapters align it with the camera SDK, and `watch()` refuses a frame whose depth
+has another size. A frame sent with depth always goes at full resolution, so the depth stays
+aligned with the pixels the server sees (models that accept depth have no resize hint anyway).
+
+A made-up RGB-D frame shows the difference: a floor plane 1.5 m away and a box 30 cm high.
+
+```python
+import numpy as np
+from PIL import Image
+from visionserve import Client
+from visionserve.sources import Frame, IterSource
+
+c = Client()
+color = np.asarray(Image.open("living-room.jpg").convert("RGB"))
+h, w = color.shape[:2]
+# A made-up RGB-D frame: a floor 1.5 m away, nearer towards the bottom, and a box 30 cm high.
+depth = (1500 - 0.5 * np.arange(h)[:, None].repeat(w, 1)).astype(np.uint16)
+depth[200:320, 260:420] -= 300
+frames = [Frame(color=color, depth=depth, depth_scale=0.001)] * 3
+
+print("accepts_depth:", c.accepts_depth("background"), c.accepts_depth("rf-detr"))
+for policy in ("auto", "never"):
+    for res in c.watch(IterSource(frames), "background", method="depth", depth=policy, max_frames=1):
+        m = res.masks[0].to_ndarray(w, h) if res.masks else None
+        print(policy, "no mask" if m is None else
+              "surface %.0f%% of the frame, %.0f%% of the box" % (100 * m.mean(), 100 * m[200:320, 260:420].mean()))
+```
+
+```text
+accepts_depth: True False
+auto surface 93% of the frame, 1% of the box
+never no mask
+```
+
+With the depth (`auto`), the floor is found and the box is left out (the 1 % is its edge: the
+server fits the plane at 256 × 256). Without it (`never`), MiDaS estimates depth from the photo
+alone and finds no clear plane. `IterSource` turns any list or generator of frames (or RGB arrays)
+into a source; `fps=` paces it like a camera.
+
+For grasping with a depth camera, keep the depth on the client side: with `return_frames=True`
+each result carries its frame, and the [robotics helpers](#grasp-with-a-depth-camera) take its
+depth and intrinsics:
+
+```python
+from visionserve import Client, grasp_distances
+
+for res in Client().watch("realsense", "grasp-rfdetr", fps=2, return_frames=True):
+    f = res.frame
+    dist = grasp_distances(f.depth, res.grasps, f.camera_intrinsics(), depth_scale=f.depth_scale)
+```
+
+### Tracking
+
+`track=True` runs a small IoU tracker on the client: each new result's boxes are matched to the
+previous ones greedily by overlap (same class, IoU ≥ 0.3), a match keeps its `track_id`, a new
+box gets a new id, and an id that is not seen for 5 results in a row is dropped. It has no
+motion or appearance model, so it holds ids while objects move less than about their own size
+between two processed frames, and swaps or loses them in crowds, behind occluders, or at a low
+`fps`. Tune it with `track=IoUTracker(iou_threshold=0.5, max_age=10, match_class=False)`, or pass
+your own object with an `update(detections)` method. `Detection.to_json()` includes `track_id`
+when it is set, and [`draw()`](#helpers) adds `#id` to the label.
+
+### Your own source
+
+Anything with a `read()` method works: return a `Frame` (or an `(H, W, 3)` RGB `uint8` array)
+per call and `None` when the stream ends. Accept a `timeout` argument and raise `TimeoutError`
+if you can wait with one: `watch()` then stops promptly even when no frame comes.
+
+```python
+import numpy as np
+from visionserve import Client, Frame
+
+
+class Shelf:
+    """Frames from a vendor SDK, a shared-memory ring, a robot's own camera topic, ..."""
+
+    def __init__(self, n):
+        self.n = n
+
+    def read(self, timeout=None):
+        if self.n == 0:
+            return None
+        self.n -= 1
+        rgb = np.zeros((480, 640, 3), np.uint8)       # your colour image, RGB
+        depth = np.full((480, 640), 800, np.uint16)   # aligned depth, or None
+        return Frame(color=rgb, depth=depth, depth_scale=0.001)
+
+
+# This toy source returns frames instantly, faster than any model: send every one of them.
+for res in Client().watch(Shelf(3), "background", method="depth", drop_frames=False):
+    print(res.frame_id, len(res.masks))
+```
+
+```text
+0 1
+1 1
+2 1
+```
+
+### Stopping and errors
+
+Leave the loop with `break`, `max_frames`, `duration`, or Ctrl-C: the reader thread stops and a
+source opened from a spec is closed (a source stuck in a blocking read is closed when that read
+returns). Requests still in flight are abandoned. A server error raises `VisionServeError` out of
+the loop; `503` (the model's queue is full) is retried once after its `Retry-After`. A source
+error (a camera unplugged mid-read, a frame of the wrong shape, a GStreamer pipeline that fails)
+raises too; the end of a file or stream just ends the loop.
+
+### From the command line
+
+```bash
+visionserve watch slideshow.mp4 --model rf-detr --fps 5 --track
+visionserve watch slideshow.mp4 --model rf-detr --max-frames 2 --json
+```
+
+```text
+frame 0      (3 detections) laptop 0.94 #1, cat 0.81 #2, person 0.56 #3  server 150 ms
+frame 8      (4 detections) laptop 0.95 #1, cat 0.83 #2, person 0.54 #3, couch 0.51 #4  server 59 ms
+frame 10     (3 detections) broccoli 0.85 #5, bowl 0.73 #6, carrot 0.71 #7  server 167 ms
+frame 14     (3 detections) broccoli 0.85 #5, bowl 0.75 #6, carrot 0.71 #7  server 58 ms
+...
+frame 37     (7 detections) couch 0.96 #14, tv 0.94 #15, chair 0.91 #16, book 0.76 #17, chair 0.73 #18, ...  server 66 ms
+frame 39     (7 detections) couch 0.96 #14, tv 0.94 #15, chair 0.91 #16, book 0.76 #17, chair 0.73 #18, ...  server 34 ms
+watch: 16 frames in 4.6 s (3.5 per second); 24 skipped to stay real time
+{"frame_id": 0, "timestamp": 0.0, "task": "detection", "model": "rf-detr", "device": "gpu:0", "detections": [{"bbox": [7.647275924682617, ...
+{"frame_id": 2, "timestamp": 0.2, "task": "detection", "model": "rf-detr", "device": "gpu:0", "detections": [{"bbox": [8.597850799560547, ...
+watch: 2 frames in 0.7 s (2.7 per second); 1 skipped to stay real time
+```
+
+One line per processed frame (with `--json`, one JSON object per line: `frame_id`, `timestamp`
+and the result, `track_id` included), and a summary on stderr. The options follow `watch()`:
+`--fps`, `--max-frames`, `--duration`, `--in-flight`, `--depth auto|always|never`, `--track`,
+`--every-frame` (`drop_frames=False`), `--resize`, and `--prompt`, `--box-threshold`,
+`--method` for the model. The [camera and video guide](../guides/camera-and-video.md) has more
+sources, GStreamer pipelines for RTSP with hardware decoding, and what to do when it goes wrong.
 
 ## Errors and retries
 
@@ -1284,6 +1541,7 @@ does the same). It drives a **running** server; it is not the Go binary. If both
 | `list` (aliases `models`, `ls`) / `ps` | the models (`--json` for JSON) / only the loaded ones |
 | `load MODEL` / `unload MODEL` (alias `rm`) | load or free a model |
 | `health` | checks that the server answers |
+| `watch SOURCE --model M [options]` | runs a model on a camera or video, one line per frame (see [From the command line](#from-the-command-line)) |
 
 Global options, before or after the command: `--host URL` (default `http://localhost:11435`),
 `--timeout SEC` (default 120), and `--version`.

@@ -35,6 +35,7 @@ needed for:
   - [CLIP embeddings](#clip-embeddings)
   - [SCRFD / OCR](#scrfd--ocr)
   - [Grasp detection](#grasp-detection)
+  - [Cameras and video — `Client.watch()`](#cameras-and-video--clientwatch)
 - [Post-processing](#post-processing)
   - [Grasp post-processing](#grasp-post-processing)
   - [Size filtering](#size-filtering----resultfilter_by_size)
@@ -191,6 +192,10 @@ visionserve predict background scene.jpg --method cv --roi 300,380,700,330 --sav
 
 # Detect only inside a region (any model); results come back in ORIGINAL coords
 visionserve predict rf-detr scene.jpg --roi 100,100,400,300
+
+# A camera or video, one line per frame (JSON lines with --json)
+visionserve watch 0 --model rf-detr --fps 5 --track
+visionserve watch clip.mp4 --model rf-detr --every-frame --json > detections.jsonl
 
 # Registry / memory management
 visionserve list
@@ -549,6 +554,43 @@ np.abs(x.inputs["input"] - my_transform(pil)).max()
 c.tokenize("siglip-text", "a photo of a cup")   # token ids, padded as served
 ```
 
+### Cameras and video — `Client.watch()`
+
+`watch()` runs a model on a camera, a video file or a stream: a generator of one `Result` per
+processed frame. The server stays stateless (each frame is a normal `predict()`); the SDK reads
+the source on its own thread and keeps only the **latest** frame, so results stay live and memory
+bounded (a gap in `res.frame_id` = frames skipped). Every `predict()` option works per frame.
+
+```python
+from visionserve import Client, open_source
+
+c = Client()
+for res in c.watch(0, "rf-detr", fps=5, track=True):          # webcam 0, <= 5 requests/s
+    print(res.frame_id, [(d.cls, d.track_id) for d in res.detections])
+
+# RGB-D: depth goes up only to models that read it (accepts_depth: `background`)
+for res in c.watch("realsense", "background", method="depth", return_frames=True, max_frames=10):
+    print(res.frame_id, len(res.masks), res.frame.depth.shape)
+```
+
+| `source` | Adapter | Install |
+|---|---|---|
+| `0`, `"/dev/video0"`, `"clip.mp4"`, `"rtsp://..."`, `"http(s)://..."` | `OpenCVSource` | `pip install 'visionserve[opencv]'` |
+| `"gst:<pipeline>"` (runs `gst-launch-1.0`; hardware decode, Jetson, Aravis) | `GStreamerSource` | GStreamer from the OS |
+| `"realsense[:serial]"` (depth aligned with `rs.align`) | `RealSenseSource` | `pip install 'visionserve[realsense]'` |
+| `"orbbec[:index]"` (SDK v2, `AlignFilter`) | `OrbbecSource` | `pip install 'visionserve[orbbec]'` |
+| `"ros2:<color>[,<depth>]"` (`Image` / `CompressedImage`, `16UC1` / `32FC1`) | `ROS2Source` | a sourced ROS 2 install |
+| any object with `read()` returning a `Frame` / RGB array, `None` at the end | used as is | — |
+
+Options: `fps` (min. spacing of request starts), `in_flight` (concurrent requests, results in
+order), `max_frames`, `duration`, `depth="auto"|"always"|"never"`, `return_frames` (`res.frame`:
+colour, aligned depth, `depth_scale`, intrinsics), `track` (simple client-side IoU tracker →
+`Detection.track_id`), `drop_frames=False` (send every frame: offline video). Depth on the wire:
+`uint16` unchanged (0 = no reading), floats as `float32` metres (NaN / inf / <= 0 → 0); a frame
+sent with depth is never resized. CLI: `visionserve watch SOURCE --model M [--fps N] [--prompt ...]
+[--depth auto|always|never] [--max-frames N] [--track] [--json]`. Full guide:
+`website/docs/guides/camera-and-video.md`.
+
 ### Checkpoint converter — `pip install visionserve[convert]`
 
 `visionserve-convert` / `visionserve.convert.export()` turn a PyTorch, RF-DETR, HuggingFace or
@@ -878,6 +920,26 @@ python clients/python/tests/test_client.py
 ```
 
 ## Changelog
+
+### 0.3.0
+
+- **`Client.watch(source, model, ...)`**: run a model on a camera, video file or stream, one
+  `Result` per processed frame (with `frame_id`, `timestamp`, and `frame` when
+  `return_frames=True`). A reader thread keeps only the latest frame; `fps` spaces request
+  starts, `in_flight` overlaps requests (results in order), `max_frames` / `duration` stop it,
+  `drop_frames=False` sends every frame. A 503 is retried once after its `Retry-After`.
+- **`visionserve.sources`**: one `FrameSource` interface (`read(timeout) -> Frame | None`,
+  `close()`) and `open_source(spec)` over OpenCV (webcam / file / RTSP, with reconnect),
+  GStreamer (`gst-launch-1.0` subprocess, no PyGObject), Intel RealSense, Orbbec (SDK v2) and ROS 2
+  topics (no `cv_bridge`), plus `IterSource` for frames you already have. Vendor packages are
+  optional extras, imported lazily: `[opencv]`, `[realsense]`, `[orbbec]`.
+- **Depth policy**: `watch(depth="auto")` uploads a frame's aligned depth only to models whose
+  `ModelInfo.accepts_depth` is true (new in `GET /api/models`; `Client.accepts_depth(model)`);
+  `uint16` goes up unchanged, float depth as `float32` metres with invalid pixels as 0.
+- **Tracking**: `watch(track=True)` adds `Detection.track_id` with a small IoU tracker
+  (`visionserve.IoUTracker`); `Detection.to_json()` includes it when set.
+- `Frame.depth_meters()`, `Frame.camera_intrinsics()`; CLI `visionserve watch`;
+  `visionserve list --json` prints `accepts_depth`.
 
 ### 0.2.0
 

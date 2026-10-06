@@ -27,3 +27,13 @@ func UsefulSide(man *registry.Manifest) models.UsefulSide {
 	}
 	return models.UsefulSideOf(man.ArchOrName(), spec)
 }
+
+// AcceptsDepth is the depth hint GET /api/models publishes for a manifest
+// (api.ModelInfo.AcceptsDepth): whether the model reads an uploaded depth map, as its
+// architecture declares (models.RegisterAcceptsDepth). Manifest only, like UsefulSide.
+func AcceptsDepth(man *registry.Manifest) bool {
+	if man == nil {
+		return false
+	}
+	return models.AcceptsDepthOf(man.ArchOrName(), man.Files)
+}

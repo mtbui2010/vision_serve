@@ -19,7 +19,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Union
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
@@ -100,6 +100,7 @@ class Client:
         self.jpeg = bool(jpeg)
         self.jpeg_quality = _resize.check_quality(jpeg_quality)
         self._hints: Dict[str, "tuple[Optional[int], Optional[int]]"] = {}
+        self._accepts_depth: Dict[str, Optional[bool]] = {}
         self._hints_fetched = float("-inf")  # monotonic time of the last /api/models fetch
         self._hints_lock = threading.Lock()
 
@@ -116,6 +117,7 @@ class Client:
         infos = [ModelInfo.from_json(x) for x in (data or []) if isinstance(x, dict)]
         with self._hints_lock:
             self._hints = {m.name: (m.max_useful_side, m.max_useful_short_side) for m in infos}
+            self._accepts_depth = {m.name: m.accepts_depth for m in infos}
             self._hints_fetched = time.monotonic()
         return infos
 
@@ -294,6 +296,73 @@ class Client:
             result = result.filter_grasps(max_grasps_per_object)
         return result
 
+    def watch(
+        self,
+        source: Any,
+        model: str,
+        *,
+        fps: Optional[float] = None,
+        max_frames: Optional[int] = None,
+        duration: Optional[float] = None,
+        depth: str = "auto",
+        in_flight: int = 1,
+        return_frames: bool = False,
+        track: Any = False,
+        drop_frames: bool = True,
+        **predict_kwargs: Any,
+    ) -> Iterator[Result]:
+        """Run ``model`` on a camera or video: a generator of one :class:`Result` per processed frame.
+
+        Every frame is an ordinary :meth:`predict` call (the server keeps no state between
+        frames), so ``predict_kwargs`` (``prompt``, ``box_threshold``, ``roi``, ``resize``, ...)
+        work as in :meth:`predict`::
+
+            for res in client.watch(0, "rf-detr", fps=5):          # webcam 0, 5 requests/s
+                print(res.frame_id, [(d.cls, round(d.conf, 2)) for d in res.detections])
+
+        Args:
+            source: a camera / video spec or a source object (:func:`visionserve.sources.open_source`):
+                ``0`` / ``"/dev/video0"`` / a file / ``"rtsp://..."`` (OpenCV), ``"gst:<pipeline>"``,
+                ``"realsense[:serial]"``, ``"orbbec[:index]"``, ``"ros2:<color>[,<depth>]"``, or any
+                object with ``read()``. A source opened from a spec is closed when the generator
+                ends; a source object you pass stays open (close it, e.g. with ``with``).
+            model: the model to run.
+            fps: at most this many requests per second (``None`` = as fast as answers come back).
+            max_frames: stop after this many frames were sent (``None`` = no limit).
+            duration: stop sending after this many seconds (in-flight answers still come back).
+            depth: ``"auto"`` (default) uploads the frame's depth only when the model reads it
+                (``accepts_depth`` in ``GET /api/models``: ``background`` today); ``"always"``
+                uploads it for every model and fails on a frame without depth; ``"never"``
+                uploads colour only. ``res.frame.depth`` (``return_frames=True``) keeps the depth
+                for client-side 3-D either way (:func:`visionserve.grasp_distances`, ...).
+            in_flight: requests running at once (default 1). More overlaps the upload of one frame
+                with the inference of another; results still come back in frame order.
+            return_frames: attach the :class:`~visionserve.sources.Frame` to each result
+                (``res.frame``: colour, depth, intrinsics).
+            track: ``True`` adds a ``track_id`` to every detection with a simple client-side IoU
+                tracker (:class:`visionserve.track.IoUTracker`), or pass your own tracker object
+                with ``update(detections)``.
+            drop_frames: ``True`` (default): keep only the LATEST frame, skipping frames that
+                arrive while requests run, so results stay real time (gaps in ``res.frame_id``
+                show skipped frames). ``False``: send every frame (a video file processed
+                offline); the source is read only as fast as answers come back.
+            predict_kwargs: passed to :meth:`predict` for every frame (not ``image`` / ``depth``).
+
+        Each result also carries ``res.frame_id`` and ``res.timestamp`` (the source frame's).
+        Server errors raise :class:`VisionServeError` out of the loop (a 503 "queue full" is
+        retried once after its ``Retry-After``); source errors (camera gone, bad frame) raise
+        too. Breaking out of the loop, ``close()`` on the generator or Ctrl-C stops the reader
+        thread and closes a source opened from a spec; requests still in flight are abandoned.
+        """
+        from . import watch as _watch
+
+        opts = _watch.check_args(fps=fps, max_frames=max_frames, duration=duration, depth=depth,
+                                 in_flight=in_flight, track=track, predict_kwargs=predict_kwargs)
+        return _watch.run(self, source, model, fps=opts["fps"], max_frames=opts["max_frames"],
+                          duration=opts["duration"], depth=depth, in_flight=opts["in_flight"],
+                          return_frames=bool(return_frames), tracker=opts["tracker"],
+                          drop_frames=bool(drop_frames), predict_kwargs=predict_kwargs)
+
     def preprocess(
         self,
         model: str,
@@ -367,9 +436,25 @@ class Client:
         (an unreachable or old server), there is no hint: the image is sent at full resolution
         and predict() reports the server's own error, if any.
         """
+        self._refresh_hints(model)
+        with self._hints_lock:
+            return self._hints.get(model, (None, None))
+
+    def accepts_depth(self, model: str) -> Optional[bool]:
+        """Whether ``model`` reads an uploaded depth map (``GET /api/models``: ``accepts_depth``):
+        ``True`` / ``False``, or ``None`` when the server does not say (it predates the field, the
+        model is unknown, or the listing failed). Cached like :meth:`useful_side`; used by
+        :meth:`watch` with ``depth="auto"``."""
+        self._refresh_hints(model)
+        with self._hints_lock:
+            return self._accepts_depth.get(model)
+
+    def _refresh_hints(self, model: str) -> None:
+        """Fetch ``GET /api/models`` once (and again for an unknown model, at most every few
+        seconds); a failed listing leaves the caches as they are."""
         with self._hints_lock:
             if model in self._hints:
-                return self._hints[model]
+                return
             stale = time.monotonic() - self._hints_fetched > _HINT_REFRESH_S
         if stale:
             try:
@@ -377,8 +462,6 @@ class Client:
             except (VisionServeError, ValueError, TypeError):
                 with self._hints_lock:
                     self._hints_fetched = time.monotonic()
-        with self._hints_lock:
-            return self._hints.get(model, (None, None))
 
     def _prepare(
         self,

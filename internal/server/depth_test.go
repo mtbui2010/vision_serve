@@ -47,6 +47,21 @@ func TestParseDepthFloat32(t *testing.T) {
 	}
 }
 
+// ±Inf is not a depth: ROS 32FC1 maps mark "beyond range" as +Inf, and a +Inf that passed as a
+// valid reading reached the plane fit (engineering rule: validate floats as finite).
+func TestParseDepthFloat32InfIsInvalid(t *testing.T) {
+	inf := float32(math.Inf(1))
+	d, _, _ := parseDepth(f32bytes(inf, -inf, float32(math.NaN()), 0.8), "float32", 2, 2, 2, 2)
+	for i := 0; i < 3; i++ {
+		if !math.IsNaN(float64(d[i])) {
+			t.Errorf("value %d: %v, want NaN (invalid)", i, d[i])
+		}
+	}
+	if math.Abs(float64(d[3])-0.8) > 1e-6 {
+		t.Errorf("finite value changed: %v", d[3])
+	}
+}
+
 func TestParseDepthResizeAndBadLen(t *testing.T) {
 	// 1x1 → resized to 2x2 (all same)
 	d, dw, dh := parseDepth(f32bytes(0.7), "float32", 1, 1, 2, 2)

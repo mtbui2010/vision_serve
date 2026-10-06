@@ -5,8 +5,9 @@ follow them. They all have the same five parts:
 
 1. **When you need this**: two or three lines, so you know you are on the right page.
 2. **The command**: one command to copy.
-3. **Reading the result**: a real output, trimmed. The first line is always the verdict:
-   `PASS` (all good), `WARN` (works, but look at the reason) or `FAIL` (fix it first).
+3. **Reading the result**: a real output, trimmed. For the checking commands the first line is
+   the verdict: `PASS` (all good), `WARN` (works, but look at the reason) or `FAIL` (fix it
+   first).
 4. **If it says WARN or FAIL**: a table from the message to what you do about it.
 5. **Want the details?**: links to the long pages, for when you want to know how it works.
 
@@ -17,6 +18,7 @@ follow them. They all have the same five parts:
 | Does the served model behave like it did in training? | [Check it behaves like training](check-training.md) | `visionserve check` |
 | How do I make it smaller and faster for a Jetson? | [Make it smaller and faster for Jetson](jetson.md) | `visionserve optimize` |
 | How fast is it on this machine? | [Measure speed](measure-speed.md) | `visionserve bench` |
+| How do I run it on a camera, a video or an RGB-D sensor? | [Run a model on a camera or video](camera-and-video.md) | `visionserve watch` (Python SDK) |
 | It works, but worse than in training. Where do I look? | [My served model is worse than in training](worse-than-training.md) | the commands above, in order |
 
 The **Deep dives** under these guides are the long versions: every check explained with real

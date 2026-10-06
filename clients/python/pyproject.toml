@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "Apache-2.0" }
 authors = [{ name = "VisionServe" }]
-keywords = ["visionserve", "computer-vision", "onnx", "rf-detr", "sam", "grounding-dino", "client"]
+keywords = ["visionserve", "computer-vision", "onnx", "rf-detr", "sam", "grounding-dino", "client", "camera", "rgbd"]
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
@@ -35,6 +35,15 @@ dependencies = []
 [project.optional-dependencies]
 images = ["pillow>=8.0", "numpy>=1.20"]
 dev = ["pillow>=8.0", "numpy>=1.20", "pytest>=7.0"]
+# Camera / video sources for Client.watch() (visionserve.sources). Each is optional and imported
+# only by its adapter. All permissive: opencv-python-headless Apache-2.0 (its wheels bundle FFmpeg,
+# LGPL-2.1, as shared libraries), pyrealsense2 Apache-2.0, pyorbbecsdk2 Apache-2.0 (Orbbec SDK v2,
+# imported as `pyorbbecsdk`). GStreamer (gst-launch-1.0) and ROS 2 (rclpy) are system installs,
+# not pip packages: GStreamerSource runs gst-launch-1.0 as a subprocess, ROS2Source needs a
+# sourced ROS 2 environment. `[images]` alone is enough for those two.
+opencv = ["opencv-python-headless>=4.5", "pillow>=8.0", "numpy>=1.20"]
+realsense = ["pyrealsense2>=2.50", "pillow>=8.0", "numpy>=1.20"]
+orbbec = ["pyorbbecsdk2>=2.0", "pillow>=8.0", "numpy>=1.20"]
 # Checkpoint converter (`visionserve-convert`, `visionserve.convert.export`): PyTorch, RF-DETR and
 # HuggingFace checkpoints -> ONNX + manifest, with parity / end-to-end / speed / mAP checks.
 # The SERVER never needs these — it stays a Python-free Go binary (CLAUDE.md rule 3).

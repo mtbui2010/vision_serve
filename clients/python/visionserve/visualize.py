@@ -185,6 +185,8 @@ def _draw_detections(
         x, y, w, h = det.bbox
         _draw_box(draw_ctx, x, y, w, h, colour, thickness=2)
         label = "%s %.0f%%" % (det.cls, det.conf * 100)
+        if getattr(det, "track_id", None) is not None:  # Client.watch(track=True)
+            label += " #%d" % det.track_id
         _draw_label(draw_ctx, x, y, label, colour, ImageFont)
     if target_i is not None:
         det = result.detections[target_i]

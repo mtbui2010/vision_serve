@@ -43,7 +43,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		if s.mgr.IsLoaded(e.Manifest.Name) {
 			state = "loaded"
 		}
-		infos = append(infos, withUsefulSide(api.ModelInfo{
+		infos = append(infos, withClientHints(api.ModelInfo{
 			Name:    e.Manifest.Name,
 			Task:    api.Task(e.Manifest.Task),
 			License: e.Manifest.License,
@@ -173,8 +173,8 @@ var errBadDepth = fmt.Errorf("invalid depth map: its byte length must equal dept
 	"(2 for uint16, 4 for float32), each side <= %d", maxDepthSide)
 
 // parseDepth turns a raw little-endian depth array into a normalized float map (row-major,
-// NaN = invalid), resized to the RGB image (imgW×imgH). dtype is "float32" (kept as-is, ≤0/NaN
-// → invalid) or "uint16" (default; /65535, 0 → invalid). dw/dh default to the image size.
+// NaN = invalid), resized to the RGB image (imgW×imgH). dtype is "float32" (kept as-is, ≤0, NaN
+// or ±Inf → invalid: ROS 32FC1 depth marks "too far" as +Inf, which used to reach the plane fit) or "uint16" (default; /65535, 0 → invalid). dw/dh default to the image size.
 // Returns nil when the bytes don't match the declared dtype×dims.
 func parseDepth(raw []byte, dtype string, dw, dh, imgW, imgH int) ([]float32, int, int) {
 	if len(raw) == 0 || imgW <= 0 || imgH <= 0 {
@@ -204,7 +204,7 @@ func parseDepth(raw []byte, dtype string, dw, dh, imgW, imgH int) ([]float32, in
 		}
 		for i := 0; i < n; i++ {
 			v := math.Float32frombits(binary.LittleEndian.Uint32(raw[i*4:]))
-			if f := float64(v); math.IsNaN(f) || f <= 0 {
+			if f := float64(v); math.IsNaN(f) || math.IsInf(f, 0) || f <= 0 {
 				depth[i] = float32(math.NaN())
 			} else {
 				depth[i] = v

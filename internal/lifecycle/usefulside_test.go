@@ -82,3 +82,38 @@ func TestUsefulSideShippedManifests(t *testing.T) {
 		}
 	}
 }
+
+// The depth hint of every shipped manifest (GET /api/models: accepts_depth). Only `background`
+// (which has a MiDaS session, so its depth and auto methods run) reads an uploaded depth map;
+// the grasp models plan from masks alone and must not claim depth, or SDKs would upload a
+// camera's depth frame for nothing. A model that accepts depth must also get no client-resize
+// hint: its depth map is aligned to the full photo.
+func TestAcceptsDepthShippedManifests(t *testing.T) {
+	reg := registry.New(filepath.Join("..", "..", "models"))
+	if _, err := reg.Scan(); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	want := map[string]bool{"background": true}
+	seen := map[string]bool{}
+	for _, e := range reg.List() {
+		name := e.Manifest.Name
+		got := AcceptsDepth(e.Manifest)
+		if got {
+			seen[name] = true
+			if u := UsefulSide(e.Manifest); !u.IsZero() {
+				t.Errorf("%s accepts depth but gets the client-resize hint %+v", name, u)
+			}
+		}
+		if got != want[name] {
+			t.Errorf("%s: AcceptsDepth = %v, want %v", name, got, want[name])
+		}
+	}
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("%s: expected to accept depth but not shipped or not accepting", name)
+		}
+	}
+	if AcceptsDepth(nil) {
+		t.Error("nil manifest accepts depth")
+	}
+}
