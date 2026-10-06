@@ -362,6 +362,95 @@ def test_optimize_without_a_server_fails_with_one_json_object(registry, capsys, 
     assert [v["format"] for v in doc["details"]["variants"]] == ["fp32", "fp16", "int8", "mixed"]
 
 
+def _score(name, rank, **errs):
+    from visionserve.convert.precision import LayerScore
+    first = next(iter(errs.values()))
+    return LayerScore(name, "MatMul", first, 20.0, None, 1.0, 1.0, rank=rank, errs=dict(errs))
+
+
+def test_complete_scores_measures_only_what_the_file_lacks(registry, monkeypatch):
+    """A --sensitivity file from `sensitivity --formats int8` and a ladder int8+fp16: fp16 is
+    measured (only fp16), merged per layer, the int8 scores reused; a layer the file did not
+    score but fp16 applies to is added after the file's layers."""
+    reg, _ = registry
+    m = E.find_model(reg, "tiny")
+    calls = []
+
+    def fake_measure(m_, feeds, formats, method, gpu):
+        calls.append((list(formats), len(feeds), method, gpu))
+        return [_score("fc1", 1, fp16=0.001), _score("conv", 2, fp16=0.002), _score("fc2", 3, fp16=0.003)], "CPU"
+    monkeypatch.setattr(E, "measure", fake_measure)
+    given = [_score("conv", 1, int8=0.1), _score("fc1", 2, int8=0.2)]
+    v = E.Variant("mixed")
+    merged, measured = E.complete_scores(m, given, ("int8", "fp16"), [{}, {}], "minmax", True, v, "s.json")
+    assert calls == [(["fp16"], 2, "minmax", True)] and measured == ("fp16",) and not v.warn
+    by = {s.name: s for s in merged}
+    assert by["conv"].errs == {"int8": 0.1, "fp16": 0.002} and by["fc1"].errs == {"int8": 0.2, "fp16": 0.001}
+    assert by["conv"].rank == 1 and by["fc1"].rank == 2 and by["fc2"].rank == 3 and by["fc2"].errs == {"fp16": 0.003}
+    assert given[0].errs == {"int8": 0.1}                       # the caller's scores are not mutated
+    # Complete already: nothing measured.
+    calls.clear()
+    assert E.complete_scores(m, merged, ("int8", "fp16"), [{}], "minmax", False, v, "s.json") == (merged, ())
+    assert calls == []
+
+
+def test_complete_scores_that_cannot_measure_skip_mixed_with_the_fix(registry, monkeypatch):
+    reg, _ = registry
+    m = E.find_model(reg, "tiny")
+
+    def broken(*a, **k):
+        raise RuntimeError("CUDA out of memory")
+    monkeypatch.setattr(E, "measure", broken)
+    v = E.Variant("mixed")
+    with pytest.raises(ConvertError):
+        E.complete_scores(m, [_score("conv", 1, int8=0.1)], ("int8", "fp16"), [{}], "minmax", False, v, "s.json")
+    assert v.warn.startswith("mixed skipped: s.json has no fp16 scores") and "CUDA out of memory" in v.warn
+    assert "`visionserve sensitivity tiny --formats int8,fp16 --save FILE`" in v.warn
+    # Scores of another model: refused rather than merged into nothing.
+    monkeypatch.setattr(E, "measure", lambda *a, **k: ([_score("conv", 1, fp16=0.002)], "CPU"))
+    v = E.Variant("mixed")
+    with pytest.raises(ConvertError):
+        E.complete_scores(m, [_score("other/layer", 1, int8=0.1)], ("int8", "fp16"), [{}], "minmax", False, v, "x.json")
+    assert "are not this model's" in v.warn
+
+
+def test_build_variants_skips_only_mixed_when_measuring_fails(registry, tmp_path, monkeypatch):
+    reg, imgs = registry
+    m = E.find_model(reg, "tiny")
+    feeds = E.calibration_feeds(m, imgs, 4)
+    monkeypatch.setattr(E, "measure", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no GPU")))
+
+    class A:
+        calib_method, sens_images, max_output_err, gpu, sensitivity = "minmax", 2, 0.5, False, "int8.json"
+    vs, _ = E.build_variants(m, E.PRESETS["jetson-orin"], feeds, A, tmp_path, [_score("conv", 1, int8=0.1)])
+    by = {v.fmt: v for v in vs}
+    assert by["mixed"].error and by["mixed"].warn and "--formats int8,fp16" in by["mixed"].warn
+    assert not by["int8"].error and by["int8"].path.is_file()   # the other candidates still built
+
+
+def test_optimize_with_an_int8_only_sensitivity_file_measures_fp16(registry, tmp_path, capsys, monkeypatch):
+    """`optimize --sensitivity FILE` with a file from `sensitivity --formats int8` used to fail the
+    mixed candidate ("the sensitivity scores do not cover fp16"); it now measures fp16 itself (real
+    precision code on the tiny model) and says so."""
+    reg, imgs = registry
+    save = tmp_path / "int8.json"
+    assert E.main(["sensitivity", "tiny", "--models", str(reg), "--images", str(imgs), "--formats", "int8",
+                   "--sens-images", "2", "--save", str(save), "--json"]) == 0
+    capsys.readouterr()
+    assert all(set(s["errs"]) == {"int8"} for s in json.loads(save.read_text())["layers"])
+    monkeypatch.setenv("VISIONSERVE_BIN", "/nonexistent/visionserve")   # no server: the build is what we test
+    E.main(["optimize", "tiny", "--models", str(reg), "--images", str(imgs), "--target", "jetson-orin",
+            "--calib-n", "4", "--sens-images", "2", "--max-output-err", "0.5", "--sensitivity", str(save), "--json"])
+    cap = capsys.readouterr()
+    doc = json.loads(cap.out)
+    mixed = next(v for v in doc["details"]["variants"] if v["format"] == "mixed")
+    assert not mixed["error"], mixed["error"]
+    assert "fp16 sensitivity measured here, the rest reused from" in mixed["note"]
+    assert any("has no fp16 scores: the mixed candidate measured them here" in f["text"]
+               for f in doc["details"]["findings"])
+    assert "measuring fp16 here for the mixed candidate" in cap.err
+
+
 def test_keep_fp32_report_offers_the_smaller_variant(registry):
     reg, imgs = registry
     m = E.find_model(reg, "tiny")
