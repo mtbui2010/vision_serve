@@ -2516,5 +2516,166 @@
    },
    "want_index": 0
   }
- ]
+ ],
+ "group_masks": [
+  {
+   "bbox": [
+    3.5,
+    2,
+    4,
+    4
+   ],
+   "conf": 0.7,
+   "rle": "48"
+  },
+  {
+   "bbox": [
+    0,
+    0,
+    4,
+    3
+   ],
+   "conf": 0.6,
+   "rle": "48"
+  }
+ ],
+ "filter_grasps": [
+  {
+   "max_per_object": null,
+   "want": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ]
+  },
+  {
+   "max_per_object": 0,
+   "want": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6
+   ]
+  },
+  {
+   "max_per_object": 1,
+   "want": [
+    0,
+    1,
+    2,
+    3,
+    6
+   ]
+  },
+  {
+   "max_per_object": 2,
+   "want": [
+    0,
+    4,
+    1,
+    5,
+    2,
+    3,
+    6
+   ]
+  },
+  {
+   "max_per_object": 3,
+   "want": [
+    0,
+    4,
+    1,
+    5,
+    2,
+    3,
+    6
+   ]
+  },
+  {
+   "max_per_object": 1,
+   "masks_only": true,
+   "want": [
+    0,
+    1,
+    2,
+    3,
+    6
+   ]
+  },
+  {
+   "max_per_object": 2,
+   "masks_only": true,
+   "want": [
+    0,
+    1,
+    5,
+    2,
+    3,
+    6,
+    4
+   ]
+  }
+ ],
+ "group_by_class": {
+  "cup": {
+   "detections": [
+    0,
+    2,
+    3
+   ],
+   "masks": [
+    4
+   ],
+   "grasps": [
+    0,
+    2,
+    3,
+    4
+   ]
+  },
+  "bowl": {
+   "detections": [
+    1
+   ],
+   "masks": [
+    3
+   ],
+   "grasps": [
+    1,
+    5
+   ]
+  },
+  "plate": {
+   "detections": [
+    4
+   ],
+   "masks": [],
+   "grasps": []
+  },
+  "spoon": {
+   "detections": [
+    5
+   ],
+   "masks": [],
+   "grasps": []
+  },
+  "": {
+   "detections": [],
+   "masks": [
+    0,
+    1,
+    2
+   ],
+   "grasps": [
+    6
+   ]
+  }
+ }
 }

@@ -608,8 +608,9 @@ export class Result {
    * - `masks`: masks carry no class on the wire, so a mask whose box equals a detection's box
    *   (Grounded-SAM and the grasp pipelines copy the detection box onto its mask) takes that
    *   detection's label; any other mask (e.g. a box-prompted SAM mask) goes under `""`.
-   * - `grasps`: the grasps whose `cls` is that label (class-agnostic grasps, `cls` `""`, go
-   *   under `""`).
+   * - `grasps`: a class-aware grasp goes with its `cls` (its source detection's class); a
+   *   class-agnostic one with the class of the smallest detection box containing its centre,
+   *   else under `""`.
    * - `classifications`, `depthMap` and `embeddings` are per image, not per object: every group
    *   has them empty (`depthWidth` / `depthHeight` 0) instead of a copy of the whole map.
    * - `task`, `model`, `durationMs`, `device`, `hint` and `clientResize` are kept.
@@ -632,7 +633,15 @@ export class Result {
     for (const mask of this.masks) {
       group(boxLabel.get(mask.bbox.map(Number).join(",")) ?? "").masks.push(mask);
     }
-    for (const g of this.grasps) group(g.cls).grasps.push(g);
+    const boxes = this.detections.map((d) => d.bbox);
+    for (const g of this.grasps) {
+      let label = g.cls;
+      if (!g.cls && !g.conf) {
+        const i = boxes.length ? graspObjectIndex(g, boxes) : -1;
+        label = i >= 0 ? this.detections[i]!.cls : "";
+      }
+      group(label).grasps.push(g);
+    }
 
     const out: Record<string, Result> = {};
     for (const [label, g] of groups) {

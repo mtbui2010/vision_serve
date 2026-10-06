@@ -3,8 +3,8 @@ import { Detection, Grasp, Mask, Result, bytesToBase64, topGraspsPerObject } fro
 
 type RGB = [number, number, number];
 
-/** Index palette (`colorBy: "index"`): the Go server's overlay palette, as in the Python client. */
-const PALETTE: RGB[] = [
+/** Index palette (`colorBy: "index"`): the Go server's overlay palette, as in the Python client. @internal */
+export const PALETTE: RGB[] = [
   [255, 59, 59],
   [255, 165, 0],
   [50, 205, 50],
@@ -19,7 +19,7 @@ const PALETTE: RGB[] = [
  * Class palette (`colorBy: "class"`): the Python client's 16 well-separated colours
  * (Trubetskoy's list without near-white, grey, black, navy and maroon).
  */
-const CLASS_PALETTE: RGB[] = [
+export const CLASS_PALETTE: RGB[] = [
   [230, 25, 75], // red
   [60, 180, 75], // green
   [255, 225, 25], // yellow
@@ -204,8 +204,8 @@ export function toSVG(result: Result, width: number, height: number, opts: SVGOp
   );
 }
 
-/** Font size, line width and picture size shared by every drawing step. */
-interface Style {
+/** Font size, line width and picture size shared by every drawing step. @internal */
+export interface Style {
   font: number;
   lw: number;
   width: number;
@@ -215,8 +215,9 @@ interface Style {
 /**
  * Sizes for a picture (Python's `_auto_sizes`): proportional to its shorter side, clamped, so
  * labels read the same on a thumbnail and on a 4000 x 3000 photo. Explicit values win.
+ * @internal
  */
-function style(width: number, height: number, fontSize?: number, lineWidth?: number): Style {
+export function style(width: number, height: number, fontSize?: number, lineWidth?: number): Style {
   const short = Math.max(1, Math.min(Math.trunc(width), Math.trunc(height)));
   const font = fontSize != null ? Math.trunc(fontSize) : Math.max(12, Math.min(160, roundHalfEven(short / 30)));
   const lw = lineWidth != null ? Math.trunc(lineWidth) : Math.max(1, Math.min(40, roundHalfEven(short / 210)));
@@ -230,8 +231,8 @@ function roundHalfEven(x: number): number {
   return Math.abs(x % 1) === 0.5 && r % 2 !== 0 ? r - 1 : r;
 }
 
-/** 32-bit FNV-1a of the UTF-8 bytes: a stable hash, the same in every SDK. */
-function fnv1a(text: string): number {
+/** 32-bit FNV-1a of the UTF-8 bytes: a stable hash, the same in every SDK. @internal */
+export function fnv1a(text: string): number {
   let h = 0x811c9dc5;
   for (const b of new TextEncoder().encode(text)) {
     h ^= b;
@@ -268,8 +269,8 @@ export function classColour(label: string): RGB {
   return CLASS_PALETTE[fnv1a(label) % CLASS_PALETTE.length]!;
 }
 
-/** Black or white, whichever reads better on `bg` (Python's `_text_colour`). */
-function textColour(bg: RGB): RGB {
+/** Black or white, whichever reads better on `bg` (Python's `_text_colour`). @internal */
+export function textColour(bg: RGB): RGB {
   const lum = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2];
   return lum > 150 ? [0, 0, 0] : [255, 255, 255];
 }
@@ -292,7 +293,7 @@ function maskImage(
   const pixels = new Uint8Array(width * height);
   const palette: Array<[number, number, number, number]> = [[0, 0, 0, 0]];
   const slot = new Map<string, number>();
-  const a = Math.round(alpha * 255);
+  const a = roundHalfEven(alpha * 255); // Python: int(round(alpha * 255))
   let any = false;
   masks.forEach((m, i) => {
     const c = colourOf(m, i);

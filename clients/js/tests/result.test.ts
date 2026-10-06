@@ -138,7 +138,8 @@ test("groupByClass: each group holds only its class's detections, masks and gras
       { x: 5, y: 5, theta: 0, width: 4, quality: 0.9, class: "cup", conf: 0.9 },
       { x: 25, y: 5, theta: 0, width: 4, quality: 0.8, class: "bowl", conf: 0.8 },
       { x: 45, y: 5, theta: 0, width: 4, quality: 0.7, class: "cup", conf: 0.7 },
-      { x: 2, y: 3, theta: 0, width: 4, quality: 0.6 },
+      { x: 2, y: 3, theta: 0, width: 4, quality: 0.6 }, // class-agnostic, inside the first cup's box
+      { x: 99, y: 99, theta: 0, width: 4, quality: 0.5 }, // class-agnostic, in no box: ""
     ],
     classifications: [{ class: "cup", conf: 0.5 }],
     depth_map: [0, 1], depth_width: 2, depth_height: 1,
@@ -150,10 +151,10 @@ test("groupByClass: each group holds only its class's detections, masks and gras
   const cup = groups.cup!;
   assert.deepEqual(cup.detections.map((d) => d.conf), [0.9, 0.7]);
   assert.deepEqual(cup.masks.map((m) => m.conf), [0.94]);
-  assert.deepEqual(cup.grasps.map((g) => g.quality), [0.9, 0.7]);
+  assert.deepEqual(cup.grasps.map((g) => g.quality), [0.9, 0.7, 0.6]);
   assert.deepEqual(groups.bowl!.grasps.map((g) => g.quality), [0.8]);
   assert.deepEqual(groups[""]!.masks.map((m) => m.conf), [0.5]);
-  assert.deepEqual(groups[""]!.grasps.map((g) => g.quality), [0.6]);
+  assert.deepEqual(groups[""]!.grasps.map((g) => g.quality), [0.5]);
   assert.equal(groups[""]!.detections.length, 0);
   for (const g of Object.values(groups)) {
     // Per-image data is not copied into every group.

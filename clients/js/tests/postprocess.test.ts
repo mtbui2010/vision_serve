@@ -157,3 +157,25 @@ test("a server depth Result is refused for metric distances; options are checked
     graspDistances(m, grasps(), fx.intrinsics),
   );
 });
+
+test("filterGrasps / groupByClass keep and group what Python does (source-detection rule)", () => {
+  const gres = Result.fromJSON({ task: "grasp", model: "m", detections: fx.detections, masks: [...fx.masks, ...fx.group_masks], grasps: fx.grasps });
+  for (const c of fx.filter_grasps) {
+    const res = c.masks_only ? Result.fromJSON({ task: "grasp", model: "m", masks: fx.masks, grasps: fx.grasps }) : gres;
+    const kept = res.filterGrasps(c.max_per_object).grasps.map((g) => res.grasps.indexOf(g));
+    assert.deepEqual(kept, c.want, `filterGrasps ${JSON.stringify(c)}`);
+  }
+  const groups = gres.groupByClass();
+  assert.deepEqual(Object.keys(groups), Object.keys(fx.group_by_class));
+  for (const [label, g] of Object.entries(groups)) {
+    assert.deepEqual(
+      {
+        detections: g.detections.map((d) => gres.detections.indexOf(d)),
+        masks: g.masks.map((m) => gres.masks.indexOf(m)),
+        grasps: g.grasps.map((x) => gres.grasps.indexOf(x)),
+      },
+      fx.group_by_class[label],
+      `groupByClass ${label}`,
+    );
+  }
+});

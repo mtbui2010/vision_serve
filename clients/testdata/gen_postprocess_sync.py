@@ -67,6 +67,18 @@ GRASPS = [
 ]
 
 
+# Extra masks for the grasp-result cases: two copy a detection's box (as Grounded-SAM does).
+GROUP_MASKS = [
+    {"bbox": [3.5, 2, 4, 4], "conf": 0.7, "rle": "48"},
+    {"bbox": [0, 0, 4, 3], "conf": 0.6, "rle": "48"},
+]
+
+
+def _index(items, obj):
+    """Index of *obj* in *items* by identity (the helpers return the result's own objects)."""
+    return next(i for i, x in enumerate(items) if x is obj)
+
+
 def depth_array(name):
     d = DEPTH[name]
     return np.array(d["data"], dtype=d["dtype"]).reshape(d["height"], d["width"])
@@ -216,6 +228,26 @@ def build():
             kw["intrinsics"] = INTRINSICS
         _, idx = select_target_grasp(grasps(), return_index=True, **kw)
         out["select_target_grasp"].append({"kwargs": case, "want_index": idx})
+
+    # Result.filter_grasps / group_by_class on one grasp result: kept grasps as indices into GRASPS.
+    gres = Result.from_json({"task": "grasp", "model": "m", "detections": DETECTIONS,
+                             "masks": MASKS + GROUP_MASKS, "grasps": GRASPS})
+    gl = gres.grasps
+    out["group_masks"] = GROUP_MASKS
+    out["filter_grasps"] = []
+    for k in [None, 0, 1, 2, 3]:
+        kept = gres.filter_grasps(k).grasps
+        out["filter_grasps"].append({"max_per_object": k, "want": [_index(gl, g) for g in kept]})
+    for k in [1, 2]:  # no detections: class-agnostic grasps by mask box, class-aware by (class, conf)
+        mres = Result.from_json({"task": "grasp", "model": "m", "masks": MASKS, "grasps": GRASPS})
+        out["filter_grasps"].append({"max_per_object": k, "masks_only": True,
+                                     "want": [_index(mres.grasps, g) for g in mres.filter_grasps(k).grasps]})
+    out["group_by_class"] = {
+        label: {"detections": [_index(gres.detections, d) for d in r.detections],
+                "masks": [_index(gres.masks, m) for m in r.masks],
+                "grasps": [_index(gl, g) for g in r.grasps]}
+        for label, r in gres.group_by_class().items()
+    }
 
     def check(o):  # JSON has no NaN / Infinity
         if isinstance(o, float):

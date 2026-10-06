@@ -1030,7 +1030,7 @@ All helpers run in your process and return a new `Result`; nothing is sent to th
 | `sort_by_conf(descending=True)`, `top_k(k)` | order by confidence, keep the first `k` |
 | `nms(iou_threshold=0.5)` | remove overlapping detections (greedy non-maximum suppression); masks are kept as they are |
 | `filter_grasps(max_per_object)` | what `max_grasps_per_object` does in `predict`: the best N grasps per source detection |
-| `group_by_class()` | `{label: Result}`; a mask joins the detection with the identical box |
+| `group_by_class()` | `{label: Result}` with only that class's detections, masks and grasps; a mask joins the detection with the identical box, other masks go under `""`; classifications, depth map and embeddings are left empty in every group |
 | `depth_array()`, `embeddings_array()` | numpy views: `(depth_height, depth_width)` and `(N, D)` float32, or `None` |
 | `to_json(encoding="json")` | the wire JSON as a `dict` (`class`, not `cls`); `Result.from_json(r.to_json()) == r` |
 | `visualize(image, alpha=0.45, ...)` | draw the result on the photo, returns a `PIL.Image` (needs Pillow); same as `visionserve.draw(result, image, ...)` |

@@ -5,6 +5,12 @@ import { inflateSync } from "node:zlib";
 import { ClientResize, Mask, Result, classColour, selectTargetGrasp, toSVG } from "../src/index.js";
 import { encodePalettePNG, zlibCompress } from "../src/png.js";
 import { mapResult } from "../src/resize.js";
+import { CLASS_PALETTE, PALETTE, classColourMap as colourMap, fnv1a, style, textColour } from "../src/visualize.js";
+import { readFileSync } from "node:fs";
+
+// Colours and sizes generated from the Python SDK's draw() (clients/testdata/gen_class_colors.py);
+// Python checks the same file in clients/python/tests/test_class_colors_sync.py.
+const colours = JSON.parse(readFileSync(new URL("../../testdata/class_colors.json", import.meta.url), "utf8"));
 
 /** assert.ok with a message: without one, a failing assert.ok re-parses the TS source and can hang under tsx. */
 const ok = (cond: unknown, msg = "expected a truthy value"): void => assert.ok(cond, msg);
@@ -222,4 +228,17 @@ test("toSVG highlights the target box, its own item or a standalone box", () => 
   const m = toSVG(seg, 8, 8, { maskBoxes: false, targetBox: seg.masks[1] as Mask });
   assert.equal(count(m, "rect"), 2);
   ok(m.includes('stroke="rgb(255,0,0)" stroke-width="2"'), m);
+});
+
+test("class colours, text colours and sizes match Python's draw() (shared cases)", () => {
+  assert.deepEqual(CLASS_PALETTE, colours.class_palette);
+  assert.deepEqual(PALETTE, colours.index_palette);
+  for (const c of colours.fnv1a) assert.equal(fnv1a(c.name), c.hash, c.name);
+  for (const c of colours.class_colour) assert.deepEqual(classColour(c.name), c.colour, c.name);
+  for (const c of colours.class_colour_map) assert.deepEqual([...colourMap(c.names)], c.colours, JSON.stringify(c.names));
+  for (const c of colours.text_colour) assert.deepEqual(textColour(c.bg), c.text, JSON.stringify(c.bg));
+  for (const c of colours.auto_sizes) {
+    const st = style(c.size[0], c.size[1]);
+    assert.deepEqual([st.font, st.lw], [c.font, c.line], JSON.stringify(c.size));
+  }
 });
