@@ -675,8 +675,9 @@ print(g.contacts_flat())   # [x0, y0, x1, y1]      — flat, ready for ROS/seria
 #### `result.filter_grasps(max_per_object)`
 
 Limit the number of grasps per detected object — keeps the `max_per_object`
-highest-quality grasps inside each detection/mask bbox. Also available as a
-parameter to `predict()`.
+highest-quality grasps of each object. A grasp counts for the detection it was planned on (it
+carries that detection's `class` and `conf`); only a class-agnostic grasp is grouped by the
+smallest detection/mask bbox containing its centre. Also available as a parameter to `predict()`.
 
 ```python
 # Via predict() — applied immediately after the server response:
@@ -865,6 +866,22 @@ res.visualize("photo.jpg").save("out.jpg")
 
 # Control mask overlay opacity:
 annotated = draw(res, "photo.jpg", alpha=0.6)
+
+# Mask outlines, a title band, explicit sizes (default: scaled with the photo):
+annotated = draw(res, "photo.jpg", mask_outline=True, title="rf-detr", font_size=20, line_width=3)
+
+# Colours: one per class name (default) or one per item (the server's palette):
+annotated = draw(res, "photo.jpg", color_by="index")
+
+# Depth next to the photo with a far…near colour bar, or blended onto it:
+draw(c.predict("midas", "photo.jpg"), "photo.jpg", depth="side").save("depth.jpg")
+
+# Classifications as a bar panel on the right:
+draw(c.predict("efficientnet-b0", "photo.jpg"), "photo.jpg", classes="bars")
+
+# The prompts you send (dashed boxes, green dot = label 1, red cross = label 0):
+from visionserve import draw_prompts
+draw_prompts("photo.jpg", boxes=[50, 40, 120, 90], points=[[100, 80, 1], [20, 20, 0]]).save("p.jpg")
 ```
 
 What gets drawn per task:
@@ -873,8 +890,8 @@ What gets drawn per task:
 |------|--------|
 | `detection` / `open_vocab` | Colored bbox rectangles + `"class conf%"` labels |
 | `segmentation` | Semi-transparent mask overlays + bbox outlines + confidence |
-| `classification` | Top-K `"class conf%"` text lines in top-left corner |
-| `depth` | Turbo colormap image (blue=near → red=far) — replaces original |
+| `classification` | Top-K `"class conf%"` text lines in top-left corner (`classes="bars"`: a bar panel) |
+| `depth` | Turbo colormap image (blue=far → red=near) at the model's size — replaces original (`depth="side"` / `"overlay"`: with the photo) |
 | `grasp` | Grasp lines (jaw contacts) + center dot + quality; pass `max_grasps_per_object=N` to limit crowding |
 
 ```python
@@ -920,6 +937,21 @@ python clients/python/tests/test_client.py
 ```
 
 ## Changelog
+
+### 0.3.1
+
+- **Grasp grouping fix**: `Result.filter_grasps` (so `predict(max_grasps_per_object=)` and
+  `draw`) groups a grasp with the detection it was planned on, matched by the grasp's `class` and
+  `conf` (within 1e-6; a tie is broken by the box containing the grasp centre). 0.3.0 used the
+  smallest box containing the centre, so a bowl grasp lying inside the carrot's box took the
+  carrot's place. Class-agnostic grasps keep the containing-box rule.
+- **`draw()` options**: `color_by="class"` (new default: a stable colour per class name;
+  `"index"` is the 0.3.0 look), `mask_outline=`, `font_size=` / `line_width=` (default: scaled
+  with the photo's shorter side, unchanged at 640 × 426), `depth="map"|"side"|"overlay"|"none"`
+  with a `far … near` colour bar, `depth_colormap=`, `classes="text"|"bars"|"none"`, `title=`.
+  Labels pick black or white text by contrast.
+- **`draw_prompts(image, boxes=, points=, labels=)`**: draws the prompts of a
+  `predict(box=, point=)` call (dashed boxes, green dot = label 1, red cross = label 0).
 
 ### 0.3.0
 

@@ -810,8 +810,9 @@ the distance to the object in millimetres).
 #### `max_grasps_per_object`
 
 Not sent to the server. The server returns up to 20 grasps per object; the SDK then keeps the
-best `max_grasps_per_object` (default **3**) per object, grouping each grasp with the smallest
-detection (or mask) box that contains its centre. Pass `None` to get everything the server sent.
+best `max_grasps_per_object` (default **3**) per object. A grasp counts for the detection it was
+planned on: it carries that detection's `class` and `conf`, and the SDK matches the two. Pass
+`None` to get everything the server sent.
 
 ```python
 from visionserve import Client
@@ -828,17 +829,20 @@ for g in res.grasps:
 ```
 
 ```text
-['bowl', 'carrot', 'broccoli'] 9 grasps
+['broccoli', 'carrot', 'bowl'] 9 grasps
 60 grasps
-bowl 0.969 centre (285.0, 229.5) width 40.3 theta 0.8
-bowl 0.967 centre (247.0, 228.5) width 40.3 theta 2.34
-broccoli 0.944 centre (423.5, 332.5) width 75.5 theta 3.02
+broccoli 0.943 centre (424.0, 332.5) width 76.5 theta 3.02
+carrot 0.949 centre (197.0, 191.5) width 70.6 theta 2.49
+bowl 0.965 centre (245.5, 229.5) width 41.1 theta 2.43
 ```
 
-With `max_grasps_per_object=1` there are two bowl grasps: the carrot's box lies inside the
-bowl's, so a grasp on the carrot whose centre also falls in the bowl is grouped with the
-smallest box containing it. Each grasp gives the centre `(x, y)`, the jaw opening `width` (pixels)
-and `theta`, the direction (radians) along which the jaws close.
+With `max_grasps_per_object=1` there is one grasp per object. Here the carrot's box lies inside
+the bowl's, and the bowl's best grasps have their centre inside the carrot's box: SDK 0.3.0 and
+older grouped a grasp with the smallest box containing its centre, so those bowl grasps took the
+carrot's places (two bowl grasps, none for the carrot). Only a class-agnostic grasp (no `class`,
+from automatic or box-prompted masks) is still grouped by the box containing its centre. Each
+grasp gives the centre `(x, y)`, the jaw opening `width` (pixels) and `theta`, the direction
+(radians) along which the jaws close.
 
 ### Open-vocabulary naming
 
@@ -1025,11 +1029,11 @@ All helpers run in your process and return a new `Result`; nothing is sent to th
 | `filter_by_size(min_size=, max_size=, image_width=, image_height=)` | keep detections and masks by box area: **fractions** (0–1) of the image when you give its size, else pixels² |
 | `sort_by_conf(descending=True)`, `top_k(k)` | order by confidence, keep the first `k` |
 | `nms(iou_threshold=0.5)` | remove overlapping detections (greedy non-maximum suppression); masks are kept as they are |
-| `filter_grasps(max_per_object)` | what `max_grasps_per_object` does in `predict` |
+| `filter_grasps(max_per_object)` | what `max_grasps_per_object` does in `predict`: the best N grasps per source detection |
 | `group_by_class()` | `{label: Result}`; a mask joins the detection with the identical box |
 | `depth_array()`, `embeddings_array()` | numpy views: `(depth_height, depth_width)` and `(N, D)` float32, or `None` |
 | `to_json(encoding="json")` | the wire JSON as a `dict` (`class`, not `cls`); `Result.from_json(r.to_json()) == r` |
-| `visualize(image, alpha=0.45, ...)` | draw the result on the photo, returns a `PIL.Image` (needs Pillow); same as `visionserve.draw(result, image)` |
+| `visualize(image, alpha=0.45, ...)` | draw the result on the photo, returns a `PIL.Image` (needs Pillow); same as `visionserve.draw(result, image, ...)` |
 
 ```python
 import numpy as np
@@ -1075,12 +1079,13 @@ has no scale. `visionserve.utils` has optional OpenCV drawing helpers (`pip inst
 `draw(result, image)` draws a result on the photo and returns a **new** PIL image; your photo
 is not changed. It needs Pillow, and numpy for masks (`pip install "visionserve[images]"`).
 `res.visualize(image, ...)` and `from visionserve import draw` are the same function.
+`draw_prompts(image, boxes=, points=)` draws the prompts you send ([below](#drawing-prompts)).
 
 !!! note "How the examples in this section and in Utilities were run"
-    With the SDK in this repository (version 0.2.0) against a server on one NVIDIA RTX A6000
-    (CUDA), port 11820; `Client()`'s default host pointed there. Same photos as the rest of the
-    page. The pictures below are the real output of these calls, made by
-    `website/tools/clients_utils_figures.py`.
+    With the SDK in this repository (version 0.3.1) on 6 October 2026, against a server on one
+    NVIDIA RTX A6000 (CUDA) shared with other jobs, port 11830; `Client()`'s default host pointed
+    there. Same photos as the rest of the page. The pictures below are the real output of these
+    calls, made by `website/tools/clients_utils_figures.py`.
 
 ```python title="clients/python/visionserve/visualize.py"
 def draw(
@@ -1092,20 +1097,35 @@ def draw(
     target_grasp: Optional[Any] = None,
     target_box: Optional[Any] = None,
     mask_boxes: bool = True,
+    color_by: str = "class",
+    mask_outline: bool = False,
+    font_size: Optional[int] = None,
+    line_width: Optional[int] = None,
+    depth: str = "map",
+    depth_colormap: Optional[Callable[[Any], Any]] = None,
+    classes: str = "text",
+    title: Optional[str] = None,
 ) -> Any:
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/visualize.py#L80-L89)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/visualize.py#L184-L201)
 
 | Argument | Default | What it does |
 |---|---|---|
 | `result` | | A `Result` from `predict`. |
 | `image` | | The photo the result belongs to: a path, `bytes`, a PIL image or a numpy array (read as **RGB**). A JPEG given as a path or bytes is turned upright by its EXIF tag, as the server does, so the boxes land on the right pixels. A PIL image or an array is drawn as it is. |
-| `alpha` | `0.45` | Strength of the mask colours: `0` = invisible, `1` = solid. |
-| `max_grasps_per_object` | `3` | Draw only the best N grasps of each object; `None` draws every grasp. |
+| `alpha` | `0.45` | Strength of the mask colours (and of the depth colours with `depth="overlay"`): `0` = invisible, `1` = solid. |
+| `max_grasps_per_object` | `3` | Draw only the best N grasps of each object (each grasp counts for the detection it was planned on); `None` draws every grasp. |
 | `target_grasp` | `None` | One `Grasp` **from this result** to draw in red, on top of the others. |
 | `target_box` | `None` | One `Detection` or `Mask` (or an `[x, y, w, h]` box) to draw in red with a thick line, for example what `select_target_object` chose. |
 | `mask_boxes` | `True` | `False` colours the masks without drawing their boxes and labels. |
+| `color_by` | `"class"` | `"class"`: one colour per class name, chosen from the name, so a class keeps its colour from picture to picture ([how](#colours-sizes-and-a-title)). `"index"`: item `i` gets colour `i` of the server's 8 overlay colours (the SDK 0.3.0 look). |
+| `mask_outline` | `False` | `True` also draws each mask's outline in its colour. |
+| `font_size`, `line_width` | `None` | Label size and line width in pixels. `None` scales them with the photo: 14 and 2 on a 640 × 426 photo, about 100 and 14 on a 4000 × 3000 one. |
+| `depth` | `"map"` | For a result with a depth map: `"map"` returns the depth map alone, at the model's size; `"side"` puts it next to the photo, at the photo's size; `"overlay"` blends it onto the photo; `"none"` leaves it out. `"side"` and `"overlay"` add a `far … near` colour bar. |
+| `depth_colormap` | `None` | Your own colour map for the depth picture, e.g. `matplotlib.colormaps["inferno"]`: a function from values in `[0, 1]` (1 = near) to RGB. `None`: blue (far) to red (near). |
+| `classes` | `"text"` | Classifications: `"text"` writes them in the top-left corner; `"bars"` adds a panel with the top 5 as bars; `"none"` leaves them out. |
+| `title` | `None` | A text band above the picture. |
 
 What it draws for each kind of result:
 
@@ -1115,11 +1135,12 @@ What it draws for each kind of result:
 | segmentation (`masks`) | Each mask as a see-through colour, with its box and the label `mask conf%`. |
 | Grounded-SAM, grasp models (`detections` + `masks`) | The mask colour, then the detection's box and class. The mask has the same box, so it is labelled only once. |
 | grasps (`grasps`) | Each grasp as a gripper: a line between the two jaws, a short bar at each jaw and a dot at the centre, coloured by quality (red = low, yellow, green = high), with the label `class qN.NN`. |
-| classification (`classifications`) | The labels in the top-left corner, on a dark band. |
-| depth (`depth_map`) | **Only** the depth map as a colour picture: blue = far, red = near. It has the model's size (256 × 256 for `midas`), not the photo's, and the photo is not used. |
+| classification (`classifications`) | The labels in the top-left corner, on a dark band (`classes="bars"`: as bars in a panel on the right). |
+| depth (`depth_map`) | By default **only** the depth map as a colour picture: blue = far, red = near. It has the model's size (256 × 256 for `midas`), not the photo's, and the photo is not used. `depth="side"` or `"overlay"` show it with the photo. |
 | embeddings | Nothing: you get the photo back. |
 
-Item `i` gets colour `i` of a fixed list of 8 colours (the same as the server's own overlay).
+The picture has the photo's size, unless `depth="side"`, `classes="bars"` or `title` add a panel
+or a band.
 
 ### Boxes and masks
 
@@ -1212,17 +1233,17 @@ The gripper glyphs are small: zoom in. Two things to know:
 - `target_grasp` is matched by identity (`is`), so pass a grasp taken from `g.grasps`, and it
   must be one of the grasps that are drawn (the best `max_grasps_per_object` of each object).
   `select_target_grasp` with no other criterion picks the highest quality, which normally is.
-- "Per object" means per box: a grasp belongs to the smallest box that contains its centre.
-  Above, a `bowl` grasp sits inside the carrot's box, so with `max_grasps_per_object=1` it takes
-  the carrot's place and two `bowl` labels appear.
+- "Per object" means per detection the grasp was planned on (the grasp carries its `class` and
+  `conf`). Above, the bowl's best grasps sit inside the carrot's box, yet the carrot keeps its own
+  grasp: one label each for the carrot, the bowl and the broccoli. (SDK 0.3.0 grouped by the
+  smallest box containing the grasp centre and showed two `bowl` labels here.)
 
 ### Depth
 
-`draw` returns the depth map alone, at the model's size. Resize it to the photo yourself to put
-the two side by side:
+By default `draw` returns the depth map alone, at the model's size. `depth="side"` puts it,
+stretched to the photo's size, next to the photo, with a colour bar:
 
 ```python
-from PIL import Image
 from visionserve import Client
 from visionserve.visualize import draw
 
@@ -1231,23 +1252,63 @@ depth = c.predict("midas", "dogs.jpg")
 pic = draw(depth, "dogs.jpg")             # the depth map alone, at the MODEL's size
 print(pic.size, (depth.depth_width, depth.depth_height))
 
-photo = Image.open("dogs.jpg").convert("RGB")
-pic = pic.resize(photo.size)              # stretch it to the photo's size
-both = Image.new("RGB", (photo.width * 2 + 8, photo.height), "white")
-both.paste(photo, (0, 0))
-both.paste(pic, (photo.width + 8, 0))
+both = draw(depth, "dogs.jpg", depth="side")   # photo | depth map, at the photo's size
+print(both.size)
 both.save("dogs-depth.jpg")
+over = draw(depth, "dogs.jpg", depth="overlay", alpha=0.5)   # or blended onto the photo
 ```
 
 ```text
 (256, 256) (256, 256)
+(1288, 426)
 ```
 
-![A photo of four dogs and two people, and its midas depth map stretched to the same size: red at the bottom (near), blue at the top (far)](../assets/img/clients-draw-depth-372819.jpg)
+![A photo of four dogs and two people, and its midas depth map stretched to the same size: red at the bottom (near), blue at the top (far), with a far-to-near colour bar](../assets/img/clients-draw-depth-372819.jpg)
 
 The colours only rank the pixels from far to near inside one photo: the map is relative, without
-units ([why](#the-result-object)). For another colour map, use `res.depth_array()` with
-matplotlib (next section).
+units ([why](#the-result-object)), so the colour bar says `far` and `near`, not metres. For
+another colour map, pass `depth_colormap=matplotlib.colormaps["inferno"]` (any function from
+values in `[0, 1]` to RGB), or use `res.depth_array()` with matplotlib (below).
+
+### Colours, sizes and a title
+
+`draw` uses what the `Result` holds, so one picture can show several calls: copy the depth map
+of a `midas` result into a Grounded-SAM result with `dataclasses.replace`:
+
+```python
+import dataclasses
+from visionserve import Client
+from visionserve.visualize import draw
+
+c = Client()
+res = c.predict("grounded-sam", "dogs.jpg", prompt="dog. person. bench.")
+dep = c.predict("midas", "dogs.jpg")
+both = dataclasses.replace(res, depth_map=dep.depth_map, depth_width=dep.depth_width,
+                           depth_height=dep.depth_height)
+img = draw(both, "dogs.jpg", depth="side", mask_outline=True, title="grounded-sam + midas")
+print(img.size)
+img.save("dogs-side.jpg")
+```
+
+```text
+(1288, 453)
+```
+
+![A Grounded-SAM result with every dog in one colour and the people and benches in theirs, mask outlines, the midas depth map on the right and a title band](../assets/img/clients-draw-side-title-372819.jpg)
+
+- **Colour by class** (the default, `color_by="class"`): every `dog` has the same colour. The
+  colour comes from the class name: entry
+  `fnv1a_32(name) % 16` of a list of 16 colours (FNV-1a over the UTF-8 bytes). When two classes
+  of one picture land on the same entry, the one later in alphabetical order takes the next free
+  colour, so up to 16 classes always differ (here `bench` and `dog` share an entry; the dogs take
+  the next colour). Masks without a class (automatic or box-prompted) keep one colour each.
+  `color_by="index"` gives item `i` colour `i` of the server's 8 colours instead.
+- **Sizes**: labels and lines scale with the photo's shorter side, so a 4000 × 3000 photo gets
+  about 100 px labels and 14 px lines (readable when the picture is shown 800 px wide) and a
+  320 × 213 thumbnail 12 px and 1 px. `font_size=` and `line_width=` set them yourself.
+- **Mask outlines** (`mask_outline=True`) draw each mask's edge in its colour (numpy only, no
+  OpenCV), so touching masks of one colour stay apart.
+- **Title** (`title=`): a dark band above the whole picture; too long a text is cut with `…`.
 
 ### Classification
 
@@ -1259,6 +1320,7 @@ c = Client()
 res = c.predict("efficientnet-b0", "elephant.jpg")
 print([(x.cls, round(x.conf, 2)) for x in res.classifications])
 draw(res.top_k(3), "elephant.jpg").save("elephant-labels.jpg")   # top 3 labels, top left
+draw(res, "elephant.jpg", classes="bars").save("elephant-bars.jpg")  # top 5 as bars, on the right
 ```
 
 ```text
@@ -1326,6 +1388,34 @@ fig.savefig("dogs-plot.png", bbox_inches="tight")   # or plt.show()
 In a Jupyter notebook, a PIL image on the last line of a cell is shown below it, so
 `draw(res, "dogs.jpg")` alone is enough.
 
+### Drawing prompts
+
+`draw_prompts(image, boxes=None, points=None, labels=None)` draws the prompts of a
+`predict(box=..., point=...)` call on a copy of the photo: boxes as dashed rectangles, a point
+with label 1 as a green dot ("on the object"), with label 0 as a red cross ("not on the object").
+`boxes` and `points` take the same values as `predict`; `labels` gives one label per point
+instead of a third value in each.
+
+```python
+from visionserve import Client, draw_prompts
+from visionserve.visualize import draw
+
+c = Client()
+points = [[470, 260, 1], [150, 300, 0]]                # on the cat; NOT on the laptop
+res = c.predict("mobile-sam", "cat.jpg", point=points)
+boxed = draw_prompts("cat.jpg", boxes=[310, 175, 310, 195])  # a new PIL image, photo-sized
+both = draw_prompts(draw(res, "cat.jpg", mask_boxes=False), points=points)  # prompts on top
+both.save("cat-prompt.jpg")
+print(both.size, len(res.masks), [round(v) for v in res.masks[0].bbox])
+```
+
+```text
+(640, 480) 1 [322, 161, 315, 202]
+```
+
+Draw the prompts last (on the picture `draw` returns), as above, so the mask colour does not
+cover them.
+
 ### Draw it yourself
 
 For your own style (colours, fonts, line width, only some classes), draw with PIL directly.
@@ -1373,7 +1463,7 @@ imports that module, so OpenCV stays optional.
 | `Result` | `filter_by_size(min_size=, max_size=, image_width=, image_height=)` | Keeps detections and masks by box area: **fractions** (0–1) of the photo when you give its size, else pixels². | Dropping tiny or huge boxes. (The server's `min_size` / `max_size` options do this in percent.) |
 | `Result` | `sort_by_conf(descending=True)`, `top_k(k)` | Orders by `conf`; keeps the `k` best of each list. | You only want the best few. |
 | `Result` | `nms(iou_threshold=0.5)` | Greedy non-maximum suppression on detections (masks are kept). | You merged several results and boxes overlap. |
-| `Result` | `filter_grasps(max_per_object)` | Keeps the best N grasps per object box (what `predict(max_grasps_per_object=)` does). | You asked for every grasp and now want a few. |
+| `Result` | `filter_grasps(max_per_object)` | Keeps the best N grasps per object: the detection each grasp was planned on (same `class` and `conf`), or for a class-agnostic grasp the smallest box containing its centre. What `predict(max_grasps_per_object=)` does. | You asked for every grasp and now want a few. |
 | `Result` | `group_by_class()` | `{label: Result}`. A mask joins the detection with the same box; other masks go under `""`. | Counting or handling each class apart. |
 | `Result` | `depth_array()`, `embeddings_array()` | numpy `float32` `(H, W)` / `(N, D)`, or `None`. | Any maths on depth maps or embeddings. |
 | `Result` | `to_json(encoding="json")`, `Result.from_json(d)` | The server's JSON shape as a `dict`, and back. `encoding="base64"` packs the float arrays. | Saving results to a file, or sending them on. |
@@ -1383,6 +1473,7 @@ imports that module, so OpenCV stays optional.
 | items | `Detection` / `Mask` / `Grasp` / `Classification` `.to_json()` | One item in the wire format (`class`, not `cls`). | Writing your own JSON. |
 | `visionserve` | `FloatArray` | How `depth_map` / `embeddings` arrive with `Client(base64_arrays=True)`: list-like, `numpy.asarray(x)` without a copy, `.tolist()`, `.shape`. | Large depth maps or many embeddings. |
 | `visionserve.visualize` | `draw(result, image, ...)` | Draws a result on the photo, returns a PIL image. | [Visualize results](#visualize-results). |
+| `visionserve` | `draw_prompts(image, boxes=None, points=None, labels=None)` | Draws boxes (dashed) and points (green dot = 1, red cross = 0) on a copy of the photo. | Checking the prompt you send ([Drawing prompts](#drawing-prompts)). |
 | `visionserve` | `CameraIntrinsics(fx, fy, cx, cy)` | Your camera's focal lengths and centre, in pixels. | Anything in metres. |
 | `visionserve` | `backproject(u, v, z, K)` | Pixel `(u, v)` at depth `z` → `(X, Y, Z)` in the camera frame. | A 3D point for one pixel. |
 | `visionserve` | `camera_distance(u, v, z, K)` | Distance from the camera to that 3D point. | "How far is this pixel?" |
@@ -1592,7 +1683,7 @@ print(g.cls, round(g.quality, 2))
 ```
 
 ```text
-[0.571, 0.571, 0.57, 0.606, 0.606, 0.606]
+[0.571, 0.571, 0.57, 0.617, 0.616, 0.617]
 broccoli 0.96
 ```
 

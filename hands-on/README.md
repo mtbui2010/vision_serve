@@ -59,8 +59,8 @@ pip install -r hands-on/requirements.txt
 
 `requirements.txt` installs the VisionServe Python client (the SDK) from PyPI. If that fails, or
 you want the client from this repository, install it from the source:
-`pip install -e clients/python`. (If the SDK is not installed at all, `handson.py` uses the copy
-in `clients/python` by itself.)
+`pip install -e clients/python`. (If the SDK is not installed at all, or is older than 0.3.1,
+which the drawing helpers need, `handson.py` uses the copy in `clients/python` by itself.)
 
 ### 2. Start the server
 

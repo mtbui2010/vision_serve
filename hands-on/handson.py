@@ -23,8 +23,6 @@ Environment variables (all optional):
 
 from __future__ import annotations
 
-import colorsys
-import hashlib
 import html
 import io
 import json
@@ -44,16 +42,38 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 DEFAULT_HOST = "http://127.0.0.1:11435"
 
+_REPO_SDK = REPO / "clients" / "python"
+
+
+def _use_repo_sdk() -> bool:  # pragma: no cover - depends on the environment
+    """Put this repository's SDK (clients/python) first on sys.path and forget an imported one."""
+    if not (_REPO_SDK / "visionserve" / "__init__.py").is_file():
+        return False
+    sys.path.insert(0, str(_REPO_SDK))
+    for name in [m for m in sys.modules if m == "visionserve" or m.startswith("visionserve.")]:
+        del sys.modules[name]
+    return True
+
+
 # If the SDK is not installed, use the copy in this repository (clients/python).
 try:  # pragma: no cover - depends on the environment
     import visionserve  # noqa: F401
 except ImportError:  # pragma: no cover
-    _sdk = REPO / "clients" / "python"
-    if (_sdk / "visionserve" / "__init__.py").is_file():
-        sys.path.insert(0, str(_sdk))
+    _use_repo_sdk()
     import visionserve  # noqa: F401,E402
 
+# The drawing helpers below need SDK 0.3.1 (draw options, draw_prompts). An older installed SDK:
+# use the repository's copy instead.
+try:  # pragma: no cover - depends on the environment
+    from visionserve.visualize import draw_prompts as _sdk_draw_prompts  # noqa: F401
+except ImportError:  # pragma: no cover
+    if _use_repo_sdk():
+        print("handson: the installed visionserve %s is older than 0.3.1; using the copy in %s"
+              % (getattr(visionserve, "__version__", "?"), _REPO_SDK))
+        import visionserve  # noqa: F401,E402
+
 from visionserve import Client, Result, VisionServeError  # noqa: E402
+from visionserve import visualize as _vis  # noqa: E402
 
 __all__ = [
     "connect",
@@ -249,176 +269,51 @@ def _load_image(image: Any):
 # --------------------------------------------------------------------------- #
 # Drawing
 # --------------------------------------------------------------------------- #
-def _colour(name: str) -> tuple:
-    """A stable, bright colour (r, g, b in 0..1) for a class name."""
-    h = int(hashlib.md5(name.encode("utf-8")).hexdigest()[:6], 16) / float(0xFFFFFF)
-    return colorsys.hsv_to_rgb(h, 0.75, 1.0)
+# The SDK's draw() options that give the notebooks' look: class colours, mask contours, all the
+# grasps the result holds (predict() already kept the best per object), no mask boxes.
+_DRAW_STYLE = dict(color_by="class", mask_outline=True, alpha=0.5, max_grasps_per_object=None,
+                   mask_boxes=False)
 
 
-def _mask_colours(n: int) -> list:
-    """`n` different colours for masks without a class name."""
-    return [colorsys.hsv_to_rgb((i * 0.618034) % 1.0, 0.7, 1.0) for i in range(n)]
+def _inferno(t):
+    """matplotlib's "inferno" colour map: the depth picture is bright where it is near."""
+    import matplotlib
+
+    return matplotlib.colormaps["inferno"](t)
+
+
+def _without_masks(result: Result) -> Result:
+    import dataclasses
+
+    return dataclasses.replace(result, masks=[])
 
 
 def draw(image: Any, result: Result | None = None, show_masks: bool = True):
     """Draw a result on the photo and return a new PIL image (the photo's own size).
 
-    Draws masks (translucent colours), detection boxes with "class conf" labels and
-    grasps (a line between the two jaws plus a short bar for each jaw).
+    Draws masks (translucent colours with an outline), detection boxes with "class conf%"
+    labels and grasps (a line between the two jaws plus a short bar for each jaw), with the
+    SDK's `visionserve.visualize.draw`.
     Depth maps and classifications are not drawn here; `show` puts them beside the photo.
     """
-    import numpy as np
-    from PIL import Image, ImageDraw, ImageFont
-
     img = _load_image(image)
     if result is None:
         return img
-    w, h = img.size
-    canvas = np.asarray(img).astype(np.float32)
-
-    # Masks: blend a colour into the pixels of each mask.
-    if show_masks and result.masks:
-        labels = _mask_labels(result)
-        auto = _mask_colours(len(result.masks))
-        for i, m in enumerate(result.masks):
-            if not m.rle:
-                continue
-            try:
-                mask = m.to_ndarray(w, h)
-            except ValueError:
-                continue
-            col = _colour(labels[i]) if labels[i] else auto[i]
-            canvas[mask] = canvas[mask] * 0.5 + np.array(col, np.float32) * 255 * 0.5
-            # A thin outline makes neighbouring masks easy to tell apart.
-            edge = mask & ~_erode(mask)
-            canvas[edge] = np.array(col, np.float32) * 255
-    out = Image.fromarray(canvas.clip(0, 255).astype(np.uint8))
-    d = ImageDraw.Draw(out)
-    font = _font(max(11, int(round(min(w, h) / 40))))
-    lw = max(2, int(round(min(w, h) / 220)))
-
-    for det in result.detections:
-        x, y, bw, bh = det.bbox
-        col = tuple(int(c * 255) for c in _colour(det.cls or "object"))
-        d.rectangle([x, y, x + bw, y + bh], outline=col, width=lw)
-        _label(d, x, y, "%s %.2f" % (det.cls or "object", det.conf), col, font)
-
-    if result.grasps:
-        import math
-
-        for g in result.grasps:
-            col = _quality_colour(g.quality)
-            c, s = math.cos(g.theta), math.sin(g.theta)
-            hw = g.width / 2.0
-            p0 = (g.x - c * hw, g.y - s * hw)
-            p1 = (g.x + c * hw, g.y + s * hw)
-            plate = max(6.0, min(g.width * 0.35, 22.0)) / 2.0
-            px, py = -s * plate, c * plate
-            d.line([p0, p1], fill=col, width=lw)
-            for q in (p0, p1):  # one bar for each jaw
-                d.line([(q[0] - px, q[1] - py), (q[0] + px, q[1] + py)], fill=col, width=lw + 2)
-            d.ellipse([g.x - lw, g.y - lw, g.x + lw, g.y + lw], fill=col)
-    return out
+    if not show_masks:
+        result = _without_masks(result)
+    return _vis.draw(result, img, depth="none", classes="none", **_DRAW_STYLE)
 
 
 def mark(image: Any, boxes: Any = None, points: Any = None):
     """Draw prompts on a copy of the photo and return it (a PIL image).
 
-    `boxes`: one box `[x, y, w, h]` or a list of boxes, drawn as white dashed rectangles.
+    `boxes`: one box `[x, y, w, h]` or a list of boxes, drawn as dashed rectangles.
     `points`: one point `[x, y]` / `[x, y, label]` or a list of them. Label 1 (the default)
     is drawn as a green dot ("on the object"), label 0 as a red cross ("not on the object").
     Use it to see the prompt you send, for example `show(mark(photo("cat"), boxes=box), res)`.
+    This is the SDK's `visionserve.visualize.draw_prompts`.
     """
-    from PIL import ImageDraw
-
-    img = _load_image(image).copy()
-    d = ImageDraw.Draw(img)
-    w, h = img.size
-    lw = max(2, int(round(min(w, h) / 200)))
-
-    def _many(v):
-        if v is None:
-            return []
-        v = [list(map(float, x)) if hasattr(x, "__len__") else float(x) for x in v]
-        return [v] if v and not isinstance(v[0], list) else v
-
-    for x, y, bw, bh in _many(boxes):
-        corners = [(x, y), (x + bw, y), (x + bw, y + bh), (x, y + bh), (x, y)]
-        for (x0, y0), (x1, y1) in zip(corners, corners[1:]):
-            n = max(1, int(max(abs(x1 - x0), abs(y1 - y0)) // 8))
-            for k in range(0, n, 2):  # dashes
-                a, b = k / n, min(1.0, (k + 1) / n)
-                d.line([(x0 + (x1 - x0) * a, y0 + (y1 - y0) * a),
-                        (x0 + (x1 - x0) * b, y0 + (y1 - y0) * b)], fill=(255, 255, 255), width=lw)
-    r = max(5, lw * 3)
-    for p in _many(points):
-        x, y = p[0], p[1]
-        label = int(p[2]) if len(p) > 2 else 1
-        if label == 1:
-            d.ellipse([x - r, y - r, x + r, y + r], fill=(0, 220, 0), outline=(255, 255, 255), width=2)
-        else:
-            d.line([(x - r, y - r), (x + r, y + r)], fill=(255, 0, 0), width=lw + 2)
-            d.line([(x - r, y + r), (x + r, y - r)], fill=(255, 0, 0), width=lw + 2)
-    return img
-
-
-def _mask_labels(result: Result) -> list:
-    """The class name of each mask when a detection with the same box exists, else ""."""
-    labels = []
-    for i, m in enumerate(result.masks):
-        name = ""
-        if len(result.masks) == len(result.detections) and i < len(result.detections):
-            name = result.detections[i].cls
-        else:
-            for det in result.detections:
-                if [round(v) for v in det.bbox] == [round(v) for v in m.bbox]:
-                    name = det.cls
-                    break
-        labels.append(name)
-    return labels
-
-
-def _erode(mask):
-    """A one-pixel erosion of a boolean mask (numpy only)."""
-    m = mask
-    out = m.copy()
-    out[1:, :] &= m[:-1, :]
-    out[:-1, :] &= m[1:, :]
-    out[:, 1:] &= m[:, :-1]
-    out[:, :-1] &= m[:, 1:]
-    return out
-
-
-def _quality_colour(q: float) -> tuple:
-    """Grasp quality 0..1 as a colour: red (low), yellow, green (high)."""
-    q = max(0.0, min(1.0, float(q)))
-    if q < 0.5:
-        return (255, int(510 * q), 0)
-    return (int(255 * (2 - 2 * q)), 220, 0)
-
-
-def _font(size: int):
-    from PIL import ImageFont
-
-    for name in ("DejaVuSans.ttf", "Arial.ttf", "LiberationSans-Regular.ttf"):
-        try:
-            return ImageFont.truetype(name, size)
-        except OSError:
-            continue
-    try:
-        return ImageFont.load_default(size=size)
-    except TypeError:  # old Pillow
-        return ImageFont.load_default()
-
-
-def _label(d, x: float, y: float, text: str, col: tuple, font) -> None:
-    """Text on a filled box, above (x, y) when there is room, else just inside."""
-    l, t, r, b = d.textbbox((0, 0), text, font=font)
-    tw, th = r - l, b - t
-    ty = y - th - 4 if y - th - 4 >= 0 else y
-    d.rectangle([x, ty, x + tw + 4, ty + th + 4], fill=col)
-    lum = 0.299 * col[0] + 0.587 * col[1] + 0.114 * col[2]
-    d.text((x + 2 - l, ty + 2 - t), text, fill=(0, 0, 0) if lum > 140 else (255, 255, 255), font=font)
+    return _vis.draw_prompts(_load_image(image), boxes=boxes, points=points)
 
 
 def _auto_title(result: Result) -> str:
@@ -438,22 +333,6 @@ def _auto_title(result: Result) -> str:
     if result.duration_ms:
         parts.append("%.0f ms on %s" % (result.duration_ms, result.device or "?"))
     return " | ".join(parts)
-
-
-def _depth_image(result: Result, size: tuple):
-    """The depth map as a colour picture (bright = near) at `size` (w, h)."""
-    import numpy as np
-    from PIL import Image
-    import matplotlib
-
-    d = result.depth_array()
-    if d is None or d.size == 0:
-        return None
-    d = np.asarray(d, np.float32)
-    lo, hi = float(np.nanmin(d)), float(np.nanmax(d))
-    norm = (d - lo) / (hi - lo) if hi > lo else np.zeros_like(d)
-    rgb = (matplotlib.colormaps["inferno"](norm)[:, :, :3] * 255).astype(np.uint8)
-    return Image.fromarray(rgb).resize(size, Image.BILINEAR)
 
 
 def _display_figure(fig) -> None:
@@ -480,43 +359,24 @@ def _display_figure(fig) -> None:
     plt.close(fig)
 
 
-def _figure(panels: list, titles: list, max_width: int, suptitle: str | None = None,
-            bars: Any = None) -> None:
-    """Lay out PIL images (and optionally one bar chart) in one row and display them."""
+def _figure(panels: list, titles: list, max_width: int) -> None:
+    """Lay out PIL images in one row and display them."""
     import matplotlib.pyplot as plt
 
     dpi = 100
-    n = len(panels) + (1 if bars is not None else 0)
-    total_w = sum(p.size[0] for p in panels) + (panels[0].size[0] * 0.8 if bars is not None else 0)
+    total_w = sum(p.size[0] for p in panels)
     max_h = max(p.size[1] for p in panels)
     scale = min(1.0, max_width / float(total_w))
     fig_w = total_w * scale / dpi
-    fig_h = max_h * scale / dpi + (0.35 if any(titles) or suptitle else 0.1)
-    ratios = [p.size[0] for p in panels] + ([panels[0].size[0] * 0.8] if bars is not None else [])
-    fig, axes = plt.subplots(1, n, figsize=(fig_w, fig_h), dpi=dpi,
-                             gridspec_kw={"width_ratios": ratios}, squeeze=False)
-    axes = axes[0]
+    fig_h = max_h * scale / dpi + (0.35 if any(titles) else 0.1)
+    fig, axes = plt.subplots(1, len(panels), figsize=(fig_w, fig_h), dpi=dpi,
+                             gridspec_kw={"width_ratios": [p.size[0] for p in panels]}, squeeze=False)
     fs = max(7, min(11, int(9 * scale + 3)))
-    for ax, p, t in zip(axes, panels, titles):
+    for ax, p, t in zip(axes[0], panels, titles):
         ax.imshow(p)
         ax.set_axis_off()
         if t:
             ax.set_title(t, fontsize=fs)
-    if bars is not None:
-        ax = axes[-1]
-        names, values = bars
-        ypos = list(range(len(names)))[::-1]
-        ax.barh(ypos, values, color="#4c72b0")
-        ax.set_yticks(ypos)
-        ax.set_yticklabels(names, fontsize=fs)
-        ax.set_xlim(0, 1)
-        ax.set_xlabel("conf", fontsize=fs)
-        ax.tick_params(axis="x", labelsize=fs - 1)
-        for y, v in zip(ypos, values):
-            ax.text(min(v + 0.02, 0.8), y, "%.2f" % v, va="center", fontsize=fs - 1)
-        ax.set_title("top-5 labels", fontsize=fs)
-    if suptitle:
-        fig.suptitle(suptitle, fontsize=fs)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         fig.tight_layout()
@@ -529,25 +389,16 @@ def show(image: Any, result: Result | None = None, title: str | None = None,
 
     `image` can be a file path, a PIL image or a numpy array (RGB).
     If `result` has boxes, masks or grasps, they are drawn on the photo.
-    If it has a depth map, the depth picture is shown on the right (bright = near).
+    If it has a depth map, the depth picture is shown on the right (bright = near, dark = far).
     If it has classifications, the top-5 labels are shown as bars on the right.
     `max_width` limits the width of the picture in pixels. `show_masks=False` hides masks.
     """
-    img = draw(image, result, show_masks=show_masks)
-    panels, titles = [img], [title if title is not None else (_auto_title(result) if result else "")]
-    bars = None
+    img = _load_image(image)
     if result is not None:
-        depth = _depth_image(result, img.size) if result.depth_width else None
-        if depth is not None:
-            panels.append(depth)
-            titles.append("depth (bright = near)")
-        if result.classifications:
-            top = sorted(result.classifications, key=lambda c: -c.conf)[:5]
-            bars = ([c.cls for c in top], [c.conf for c in top])
-    if len(panels) > 1 or bars is not None:
-        _figure(panels, ["", *titles[1:]], max_width, suptitle=titles[0], bars=bars)
-    else:
-        _figure(panels, titles, max_width)
+        if not show_masks:
+            result = _without_masks(result)
+        img = _vis.draw(result, img, depth="side", classes="bars", depth_colormap=_inferno, **_DRAW_STYLE)
+    _figure([img], [title if title is not None else (_auto_title(result) if result else "")], max_width)
 
 
 def show_side_by_side(images: list, titles: list[str] | None = None, max_width: int = 1000) -> None:

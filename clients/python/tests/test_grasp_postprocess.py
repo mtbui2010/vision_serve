@@ -179,6 +179,70 @@ def test_grasps_per_object_top_k():
     assert len(_grasps_per_object(res, 0)) == len(grasps)
 
 
+def _food_result():
+    """The shape of grasp-rfdetr on COCO 389381 (food.jpg): the carrot's box lies inside the
+    bowl's, and the bowl's best grasps sit inside the carrot's box. Boxes, confs and the grasp
+    centres are the server's (rounded)."""
+    dets = [
+        Detection(bbox=[373, 278, 105, 129], cls="broccoli", conf=0.8773410233789939),
+        Detection(bbox=[136, 140, 118, 106], cls="carrot", conf=0.7589307443456806),
+        Detection(bbox=[58, 49, 411, 272], cls="bowl", conf=0.7163178417646674),
+    ]
+    g = []
+    for x, y, q in ((424.0, 332.5, 0.966), (424.0, 331.0, 0.9655), (423.5, 330.5, 0.965)):
+        g.append(Grasp(x=x, y=y, theta=3.0, width=75, quality=q, cls="broccoli", conf=dets[0].conf))
+    for x, y, q in ((197.0, 191.5, 0.965), (198.0, 193.0, 0.9645), (197.5, 191.0, 0.964)):
+        g.append(Grasp(x=x, y=y, theta=0.5, width=40, quality=q, cls="carrot", conf=dets[1].conf))
+    # the bowl's grasps: the best three are INSIDE the carrot's box
+    for x, y, q in ((274.0, 228.5, 0.993), (251.5, 220.5, 0.99), (251.0, 221.0, 0.9899), (251.0, 220.5, 0.9898)):
+        g.append(Grasp(x=x, y=y, theta=0.8, width=40, quality=q, cls="bowl", conf=dets[2].conf))
+    return Result(task="grasp", model="grasp-rfdetr", detections=dets, grasps=g)
+
+
+def test_grasps_are_grouped_by_their_source_detection_not_by_position():
+    res = _food_result()
+    one = res.filter_grasps(1).grasps
+    assert [g.cls for g in one] == ["broccoli", "carrot", "bowl"]  # before: broccoli, bowl, bowl
+    three = res.filter_grasps(3).grasps
+    assert [g.cls for g in three].count("carrot") == 3  # before: 0 (bowl grasps took its slots)
+    assert [g.cls for g in three].count("bowl") == 3
+    assert [g.quality for g in three if g.cls == "bowl"] == [0.993, 0.99, 0.9899]
+
+
+def test_grasp_source_match_tolerates_float32_conf_and_tie_breaks_by_box():
+    import struct
+
+    f32 = struct.unpack("f", struct.pack("f", 0.7589307443456806))[0]  # a float32 round trip
+    dets = [Detection(bbox=[0, 0, 10, 10], cls="cup", conf=0.75),
+            Detection(bbox=[100, 0, 10, 10], cls="cup", conf=0.75),  # same class AND conf
+            Detection(bbox=[0, 0, 200, 200], cls="tray", conf=0.7589307443456806)]
+    grasps = [Grasp(x=105, y=5, theta=0, width=5, quality=0.9, cls="cup", conf=0.75),
+              Grasp(x=104, y=5, theta=0, width=5, quality=0.8, cls="cup", conf=0.75),
+              Grasp(x=5, y=5, theta=0, width=5, quality=0.7, cls="cup", conf=0.75),
+              Grasp(x=5, y=5, theta=0, width=5, quality=0.6, cls="tray", conf=f32)]
+    kept = Result(task="grasp", model="g", detections=dets, grasps=grasps).filter_grasps(1).grasps
+    # the two cups are told apart by the box containing the centre; the tray grasp (inside a cup
+    # box, conf off by float32 rounding) still joins the tray
+    assert [(g.cls, g.quality) for g in kept] == [("cup", 0.9), ("cup", 0.7), ("tray", 0.6)]
+
+
+def test_class_aware_grasp_without_its_detection_and_class_agnostic_fallback():
+    dets = [Detection(bbox=[0, 0, 100, 100], cls="box", conf=0.9)]
+    # "cup" was filtered out of detections (filter_by_conf): its grasps stay one group, not the box's
+    grasps = [Grasp(x=10, y=10, theta=0, width=5, quality=q, cls="cup", conf=0.3) for q in (0.5, 0.9)]
+    grasps += [Grasp(x=50, y=50, theta=0, width=5, quality=q, cls="box", conf=0.9) for q in (0.4, 0.8)]
+    kept = Result(task="grasp", model="g", detections=dets, grasps=grasps).filter_grasps(1).grasps
+    assert [(g.cls, g.quality) for g in kept] == [("cup", 0.9), ("box", 0.8)]
+    # class-agnostic grasps on automatic masks: grouped by the smallest containing mask box
+    from visionserve.types import Mask
+
+    masks = [Mask(rle="", bbox=[0, 0, 100, 100], conf=0.9), Mask(rle="", bbox=[0, 0, 20, 20], conf=0.9)]
+    agn = [Grasp(x=10, y=10, theta=0, width=5, quality=q) for q in (0.1, 0.2)]
+    agn += [Grasp(x=60, y=60, theta=0, width=5, quality=q) for q in (0.3, 0.4)]
+    kept = Result(task="grasp", model="g", masks=masks, grasps=agn).filter_grasps(1).grasps
+    assert [(g.x, g.quality) for g in kept] == [(10, 0.2), (60, 0.4)]
+
+
 def test_result_parses_device():
     res = Result.from_json({"task": "grasp", "model": "grasp", "device": "gpu:0+trt"})
     assert res.device == "gpu:0+trt"

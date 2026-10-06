@@ -246,18 +246,23 @@ def test_one_grasp_grouping_rule():
 
     dets = [Detection(bbox=[0, 0, 100, 100], cls="box", conf=0.9),
             Detection(bbox=[10, 10, 20, 20], cls="cup", conf=0.8)]
-    grasps = [Grasp(x=15, y=15, theta=0, width=5, quality=q / 10, cls="cup") for q in range(5)]
-    grasps += [Grasp(x=80, y=80, theta=0, width=5, quality=q / 10, cls="box") for q in range(5)]
-    grasps += [Grasp(x=500, y=500, theta=0, width=5, quality=q / 10, cls="far") for q in range(3)]
+    grasps = [Grasp(x=15, y=15, theta=0, width=5, quality=q / 10, cls="cup", conf=0.8) for q in range(5)]
+    grasps += [Grasp(x=80, y=80, theta=0, width=5, quality=q / 10, cls="box", conf=0.9) for q in range(5)]
+    grasps += [Grasp(x=500, y=500, theta=0, width=5, quality=q / 10, cls="far", conf=0.5) for q in range(3)]
     for dets_ in (dets, []):
         res = Result(task="grasp", model="g", detections=dets_, grasps=list(grasps))
         for k in (None, 0, 1, 2, 9):
             assert _grasps_per_object(res, k) == res.filter_grasps(k).grasps
     res = Result(task="grasp", model="g", detections=dets, grasps=list(grasps))
     kept = res.filter_grasps(2).grasps
-    # smallest containing bbox wins (the cup inside the box); outside every bbox -> by label
+    # each class-aware grasp joins its source detection (class + conf); "far" has none -> its own group
     assert [(g.cls, g.quality) for g in kept] == [("cup", 0.4), ("cup", 0.3), ("box", 0.4), ("box", 0.3),
                                                   ("far", 0.2), ("far", 0.1)]
+    # class-agnostic grasps: the smallest containing bbox wins (the cup inside the box)
+    agnostic = [dataclasses.replace(g, cls="", conf=0.0) for g in grasps]
+    kept = Result(task="grasp", model="g", detections=dets, grasps=agnostic).filter_grasps(2).grasps
+    assert [(g.x, g.quality) for g in kept] == [(15, 0.4), (15, 0.3), (80, 0.4), (80, 0.3), (500, 0.2),
+                                                (500, 0.1)]
 
 
 @pytest.mark.parametrize("arr", [
