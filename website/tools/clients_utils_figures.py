@@ -18,10 +18,10 @@ Usage (needs numpy and Pillow; the server must have the models used below):
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import sys
 from pathlib import Path
 
-from PIL import Image
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -86,23 +86,37 @@ class DrawBuilder(F.Builder):
                   image=self.source(pid), grasps=len(res.grasps), **self.info(res))
 
     def depth(self):
-        """The photo and draw()'s depth picture, stretched to the photo's size, side by side."""
+        """draw(depth, photo, depth="side"): the photo and its depth map with a colour bar."""
         if not self.need("midas"):
             return
         pid = 372819
-        photo, raw = self.photo(pid)
+        _, raw = self.photo(pid)
         res = self.client.predict("midas", raw)
-        pic = draw(res, raw).resize(photo.size)
-        both = Image.new("RGB", (photo.width * 2 + 8, photo.height), "white")
-        both.paste(photo, (0, 0))
-        both.paste(pic, (photo.width + 8, 0))
-        self.save(both, f"clients-draw-depth-{pid}.jpg",
-                  figure="a photo and draw() of its midas depth map (red = near)", model="midas",
-                  request={}, image=self.source(pid),
+        self.save(draw(res, raw, depth="side"), f"clients-draw-depth-{pid}.jpg",
+                  figure='draw(depth, photo, depth="side"): the photo and its midas depth map',
+                  model="midas", request={}, image=self.source(pid),
                   depth_size=[res.depth_width, res.depth_height], **self.info(res))
 
+    def side_title(self):
+        """A Grounded-SAM result and a midas depth map in one Result: class colours, mask
+        outlines, the depth panel and a title."""
+        if not self.need("grounded-sam", "midas"):
+            return
+        pid, prompt = 372819, "dog. person. bench."
+        _, raw = self.photo(pid)
+        res = self.client.predict("grounded-sam", raw, prompt=prompt)
+        dep = self.client.predict("midas", raw)
+        both = dataclasses.replace(res, depth_map=dep.depth_map, depth_width=dep.depth_width,
+                                   depth_height=dep.depth_height)
+        img = draw(both, raw, depth="side", mask_outline=True, title="grounded-sam + midas")
+        self.save(img, f"clients-draw-side-title-{pid}.jpg",
+                  figure='draw(..., depth="side", mask_outline=True, title=...): class colours, '
+                         'outlines, depth panel', model="grounded-sam, midas",
+                  request={"prompt": prompt}, image=self.source(pid),
+                  detections=len(res.detections), masks=len(res.masks), **self.info(res))
 
-STEPS = ["grounded_sam", "automask", "grasp", "depth"]
+
+STEPS = ["grounded_sam", "automask", "grasp", "depth", "side_title"]
 
 
 def main():

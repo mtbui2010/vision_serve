@@ -618,15 +618,19 @@ class Result:
     def filter_grasps(self, max_per_object: Optional[int] = None) -> "Result":
         """Keep the top-``max_per_object`` highest-quality grasps per detected object.
 
-        Grasps are grouped by the smallest detection or mask bbox whose interior
-        contains each grasp centre. When no bbox contains a grasp it is bucketed by
-        class label. ``None`` or ``<= 0`` keeps all grasps unchanged.
+        A grasp is grouped with the detection it was planned on: a class-aware grasp carries its
+        source detection's ``class`` and ``conf``, so it joins the detection with the same class
+        and conf (within ``1e-6``); when two detections match, the one whose box contains the
+        grasp centre wins. A class-aware grasp whose detection is not in this result (filtered
+        out) is grouped with the other grasps of the same ``class`` and ``conf``. Only a
+        class-agnostic grasp (no ``class``, ``conf`` 0: automatic or box-prompted masks) is
+        grouped by position: the smallest detection (else mask) box containing its centre, or by
+        its label when no box does. ``None`` or ``<= 0`` keeps all grasps unchanged.
         """
         if max_per_object is None or max_per_object <= 0 or not self.grasps:
             return self
-        # Prefer detection bboxes (class-aware); else mask bboxes (class-agnostic automask).
-        objects = [d.bbox for d in self.detections] or [m.bbox for m in self.masks]
-        return dataclasses.replace(self, grasps=_top_grasps_per_object(self.grasps, objects, max_per_object))
+        return dataclasses.replace(
+            self, grasps=_top_grasps_per_object(self.grasps, self.detections, self.masks, max_per_object))
 
     def group_by_class(self) -> "Dict[str, 'Result']":
         """Return a ``dict[class_label → Result]`` grouping detections and masks by class.
@@ -667,8 +671,9 @@ class Result:
             image: ``PIL.Image``, file path (str), or raw image bytes.
             **kwargs: forwarded to :func:`~visionserve.visualize.draw` — e.g.
                       ``alpha=0.6``, ``target_grasp=<Grasp>`` to highlight a grasp,
-                      or ``target_box=<Detection|Mask|[x,y,w,h]>`` to highlight a
-                      selected target box in red.
+                      ``target_box=<Detection|Mask|[x,y,w,h]>`` to highlight a
+                      selected target box in red, ``depth="side"``, ``classes="bars"``,
+                      ``mask_outline=True``, ``title="..."``, ``color_by="index"``.
 
         Returns:
             Annotated ``PIL.Image.Image``.
@@ -739,18 +744,45 @@ def _grasp_object_key(g: Any, objects: Sequence[Sequence[float]]) -> Optional[in
     return best
 
 
-def _top_grasps_per_object(grasps: Sequence[Any], objects: Sequence[Sequence[float]], k: int) -> List[Any]:
+# A grasp carries its source detection's conf as sent: the same float64. The tolerance only
+# absorbs a round trip through a lower-precision format (float32, a rounded JSON writer).
+_GRASP_CONF_TOL = 1e-6
+
+
+def _grasp_source(g: Any, detections: Sequence[Any]) -> Optional[int]:
+    """Index of the detection a class-aware grasp was planned on: same class and conf (within
+    :data:`_GRASP_CONF_TOL`). Among several, the smallest whose box contains the grasp centre,
+    else the first. ``None`` when no detection matches."""
+    cands = [i for i, d in enumerate(detections)
+             if d.cls == g.cls and abs(float(d.conf) - float(g.conf)) <= _GRASP_CONF_TOL]
+    if len(cands) <= 1:
+        return cands[0] if cands else None
+    inside = _grasp_object_key(g, [detections[i].bbox for i in cands])
+    return cands[inside if inside is not None else 0]
+
+
+def _top_grasps_per_object(grasps: Sequence[Any], detections: Sequence[Any], masks: Sequence[Any],
+                           k: int) -> List[Any]:
     """The ``k`` highest-quality grasps per object — the one grouping rule behind
     :meth:`Result.filter_grasps` and the visualizer.
 
-    A grasp belongs to the smallest object bbox containing its centre; a grasp no bbox contains
-    (or every grasp, when there are no objects) is bucketed by its class label, so each kind is
-    still sampled.
+    A class-aware grasp (``cls`` or ``conf`` set) belongs to its SOURCE detection, found by class
+    and conf (:func:`_grasp_source`), not by position: a bowl grasp whose centre lies inside the
+    carrot's box is still the bowl's. Without a matching detection it is grouped by its
+    ``(cls, conf)``. A class-agnostic grasp belongs to the smallest detection (else mask) box
+    containing its centre; one that no box contains is bucketed by its label, so each kind is
+    still sampled. Groups keep the order of their first grasp.
     """
+    boxes = [d.bbox for d in detections] or [m.bbox for m in masks]
     groups: Dict[Any, List[Any]] = {}
     for g in grasps:
-        key = _grasp_object_key(g, objects) if objects else None
-        groups.setdefault(("cls", g.cls) if key is None else key, []).append(g)
+        if g.cls or g.conf:
+            src = _grasp_source(g, detections)
+            key: Any = ("obj", src) if src is not None else ("src", g.cls, float(g.conf))
+        else:
+            i = _grasp_object_key(g, boxes) if boxes else None
+            key = ("obj", i) if i is not None else ("cls", g.cls)
+        groups.setdefault(key, []).append(g)
     kept: List[Any] = []
     for gs in groups.values():
         gs.sort(key=lambda g: g.quality, reverse=True)

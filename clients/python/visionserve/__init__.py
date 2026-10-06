@@ -18,7 +18,7 @@ Quickstart::
 """
 
 # Single source of the package version: pyproject.toml reads it (tool.setuptools.dynamic).
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from .client import Client, PreprocessResult, VisionServeError
 from .sources import Frame, FrameSource, open_source
@@ -51,6 +51,7 @@ __all__ = [
     "open_source",
     "IoUTracker",
     "draw",
+    "draw_prompts",
     "CameraIntrinsics",
     "backproject",
     "camera_distance",
@@ -63,10 +64,11 @@ __all__ = [
 
 
 def __getattr__(name: str):  # noqa: N807 — PEP 562 module __getattr__
-    """Lazily expose ``draw`` so that Pillow is NOT imported at package import time."""
-    if name == "draw":
-        from .visualize import draw as _draw
+    """Lazily expose ``draw`` / ``draw_prompts`` so that Pillow is NOT imported at package
+    import time."""
+    if name in ("draw", "draw_prompts"):
+        from . import visualize
 
-        return _draw
+        return getattr(visualize, name)
     raise AttributeError("module 'visionserve' has no attribute %r" % name)
 

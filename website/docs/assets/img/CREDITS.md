@@ -10,7 +10,7 @@ VisionServe and overlaid with its results (boxes, masks, grasps, depth).
 - Photo: COCO val2017 #389381, Flickr http://farm3.staticflickr.com/2544/4007091102_031486bd66_z.jpg, CC BY 2.0  
   used in: `automask-sam-389381.jpg`, `clients-draw-automask-389381.jpg`, `clients-draw-grasp-389381.jpg`, `grasp-rfdetr-389381.jpg`, `openvocab-gdino-389381.jpg`
 - Photo: COCO val2017 #372819, Flickr http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg, CC BY 2.0  
-  used in: `clients-dilate-372819.jpg`, `clients-draw-depth-372819.jpg`, `clients-draw-grounded-sam-372819.jpg`, `clients-roi-372819.jpg`, `depth-midas-372819.jpg`, `detect-rfdetr-372819.jpg`, `grounded-sam-372819.jpg`, `zeroshot-clip-372819.jpg`
+  used in: `clients-dilate-372819.jpg`, `clients-draw-depth-372819.jpg`, `clients-draw-grounded-sam-372819.jpg`, `clients-draw-side-title-372819.jpg`, `clients-roi-372819.jpg`, `depth-midas-372819.jpg`, `detect-rfdetr-372819.jpg`, `grounded-sam-372819.jpg`, `zeroshot-clip-372819.jpg`
 - Photo: COCO val2017 #29596, Flickr http://farm2.staticflickr.com/1174/4724268948_f93c2cb404_z.jpg, CC BY 2.0  
   used in: `background-sam-29596.jpg`, `depth-midas-29596.jpg`, `detect-rfdetr-29596.jpg`
 - Photo: COCO val2017 #363840, Flickr http://farm3.staticflickr.com/2797/4256603007_6fbbea22de_z.jpg, CC BY 2.0  

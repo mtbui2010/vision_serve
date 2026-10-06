@@ -241,13 +241,13 @@
         "credit": "Photo: COCO val2017 #389381, Flickr http://farm3.staticflickr.com/2544/4007091102_031486bd66_z.jpg, CC BY 2.0"
       },
       "masks": 52,
-      "duration_ms": 614.8,
+      "duration_ms": 633.0,
       "device": "gpu:0"
     },
     {
       "file": "clients-draw-depth-372819.jpg",
       "generated_by": "website/tools/clients_utils_figures.py",
-      "figure": "a photo and draw() of its midas depth map (red = near)",
+      "figure": "draw(depth, photo, depth=\"side\"): the photo and its midas depth map",
       "model": "midas",
       "request": {},
       "image": {
@@ -262,7 +262,7 @@
         256,
         256
       ],
-      "duration_ms": 7.8,
+      "duration_ms": 9.2,
       "device": "gpu:0"
     },
     {
@@ -282,7 +282,7 @@
         "credit": "Photo: COCO val2017 #389381, Flickr http://farm3.staticflickr.com/2544/4007091102_031486bd66_z.jpg, CC BY 2.0"
       },
       "grasps": 9,
-      "duration_ms": 126.4,
+      "duration_ms": 146.9,
       "device": "gpu:0"
     },
     {
@@ -303,7 +303,28 @@
       },
       "detections": 6,
       "masks": 6,
-      "duration_ms": 240.5,
+      "duration_ms": 242.2,
+      "device": "gpu:0"
+    },
+    {
+      "file": "clients-draw-side-title-372819.jpg",
+      "generated_by": "website/tools/clients_utils_figures.py",
+      "figure": "draw(..., depth=\"side\", mask_outline=True, title=...): class colours, outlines, depth panel",
+      "model": "grounded-sam, midas",
+      "request": {
+        "prompt": "dog. person. bench."
+      },
+      "image": {
+        "dataset": "COCO val2017",
+        "coco_id": 372819,
+        "file": "000000372819.jpg",
+        "flickr_url": "http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg",
+        "license": "CC BY 2.0",
+        "credit": "Photo: COCO val2017 #372819, Flickr http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg, CC BY 2.0"
+      },
+      "detections": 8,
+      "masks": 8,
+      "duration_ms": 551.9,
       "device": "gpu:0"
     },
     {
