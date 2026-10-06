@@ -237,6 +237,11 @@ test("class colours, text colours and sizes match Python's draw() (shared cases)
   for (const c of colours.class_colour) assert.deepEqual(classColour(c.name), c.colour, c.name);
   for (const c of colours.class_colour_map) assert.deepEqual([...colourMap(c.names)], c.colours, JSON.stringify(c.names));
   for (const c of colours.text_colour) assert.deepEqual(textColour(c.bg), c.text, JSON.stringify(c.bg));
+  // Labels round like Python's "%.0f%%" / "q%.2f": ties to even.
+  const r = (conf: number, q: number) =>
+    toSVG(Result.fromJSON({ task: "grasp", detections: [{ bbox: [0, 0, 9, 9], class: "a", conf }], grasps: [{ x: 1, y: 1, theta: 0, width: 4, quality: q, class: "a", conf }] }), 64, 64);
+  ok(r(0.625, 0.125).includes(">a 62%<") && r(0.625, 0.125).includes(">a q0.12<"), r(0.625, 0.125));
+  ok(r(0.635, 0.375).includes(">a 64%<") && r(0.635, 0.375).includes(">a q0.38<"), r(0.635, 0.375));
   for (const c of colours.auto_sizes) {
     const st = style(c.size[0], c.size[1]);
     assert.deepEqual([st.font, st.lw], [c.font, c.line], JSON.stringify(c.size));

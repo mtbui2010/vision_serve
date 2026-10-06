@@ -127,6 +127,6 @@ column** (top to bottom, then the next column to the right), starting with a run
 The decoders in the SDKs are a few lines:
 [`Mask.to_ndarray`](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L198-L254)
 (Python) and
-[`Mask.toMask`](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/types.ts#L86-L122)
+[`Mask.toMask`](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/types.ts#L112-L148)
 (TypeScript). The format is explained in
 [Shared vision library](../architecture/vision.md).

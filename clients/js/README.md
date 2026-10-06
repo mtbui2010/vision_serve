@@ -25,8 +25,10 @@ to `predict()` uses `node:fs` and is Node-only; in the browser pass bytes or a `
   - [Result schema](#result-schema)
 - [CLI](#cli)
 - [Post-processing](#post-processing)
+- [Grasp and robot helpers](#grasp-and-robot-helpers)
 - [Size filtering](#size-filtering)
 - [Visualization](#visualization)
+- [JSON](#json)
 - [Other API](#other-api)
 - [Develop](#develop)
 
@@ -183,7 +185,9 @@ const graspGd = await client.predict("grasp-gd", "table.jpg", { prompt: "mug. bo
 for (const g of graspGd.grasps) console.log(g.cls, g.quality.toFixed(3));
 ```
 
-`Result.grasps` is `Grasp[]` where each `Grasp` has `{ x, y, theta, width, quality, cls, conf }`.
+`Result.grasps` is `Grasp[]` where each `Grasp` has `{ x, y, theta, width, quality, cls, conf }`,
+plus `pose` (`[x, y, width, theta]`) and `contacts()` (the two jaw points). The server can send up
+to 20 grasps per object; `res.filterGrasps(3)` keeps the best 3 per object (Python's default).
 
 ### Prompt options (`opts`)
 
@@ -318,17 +322,16 @@ Notes:
 - The JS client does **not** support `--gripper-min`/`--gripper-max` (those are Python/Go
   only).
 - `--save` writes an **SVG**, not a raster. The source image is embedded as a base64
-  background so the SVG is viewable standalone. The overlay draws detections, masks, and
-  classifications but **not** grasp glyphs — for grasp models the grasp data is in the JSON
-  output (a note is printed to stderr).
+  background so the SVG is viewable standalone. The overlay is `toSVG`'s: masks, boxes,
+  grasps (the best 3 per object) and labels.
 - Image-size sniffing supports **PNG and JPEG only**; if the size can't be determined,
   `--save` is skipped with a warning.
 
 ### Output
 
 `predict` prints the unified result as JSON to **stdout** (pipe-friendly; field names
-match the server wire schema: `class`, empty arrays omitted, includes `grasps` and
-`device`). A one-line summary goes to **stderr**:
+match the server wire schema: it is `Result.toJSON()`, `class`, empty fields omitted). A
+one-line summary goes to **stderr**:
 
 ```
 predict: model=rf-detr task=detection device=gpu:0  client=42.1ms server=12.3ms  (12 detections)
@@ -368,7 +371,7 @@ result = result.filterByConf(0.5)
 // Top-5
 const top5 = result.topK(5);
 
-// Group by class
+// Group by class: each group has only that class's detections, masks and grasps
 const byClass = result.groupByClass();
 for (const [cls, r] of Object.entries(byClass)) {
   console.log(`${cls}: ${r.detections.length} detections`);
@@ -389,7 +392,9 @@ result.detections.forEach((det, i) => {
 | `sortByConf` | `(descending?)` | Sort predictions by confidence (default descending) |
 | `topK` | `(k)` | Retain top-k predictions by confidence |
 | `nms` | `(iouThreshold?)` | Greedy NMS on detections |
-| `groupByClass` | `()` | Returns `Record<string, Result>` keyed by class label |
+| `filterGrasps` | `(maxPerObject)` | Keep the best grasps per object (grouped by the detection each grasp was planned on) |
+| `groupByClass` | `()` | `Record<string, Result>` keyed by class label: that class's detections, masks (by matching box, else `""`) and grasps; classifications, depth map and embeddings left empty in every group (as Python's `group_by_class`) |
+| `toJSON` | `(opts?)` | The server's wire JSON (`class`, snake_case); `JSON.stringify(res)` uses it, `{ encoding: "base64" }` for base64 arrays |
 
 `getDepthAtDetection(depthResult, detResult, { imageWidth, imageHeight, mode? })` (exported
 from the top-level `visionserve` package, implemented in `filter.ts`) returns
@@ -400,6 +405,35 @@ boxes are scaled by `depthWidth / imageWidth` and `depthHeight / imageHeight`. `
 `"median"` (default), `"mean"`, `"min"` or `"max"`. The values are the server's relative
 inverse depth (`[0, 1]`, larger = closer), not metres; `0` counts as a value. Same rule as
 the Python `get_depth_at_detection(..., image_size=(W, H))`.
+
+## Grasp and robot helpers
+
+A port of the Python SDK's `postprocess.py` (same maths and defaults; both SDKs run the shared
+cases in `clients/testdata/postprocess_sync.json`, generated from the Python code):
+
+```ts
+import { selectTargetGrasp, selectTargetObject, graspDistances, objectDistances, backproject } from "visionserve";
+
+const g = await client.predict("grasp-rfdetr", "table.jpg");
+const obj = selectTargetObject(g, { cls: "cup", nearPoint: "center", imageWidth: 640, imageHeight: 480 });
+const grasp = selectTargetGrasp(g.grasps, { cls: "cup", gripperMin: 30, gripperMax: 80 });
+console.log(grasp?.pose, grasp?.contacts());          // [x, y, width, theta], jaw points
+
+// Metres need a METRIC depth image from an RGB-D camera, aligned with the photo:
+const depth = { data: depthMm /* Uint16Array, millimetres */, width: 640, height: 480 };
+const K = { fx: 600, fy: 600, cx: 320, cy: 240 };     // or [fx, fy, cx, cy]
+objectDistances(depth, g, K);                          // camera -> object, metres (null = no reading)
+graspDistances(depth, g.grasps, K);                    // camera -> grasp centre
+selectTargetObject(g, { depth, intrinsics: K, targetDistance: 0.6 });
+backproject(320, 200, 0.6, K);                         // pixel + depth -> [X, Y, Z] in the camera frame
+```
+
+`selectTargetObject` scores `conf`, `area`, `near` (`nearPoint`) and `distance`
+(`targetDistance`); `selectTargetGrasp` scores `quality`, `near` (`targetPoint`), `distance` and
+`width` (within `gripperMin`–`gripperMax`). Without `weights` the most specific criterion given is
+used (distance, else near, else the model's score); `weights: { conf: 1, area: 1 }` mixes them.
+`selectTargetObjectIndex` / `selectTargetGraspIndex` also return the index. A depth model's result
+(`midas`) is relative and has no scale, so the distance helpers refuse it.
 
 ## Size filtering
 
@@ -433,31 +467,49 @@ area) to `predict()` instead.
 
 ## Visualization
 
-`toSVG` returns a ready-to-embed SVG string with annotation overlays. Zero runtime
-dependencies — works in the browser and in Node.
+`toSVG(result, width, height, opts?)` returns an SVG string that draws a result over its photo, in
+the style of the Python SDK's `draw()`: mask pixels as translucent colours (one embedded PNG,
+encoded by the SDK itself), boxes with `class conf%` labels, grasps (the best 3 per object) and
+classification labels. Zero runtime dependencies, synchronous, the same in the browser and in Node.
+
+`width` / `height` are the ORIGINAL photo's size (the frame of every coordinate;
+`probeHeader(bytes)` reads it), not the display size. The SVG has a `viewBox`, so it scales to any
+CSS size:
 
 ```ts
-import { toSVG } from "visionserve";
+import { toSVG, selectTargetGrasp } from "visionserve";
 
-const res = await client.predict("rf-detr", "image.jpg");
-const svg = toSVG(res, 1280, 720);  // width, height of the original image
+const res = await client.predict("grasp-rfdetr", "image.jpg");
+const svg = toSVG(res, 1280, 720, {
+  targetGrasp: selectTargetGrasp(res.grasps), // drawn in red, on top
+  maxGraspsPerObject: 3,                      // default
+});
 
-// In HTML — position the SVG over the <img>:
+// In HTML, over the <img>, at any size:
 // <div style="position:relative; display:inline-block">
-//   <img src="image.jpg" width="1280" height="720">
-//   <svg style="position:absolute;top:0;left:0;pointer-events:none"
-//        [innerHTML]="svg"></svg>
+//   <img src="image.jpg" style="width:480px">
+//   <div style="position:absolute; inset:0">${svg with style="width:100%;height:100%"}</div>
 // </div>
 ```
 
-What `toSVG` draws per task:
+| Option | Default | |
+|--------|---------|---|
+| `alpha` | `0.45` | Mask opacity |
+| `masks` / `maskBoxes` | `true` / `true` | Draw mask pixels / a box + `mask conf%` for masks no detection labels |
+| `maxGraspsPerObject` | `3` | `null` draws every grasp |
+| `targetGrasp`, `targetBox` | none | Highlight in red |
+| `colorBy` | `"class"` | One colour per class name (the same as Python's); `"index"`: the server's 8 colours by position |
+| `fontSize`, `lineWidth` | scaled with the photo | Label size and line width in photo pixels |
 
-| Task | SVG content |
-|------|-------------|
-| `detection` / `open_vocab` | Colored `<rect>` boxes + `<text>` `"class conf%"` labels |
-| `segmentation` | Colored `<rect>` bbox outlines + `<text>` confidence labels |
-| `classification` | Stacked `<text>` lines with top-K `"class conf%"` |
-| `depth` / `embed` | Empty `<svg>` (no meaningful pixel annotation) |
+Depth and embedding results draw nothing (an empty `<svg>`).
+
+## JSON
+
+`JSON.stringify(res)` writes the server's wire format (`class`, `duration_ms`, empty fields
+omitted), so `Result.fromJSON(JSON.parse(JSON.stringify(res)))` deep-equals `res`. A photo the
+client shrank keeps its `clientResize` as an extra `client_resize` field (the server never sends
+it). `res.toJSON({ encoding: "base64" })` writes depth maps and embeddings as base64 float32, like
+`encoding=base64` answers.
 
 ## Other API
 
@@ -506,6 +558,31 @@ npm run typecheck  # tsc --noEmit
 ```
 
 ## Changelog
+
+### 0.2.0
+
+- **`toSVG` draws everything Python's `draw()` does on a photo**: mask PIXELS (one palette PNG
+  in an `<image>`, from a tiny synchronous deflate encoder in the SDK: a few KB per photo, no
+  `node:zlib`, no canvas), grasp glyphs (the best 3 per object; `maxGraspsPerObject`,
+  `targetGrasp`), `instance_detection` and any task with detections / masks / grasps /
+  classifications (it used to dispatch on `task` and drew nothing for `grasp` results), and
+  `targetBox`, `maskBoxes`, `masks`, `alpha`, `fontSize`, `lineWidth`. **Changed look:** a
+  `viewBox` (the SVG scales to any CSS size), colours by class by default (`colorBy: "class"`,
+  the Python SDK's 16 class colours; `"index"` for the old palette by position), labels on a
+  coloured band with black or white text, `conf` as a whole percentage, sizes scaled with the
+  photo. The CLI's `--save` therefore draws grasps too.
+- **JSON in the server's format**: `toJSON()` on `Result`, `Detection`, `Mask`, `Grasp` and
+  `Classification`, so `JSON.stringify(res)` writes `class`, `duration_ms`, ... and
+  `Result.fromJSON(JSON.parse(JSON.stringify(res)))` deep-equals `res` (`clientResize` is kept as
+  `client_resize`); `toJSON({ encoding: "base64" })`. The CLI prints `res.toJSON()` (it now
+  includes `hint` when the server sends one).
+- **`groupByClass()` as Python's `group_by_class()`** (**breaking**): a group holds only its
+  class's grasps (it held every grasp), and has no classifications, depth map or embeddings (it
+  had copies of the whole result's).
+- **Grasp and robot helpers**, ported from Python with shared test cases: `Result.filterGrasps`,
+  `Grasp.pose` / `contacts()` / `contactsFlat()`, `backproject`, `cameraDistance`,
+  `objectDistances`, `graspDistances`, `selectTargetObject(Index)`, `selectTargetGrasp(Index)`;
+  `getDepthAtDetection` also takes a metric depth image (`{ data, width, height }`, `depthScale`).
 
 ### 0.1.4
 

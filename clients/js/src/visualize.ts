@@ -362,7 +362,7 @@ function graspGlyph(st: Style, g: Grasp, isTarget: boolean): string {
   const py = (Math.cos(g.theta) * plate) / 2;
   const line = (ax: number, ay: number, bx: number, by: number, w: number) =>
     `<line x1="${n(ax)}" y1="${n(ay)}" x2="${n(bx)}" y2="${n(by)}" stroke="${c}" stroke-width="${w}" stroke-linecap="round"/>`;
-  const text = (g.cls ? `${g.cls} ` : "") + `q${g.quality.toFixed(2)}`;
+  const text = (g.cls ? `${g.cls} ` : "") + `q${fixed(g.quality, 2)}`;
   return (
     `<g>` +
     line(x0, y0, x1, y1, lw) +
@@ -414,7 +414,18 @@ function textWidth(text: string, fontSize: number): number {
 }
 
 const detText = (d: Detection) => `${d.cls} ${pct(d.conf)}`;
-const pct = (conf: number) => `${Math.round(conf * 100)}%`;
+/** Python's `"%.0f%%" % (conf * 100)`. */
+const pct = (conf: number) => `${fixed(conf * 100, 0)}%`;
+
+/**
+ * Python's `"%.Nf"`: correct rounding of the exact binary value, ties to even (`toFixed` rounds
+ * ties up: 0.125 is "0.13" in JS, "0.12" in Python).
+ */
+function fixed(x: number, digits: number): string {
+  const r = x * 10 ** digits;
+  if (Number.isFinite(r) && Math.abs(r % 1) === 0.5) return (roundHalfEven(r) / 10 ** digits).toFixed(digits);
+  return x.toFixed(digits);
+}
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 const rgb = (c: readonly number[]) => `rgb(${c[0]},${c[1]},${c[2]})`;
 /** A coordinate with at most 2 decimals (shorter SVG; a hundredth of a pixel is invisible). */
