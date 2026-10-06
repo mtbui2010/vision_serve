@@ -945,6 +945,9 @@ python clients/python/tests/test_client.py
   `conf` (within 1e-6; a tie is broken by the box containing the grasp centre). 0.3.0 used the
   smallest box containing the centre, so a bowl grasp lying inside the carrot's box took the
   carrot's place. Class-agnostic grasps keep the containing-box rule.
+- `Result.group_by_class()`: each group holds only its class's grasps (a class-aware grasp by its
+  `class`, a class-agnostic one by the detection box containing it, else `""`); 0.3.0 copied
+  every grasp into every group.
 - **`draw()` options**: `color_by="class"` (new default: a stable colour per class name;
   `"index"` is the 0.3.0 look), `mask_outline=`, `font_size=` / `line_width=` (default: scaled
   with the photo's shorter side, unchanged at 640 × 426), `depth="map"|"side"|"overlay"|"none"`

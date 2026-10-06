@@ -11,6 +11,26 @@ export { Result, Detection, Mask, Grasp, ModelInfo, Classification } from "./typ
 export type { Task, ModelState } from "./types.js";
 export { filterBySize, getDepthAtDetection } from "./filter.js";
 export type { SizeFilterOptions, DepthAtDetectionOptions, DepthMode } from "./filter.js";
-export { toSVG } from "./visualize.js";
+export { toSVG, classColour, classColourMap } from "./visualize.js";
+export type { SVGOptions } from "./visualize.js";
+export {
+  backproject,
+  cameraDistance,
+  objectDistances,
+  graspDistances,
+  selectTargetObject,
+  selectTargetObjectIndex,
+  selectTargetGrasp,
+  selectTargetGraspIndex,
+} from "./postprocess.js";
+export type {
+  CameraIntrinsics,
+  IntrinsicsInput,
+  DepthImage,
+  ObjectDistanceOptions,
+  GraspDistanceOptions,
+  SelectObjectOptions,
+  SelectGraspOptions,
+} from "./postprocess.js";
 export { ClientResize, browserCodec, sharpCodec, probeHeader, targetSize } from "./resize.js";
 export type { ImageCodec, ImageProbe, ResizeOption } from "./resize.js";

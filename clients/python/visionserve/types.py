@@ -633,20 +633,37 @@ class Result:
             self, grasps=_top_grasps_per_object(self.grasps, self.detections, self.masks, max_per_object))
 
     def group_by_class(self) -> "Dict[str, 'Result']":
-        """Return a ``dict[class_label → Result]`` grouping detections and masks by class.
+        """Return a ``dict[class_label → Result]``: per class, only that class's detections,
+        masks and grasps.
 
         Masks carry no class in the wire schema. A mask whose bbox equals a detection's bbox
         (Grounded-SAM / grasp pipelines copy the detection box onto its mask) takes that
         detection's class; any other mask (e.g. a box-prompted SAM mask) is grouped under ``""``.
+        A class-aware grasp goes with its ``cls`` (its source detection's class); a class-agnostic
+        one with the class of the smallest detection box containing its centre, else ``""``.
+        Classifications, the depth map and the embeddings are per image: every group has them
+        empty instead of a copy. Groups appear in the order their label is first met
+        (detections, masks, grasps).
         """
         groups: Dict[str, Dict[str, list]] = {}
+
+        def group(label: str) -> Dict[str, list]:
+            return groups.setdefault(label, {"detections": [], "masks": [], "grasps": []})
+
         box_cls: Dict[tuple, str] = {}
         for det in self.detections:
-            groups.setdefault(det.cls, {"detections": [], "masks": []})["detections"].append(det)
+            group(det.cls)["detections"].append(det)
             box_cls.setdefault(tuple(float(v) for v in det.bbox), det.cls)
         for mask in self.masks:
-            label = box_cls.get(tuple(float(v) for v in mask.bbox), "")
-            groups.setdefault(label, {"detections": [], "masks": []})["masks"].append(mask)
+            group(box_cls.get(tuple(float(v) for v in mask.bbox), ""))["masks"].append(mask)
+        boxes = [d.bbox for d in self.detections]
+        for g in self.grasps:
+            if g.cls or g.conf:
+                label = g.cls
+            else:
+                i = _grasp_object_key(g, boxes) if boxes else None
+                label = self.detections[i].cls if i is not None else ""
+            group(label)["grasps"].append(g)
 
         result: Dict[str, Result] = {}
         for label, items in groups.items():
@@ -654,6 +671,7 @@ class Result:
                 self,
                 detections=items["detections"],
                 masks=items["masks"],
+                grasps=items["grasps"],
                 classifications=[],
                 depth_map=[],
                 depth_width=0,

@@ -129,9 +129,10 @@ grasps: 60 true
 TypeError: predict(): unknown option "min_size" (did you mean "minSize"?)
 ```
 
-The JS SDK has no [`max_grasps_per_object`](python.md#max_grasps_per_object): it returns every
-grasp the server sent (60 here, up to 20 per object), where Python keeps the best 3 per object
-by default.
+The JS `predict` has no [`max_grasps_per_object`](python.md#max_grasps_per_object): it returns
+every grasp the server sent (60 here, up to 20 per object), where Python keeps the best 3 per
+object by default. `res.filterGrasps(3)` keeps the same 3 ([Grasps and robot
+helpers](#grasps-and-robot-helpers)), and `toSVG` draws the best 3 per object unless told otherwise.
 
 For the two-stage naming models, `claimThreshold` and `cropTemp` behave as on the Python page:
 
@@ -314,18 +315,20 @@ rules (target size, ROI region, which hosts are loopback) run the same shared ca
 | `durationMs` | `number` (server time) |
 | `detections` | `Detection[]`: `bbox` (`[x, y, w, h]`, photo pixels), `cls` (the JSON `class`), `conf` |
 | `masks` | `Mask[]`: `rle`, `bbox`, `conf`; `toMask(width, height)` → `Uint8Array` (row-major, 1 inside), `toMask2D(width, height)` → `boolean[][]` |
-| `grasps` | `Grasp[]`: `x`, `y`, `theta`, `width`, `quality`, `cls`, `conf` |
+| `grasps` | `Grasp[]`: `x`, `y`, `theta`, `width`, `quality`, `cls`, `conf`; `pose` (`[x, y, width, theta]`), `contacts()` (`[[x0, y0], [x1, y1]]`, the jaw points), `contactsFlat()` |
 | `classifications` | `Classification[]`: `cls`, `conf` |
 | `depthMap`, `depthWidth`, `depthHeight` | `number[]` (row-major, the model's resolution), `number`, `number` |
 | `embeddings` | `number[][]` |
 | `clientResize` | `ClientResize` or `null`: `originalWidth/Height`, `sentWidth/Height`, `jpegQuality` (`null` = PNG or not re-encoded), `resized`, `reason` (client side only) |
 
 Helpers, all client side and returning a new `Result`: `filterByConf(min, max)`,
-`sortByConf(desc)`, `topK(k)`, `nms(iou)`, `groupByClass()`. Module functions:
+`sortByConf(desc)`, `topK(k)`, `nms(iou)`, `filterGrasps(k)`, `groupByClass()`. `toJSON()` gives
+the server's JSON (`JSON.stringify(res)` calls it). Module functions:
 `filterBySize(result, { minSize, maxSize, imageWidth, imageHeight })` (fractions 0–1 of the area
 when both image sizes are given, else pixels²; also `client.filterBySize`),
-`getDepthAtDetection(depthResult, detResult, { imageWidth, imageHeight, mode })` and
-`toSVG(result, width, height)`, an SVG string to lay over an `<img>`.
+`getDepthAtDetection(depthResult, detResult, { imageWidth, imageHeight, mode })`,
+`toSVG(result, width, height, opts)` ([drawing](#visualize-results)) and the
+[robot helpers](#grasps-and-robot-helpers).
 
 `getDepthAtDetection` reads a depth model's map under each detection (or each mask when there
 are none). The map has the model's resolution (256 × 256 for `midas`) whatever the photo's
@@ -344,7 +347,7 @@ console.log("depth", depth.depthWidth, depth.depthHeight, depth.depthMap.length)
 const near = getDepthAtDetection(depth, res, { imageWidth: 640, imageHeight: 426 });
 res.detections.slice(0, 3).forEach((d, i) => console.log(d.cls, near[i]!.toFixed(3)));
 
-console.log(JSON.stringify(res.hint), toSVG(res, 640, 426).slice(0, 120));
+console.log(JSON.stringify(res.hint), toSVG(res, 640, 426).slice(0, 87));
 ```
 
 ```text
@@ -353,31 +356,51 @@ depth 256 256 65536
 person 0.309
 dog 0.697
 dog 0.400
-"" <svg xmlns="http://www.w3.org/2000/svg" width="640" height="426"><rect x="441.66203022003174" y="31.665799677371975" wid
+"" <svg xmlns="http://www.w3.org/2000/svg" width="640" height="426" viewBox="0 0 640 426">
 ```
 
 The dog in front (0.697) is closer to the camera than the person behind it (0.309).
 
 ## Visualize results
 
-The JS SDK has one drawing helper: `toSVG(result, width, height)`. It returns an SVG string
-with boxes and labels, to lay over the photo. It does not decode or change the photo, so it
-cannot paint masks; you do that yourself (below). The examples in this section and in
-[Utilities](#utilities) were run in Node 20 against a server on one NVIDIA RTX A6000 (CUDA),
-port 11820, with the SDK in this repository.
+`toSVG(result, width, height, opts)` returns an SVG string with what Python's
+[`draw()`](python.md#visualize-results) puts on the photo, in the same style: the mask pixels as
+translucent colours, boxes with `class conf%` labels, a box and `mask conf%` for each mask that no
+detection labels, grasps, and the classification labels in the top-left corner. It does not
+contain the photo: lay it over an `<img>`, or put the photo in as an `<image>` for one file
+(below). It needs no image library and no DOM, so it runs the same in Node and in a browser.
+The examples in this section and in [Utilities](#utilities) were run with the SDK 0.2.0 in Node 20
+against a server on one NVIDIA RTX A6000 (CUDA), port 11835.
+
+`width` and `height` are the photo's **own** size in pixels (the frame every coordinate of the
+result is in; `probeHeader(bytes)` reads it from the file header), not the size it is shown at.
+The SVG has that size and a `viewBox="0 0 width height"`, so it scales to any CSS size.
 
 | Result | What `toSVG` draws |
 |---|---|
-| `task` `detection` or `open_vocab` (Grounded-SAM too) | A box and the label `class conf%` per detection. |
-| `task` `segmentation` | The **box** of each mask and `mask conf%`; not the mask's pixels. |
-| `task` `classification` | The labels in the top-left corner. |
-| `grasp`, `instance_detection`, `depth`, `embed` | Nothing: an empty `<svg>`. |
+| detections (`detection`, `open_vocab`, `instance_detection`, ...) | A box and the label `class conf%` per detection. |
+| masks (`segmentation`, Grounded-SAM, `grasp`, ...) | The mask's pixels in its colour (all masks in one embedded PNG); a mask whose box equals a detection's box takes that detection's class and colour, any other also gets a box and `mask conf%`. |
+| grasps (`grasp`, `grasp-gd`, ...) | The best 3 grasps per object as a gripper glyph: the closing line between the two jaw points, a jaw plate at each end, a dot at the centre and `class q0.97`, coloured red (low quality) → yellow → green (high). |
+| classifications | The labels in the top-left corner on a dark band. |
+| `depth`, `embed` | Nothing: an empty `<svg>` (Python's `draw()` renders depth maps; `toSVG` does not). |
 
-The boxes are written in the photo's pixels and the SVG has no `viewBox`, so pass the photo's
-**own** size as `width` and `height` (not the size it is shown at).
+| Option | Default | What it does |
+|---|---|---|
+| `alpha` | `0.45` | Opacity of the mask colours. |
+| `masks` | `true` | `false`: no mask pixels, only their boxes. |
+| `maskBoxes` | `true` | `false`: masks as colours only, without their box and label (for the dozens of masks of an automatic-mask result); a target mask keeps its red box. |
+| `maxGraspsPerObject` | `3` | Grasps drawn per object, grouped as [`filterGrasps`](#grasps-and-robot-helpers) does; `null` or `0` draws every grasp. |
+| `targetGrasp` | none | A grasp of the result (the same object, e.g. from `selectTargetGrasp`), drawn in red on top. |
+| `targetBox` | none | A `Detection` / `Mask` of the result (matched by identity or box) or `[x, y, w, h]`: drawn in red with a line twice as thick; a box that is none of the result's items is drawn on its own. |
+| `colorBy` | `"class"` | `"class"`: one colour per class name, the same as Python's (a stable hash of the name into 16 colours; two classes of one picture never share one). `"index"`: item `i` gets colour `i` of the server's 8 colours. Masks without a class use their index either way. |
+| `fontSize`, `lineWidth` | scaled | Label size and line width in the photo's pixels; by default they grow with the photo's shorter side (14 and 2 on a 640 × 426 photo), as in Python. |
+
+The label text is black or white, whichever reads better on its colour. The class colours are
+those of Python's `draw()`: both SDKs run the same cases (`clients/testdata/class_colors.json`).
 
 ```ts
-import { Client, toSVG } from "visionserve";
+import { readFile } from "node:fs/promises";
+import { Client, probeHeader, toSVG } from "visionserve";
 
 const client = new Client();
 const runs: Array<[string, string, object]> = [
@@ -390,30 +413,37 @@ const runs: Array<[string, string, object]> = [
   ["midas", "dogs.jpg", {}],
 ];
 for (const [model, photo, opts] of runs) {
-  const res = await client.predict(model, photo, opts);
-  const svg = toSVG(res, 640, 480);
-  const count = (tag: string) => (svg.match(new RegExp("<" + tag, "g")) ?? []).length;
-  console.log(model.padEnd(16), res.task.padEnd(15), "rect", count("rect"), "text", count("text"));
+  const bytes = new Uint8Array(await readFile(photo));
+  const { width, height } = probeHeader(bytes)!;              // the photo's own size
+  const res = await client.predict(model, bytes, opts);
+  const svg = toSVG(res, width, height);
+  const count = (tag: string) => (svg.match(new RegExp("<" + tag + " ", "g")) ?? []).length;
+  console.log(model.padEnd(16), res.task.padEnd(15), "image", count("image"), "rect", count("rect"), "text", count("text"), "line", count("line"));
 }
 ```
 
 ```text
-rf-detr          detection       rect 7 text 7
-grounding-dino   open_vocab      rect 2 text 2
-grounded-sam     open_vocab      rect 4 text 4
-mobile-sam       segmentation    rect 1 text 1
-efficientnet-b0  classification  rect 0 text 5
-grasp-rfdetr     grasp           rect 0 text 0
-midas            depth           rect 0 text 0
+rf-detr          detection       image 0 rect 14 text 7 line 0
+grounding-dino   open_vocab      image 0 rect 4 text 2 line 0
+grounded-sam     open_vocab      image 1 rect 8 text 4 line 0
+mobile-sam       segmentation    image 1 rect 2 text 1 line 0
+efficientnet-b0  classification  image 0 rect 5 text 5 line 0
+grasp-rfdetr     grasp           image 1 rect 15 text 12 line 27
+midas            depth           image 0 rect 0 text 0 line 0
 ```
 
-(`grasp-rfdetr` returns 3 detections, 3 masks and 60 grasps here, and `toSVG` draws none of
-them, because its task is `grasp`.)
+Each label is a `<rect>` band and a `<text>`, so a box counts two `<rect>`s; the one `<image>` holds
+every mask. `grasp-rfdetr` returns 60 grasps, and 9 are drawn (3 objects × 3, each a glyph of 3
+lines). With the wrong size, a mask cannot be placed: its run counts do not add up to
+`width × height`, so it gets its box only.
+
+The masks are an 8-bit palette PNG written by the SDK itself (a small deflate encoder, no
+`node:zlib`, no canvas), so `toSVG` stays synchronous and the same everywhere. Masks are long
+runs of one value, so the PNG is small: the four Grounded-SAM dogs above make a 7.4 KB SVG, 52
+automatic masks of `food.jpg` 32 KB; a 4000 × 3000 picture with 10 large (synthetic) masks
+took 0.2 s and 143 KB in Node.
 
 ### In Node: one SVG file with the photo
-
-`probeHeader(bytes)` reads a JPEG's or PNG's size from its header (EXIF rotation applied), so
-you need no image library:
 
 ```ts
 import { readFile, writeFile } from "node:fs/promises";
@@ -422,21 +452,55 @@ import { Client, probeHeader, toSVG } from "visionserve";
 const client = new Client();
 const bytes = new Uint8Array(await readFile("dogs.jpg"));
 const { width: w, height: h } = probeHeader(bytes)!;          // the photo's size, no decoder needed
-const res = await client.predict("rf-detr", bytes);
-const overlay = toSVG(res, w, h);                              // "<svg ...>boxes + labels</svg>"
-console.log(w, h, (overlay.match(/<rect/g) ?? []).length, "boxes");
+const res = await client.predict("grounded-sam", bytes, { prompt: "dog. bench." });
+const overlay = toSVG(res, w, h);                              // "<svg ... viewBox=...>masks, boxes, labels</svg>"
+console.log(w, h, res.detections.map((d) => d.cls), (overlay.length / 1024).toFixed(1), "KB");
 
 // One standalone SVG file: the photo as an <image>, the overlay on top. Open it in a browser.
 const photo = `<image href="data:image/jpeg;base64,${Buffer.from(bytes).toString("base64")}" width="${w}" height="${h}"/>`;
-await writeFile("dogs-boxes.svg", overlay.replace(">", ">" + photo));
+await writeFile("dogs-drawn.svg", overlay.replace(">", ">" + photo));
 ```
 
 ```text
-640 426 7 boxes
+640 426 [ 'dog', 'dog', 'dog', 'dog', 'bench', 'bench' ] 7.4 KB
 ```
 
-`dogs-boxes.svg` opens in any browser. To get a PNG or JPEG, convert it with a tool such as
-`rsvg-convert`, or render it in a headless browser.
+`dogs-drawn.svg` opens in any browser: rendered in headless Chrome it shows the four dogs and the
+two benches filled with their class colour, each with one labelled box, as Python's `draw()`
+picture of the same call. To get a PNG or JPEG, convert it with a tool such as `rsvg-convert`, or
+render it in a headless browser.
+
+### Grasps and a chosen target
+
+```ts
+import { readFile, writeFile } from "node:fs/promises";
+import { Client, probeHeader, selectTargetGrasp, selectTargetObject, toSVG } from "visionserve";
+
+const client = new Client();
+const bytes = new Uint8Array(await readFile("food.jpg"));
+const { width: w, height: h } = probeHeader(bytes)!;
+const g = await client.predict("grasp-rfdetr", bytes);         // every grasp the server sends
+console.log(g.detections.length, "objects,", g.masks.length, "masks,", g.grasps.length, "grasps");
+const obj = selectTargetObject(g, { cls: "broccoli" })!;
+const best = selectTargetGrasp(g.grasps, { cls: "broccoli" })!;
+console.log(obj.bbox.map(Math.round), "| grasp", best.pose.map((v) => +v.toFixed(2)));
+const svg = toSVG(g, w, h, { targetBox: obj, targetGrasp: best, maxGraspsPerObject: 1 });
+const photo = `<image href="data:image/jpeg;base64,${Buffer.from(bytes).toString("base64")}" width="${w}" height="${h}"/>`;
+await writeFile("food-grasp.svg", svg.replace(">", ">" + photo));
+console.log((svg.match(/<g>/g) ?? []).length, "grasps drawn");
+```
+
+```text
+3 objects, 3 masks, 60 grasps
+[ 373, 278, 105, 129 ] | grasp [ 424, 332.5, 76.53, 3.02 ]
+3 grasps drawn
+```
+
+The same object and grasp as the [Python example](python.md#grasps). In the picture the broccoli
+box and its grasp are red, the bowl and carrot keep their colours with one grasp each. A grasp is
+counted with the detection it was planned on (same class and confidence), not with the box its
+centre falls in: the bowl's best grasp lies inside the carrot's box and is still drawn as the
+bowl's. `targetGrasp` is matched by identity and must be one of the grasps drawn.
 
 ### In a browser: an overlay on the `<img>`
 
@@ -450,21 +514,42 @@ await writeFile("dogs-boxes.svg", overlay.replace(">", ">" + photo));
 ```ts
 const img = document.querySelector("#photo") as HTMLImageElement;
 const blob = await (await fetch(img.src)).blob();
-const res = await client.predict("rf-detr", blob);
-const [w, h] = [img.naturalWidth, img.naturalHeight];        // the photo's own pixels
-// viewBox + 100 % size: the overlay follows the <img> however large it is shown.
-document.querySelector("#overlay")!.innerHTML = toSVG(res, w, h)
-  .replace("<svg ", `<svg viewBox="0 0 ${w} ${h}" style="width: 100%; height: 100%" `);
+const res = await client.predict("grounded-sam", blob, { prompt: "dog." });
+// The photo's own pixels; the SVG's viewBox does the scaling to the 480-px <img>.
+document.querySelector("#overlay")!.innerHTML = toSVG(res, img.naturalWidth, img.naturalHeight)
+  .replace("<svg ", '<svg style="width: 100%; height: 100%" ');
 ```
 
-(The page itself was not run. The overlay part was checked in headless Chrome: with the
-`viewBox`, the boxes of a 640-pixel result sit on the dogs of the photo shown 480 pixels wide.)
+(The page itself was not run. The overlay part was checked in headless Chrome: a 640-pixel
+Grounded-SAM result laid over the photo shown 480 pixels wide puts the masks and boxes on the
+dogs.)
+
+### Many masks
+
+Automatic masks (no prompt) can be dozens of overlapping regions. Their boxes and labels then
+hide the photo; `maskBoxes: false` keeps only the colours:
+
+```ts
+import { Client, toSVG } from "visionserve";
+
+const client = new Client();
+const auto = await client.predict("mobile-sam", "food.jpg");   // no prompt: automatic masks
+const [w, h] = [640, 543];
+const boxes = toSVG(auto, w, h);                               // a box + label per mask
+const fills = toSVG(auto, w, h, { maskBoxes: false, alpha: 0.6 });  // colour only
+console.log(auto.masks.length, "masks:", (boxes.length / 1024).toFixed(1), "KB with boxes,", (fills.length / 1024).toFixed(1), "KB without");
+```
+
+```text
+52 masks: 48.3 KB with boxes, 32.0 KB without
+```
 
 ### Masks on a canvas
 
-`Mask.toMask(width, height)` gives one byte per pixel (1 = inside), row by row. Mix a colour into
-the pixels of a canvas with it. The function below works on any RGBA buffer; here it ran in Node
-on a white buffer, and in a browser you pass `ctx.getImageData(0, 0, w, h).data`:
+To paint masks your own way, `Mask.toMask(width, height)` gives one byte per pixel (1 = inside),
+row by row. Mix a colour into the pixels of a canvas with it. The function below works on any
+RGBA buffer; here it ran in Node on a white buffer, and in a browser you pass
+`ctx.getImageData(0, 0, w, h).data`:
 
 ```ts
 import { Client, Result } from "visionserve";
@@ -511,52 +596,6 @@ ctx.putImageData(pixels, 0, 0);
 
 (Not run in a browser either; the `paintMasks` part is the code run above.)
 
-### Draw it yourself: masks, boxes and grasps as SVG
-
-For grasps, or your own style, write the SVG elements yourself. A mask becomes one 1-pixel-high
-`<rect>` per run of pixels in a row; a grasp is the line between its two jaws:
-
-```ts
-import { readFile, writeFile } from "node:fs/promises";
-import { Client, probeHeader } from "visionserve";
-
-const client = new Client();
-const bytes = new Uint8Array(await readFile("food.jpg"));
-const { width: w, height: h } = probeHeader(bytes)!;
-const res = await client.predict("grasp-rfdetr", bytes);
-const parts: string[] = [`<image href="data:image/jpeg;base64,${Buffer.from(bytes).toString("base64")}" width="${w}" height="${h}"/>`];
-res.masks.forEach((m) => {                                   // masks: one 1-px-high rect per run of a row
-  const bits = m.toMask(w, h);
-  for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++) {
-      if (!bits[y * w + x] || bits[y * w + x - 1] && x > 0) continue;
-      let e = x;
-      while (e < w && bits[y * w + e]) e++;
-      parts.push(`<rect x="${x}" y="${y}" width="${e - x}" height="1" fill="#00e0ff" opacity="0.4"/>`);
-    }
-});
-for (const d of res.detections) {                            // boxes + labels
-  const [x, y, bw, bh] = d.bbox as [number, number, number, number];
-  parts.push(`<rect x="${x}" y="${y}" width="${bw}" height="${bh}" fill="none" stroke="yellow" stroke-width="3"/>`);
-  parts.push(`<text x="${x + 4}" y="${y + 18}" fill="yellow" font-family="sans-serif" font-size="16">${d.cls} ${d.conf.toFixed(2)}</text>`);
-}
-for (const g of res.grasps) {                                // grasps: a line between the two jaws
-  const dx = (Math.cos(g.theta) * g.width) / 2, dy = (Math.sin(g.theta) * g.width) / 2;
-  parts.push(`<line x1="${g.x - dx}" y1="${g.y - dy}" x2="${g.x + dx}" y2="${g.y + dy}" stroke="red" stroke-width="3"/>`);
-}
-await writeFile("food-custom.svg", `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}">${parts.join("")}</svg>`);
-console.log(res.masks.length, "masks,", res.detections.length, "boxes,", res.grasps.length, "grasps");
-```
-
-```text
-3 masks, 3 boxes, 60 grasps
-```
-
-The file shows the three masks in light blue, yellow boxes with labels, and 60 red grasp lines
-(the JS SDK keeps every grasp the server sends). Every row of a mask adds elements, so the file
-grows with the masks: 390 KB here, 300 KB of it the embedded photo. For many or large masks, use
-a canvas instead.
-
 ## Utilities
 
 These helpers work on results in your program and never call the server.
@@ -567,22 +606,25 @@ These helpers work on results in your program and never call the server.
 | module | `filterBySize(result, { minSize, maxSize, imageWidth, imageHeight })` (also `client.filterBySize`) | Keeps detections and masks by box area: **fractions** (0–1) of the photo when both sizes are given, else pixels². `0` = no limit. | Dropping tiny or huge boxes. |
 | `Result` | `sortByConf(descending = true)`, `topK(k)` | Orders by `conf`; keeps the `k` best of each list. | Only the best few. |
 | `Result` | `nms(iouThreshold = 0.5)` | Greedy non-maximum suppression on detections (masks are kept). | Merged results with overlapping boxes. |
-| `Result` | `groupByClass()` | `{ label: Result }`; a mask joins the detection with the same box, other masks go under `""`. Each group keeps the result's depth map, embeddings and all grasps. | Handling each class apart. |
-| `Result` | `Result.fromJSON(obj)` | Builds a `Result` from the server's JSON (`class`, `depth_map`, ...). | Results saved from an HTTP call. |
+| `Result` | `filterGrasps(maxPerObject)` | Keeps the best `maxPerObject` grasps per object: a grasp goes with the detection it was planned on (same class and confidence), a class-agnostic one with the smallest box containing its centre. `null` / `0` keeps all. | Python's `max_grasps_per_object` (default 3). |
+| `Result` | `groupByClass()` | `{ label: Result }` with only that class's detections, masks and grasps; a mask joins the detection with the same box, other masks go under `""`; a class-agnostic grasp joins the detection box it lies in. Classifications, depth map and embeddings are per photo, so every group has them empty. Same as Python's `group_by_class()`. | Handling each class apart. |
+| `Result` | `toJSON(opts)`, `Result.fromJSON(obj)` | The server's JSON (`class`, `depth_map`, `duration_ms`, ...) and back: `Result.fromJSON(JSON.parse(JSON.stringify(res)))` deep-equals `res`. `{ encoding: "base64" }` writes depth maps and embeddings as base64 float32. | Saving and reloading results. |
+| `Grasp` | `pose`, `contacts()`, `contactsFlat()` | `[x, y, width, theta]`; the two jaw points `[[x0, y0], [x1, y1]]` (centre ∓ width / 2 along θ) or `[x0, y0, x1, y1]`. | Sending a grasp to a robot. |
 | `Mask` | `toMask(width, height)`, `toMask2D(width, height)` | The mask as a row-major `Uint8Array` (1 = inside), or `boolean[height][width]`. | Area, union, painting pixels. |
-| module | `getDepthAtDetection(depthResult, detResult, { imageWidth, imageHeight, mode })` | The depth model's value under each box (relative 0–1, larger = closer). | "Which object is nearer?" |
-| module | `toSVG(result, width, height)` | Boxes and labels as an SVG string ([above](#visualize-results)). | Drawing. |
+| module | `getDepthAtDetection(depth, detResult, { imageWidth, imageHeight, mode, depthScale })` | The depth under each box: a depth model's value (relative 0–1, larger = closer), or metres from a camera's depth image. | "Which object is nearer?" |
+| module | `backproject(u, v, z, K)`, `cameraDistance(u, v, z, K)` | A pixel at depth `z` as a 3D point `[X, Y, Z]` in the camera frame, and its distance from the camera. `K` is `{ fx, fy, cx, cy }` or `[fx, fy, cx, cy]`. | Pixels to robot coordinates. |
+| module | `objectDistances(depth, detResult, K, { mode, depthScale })`, `graspDistances(depth, grasps, K, { window, depthScale })` | Camera → object / grasp distance in metres from a metric depth image. | Reach checks. |
+| module | `selectTargetObject(result, opts)`, `selectTargetGrasp(grasps, opts)` (and `…Index` versions returning `[item, index]`) | The best object / grasp by class, confidence, size, closeness to a point, gripper opening and camera distance. | Picking what the robot goes for. |
+| module | `toSVG(result, width, height, opts)` | Masks, boxes, grasps and labels as an SVG string ([above](#visualize-results)). | Drawing. |
 | module | `probeHeader(bytes)` | `{ width, height, isJpeg, orientation }` from a JPEG or PNG header, EXIF rotation applied, or `null`. | The photo's size without an image library. |
 | module | `targetSize(width, height, { maxSide, maxShortSide, region })` | The size a photo would be shrunk to. | Planning uploads. |
 | `Client` | `usefulSide(model)` | `[maxSide, maxShortSide]`: the model's size hint, `null` = none. | Knowing how big a photo is worth sending. |
 | module | `ClientResize` (`res.clientResize`) | What was uploaded: `originalWidth/Height`, `sentWidth/Height`, `jpegQuality`, `reason`, `resized`, `toSentX/Y()`, `toOriginalX/Y()`. | Checking the client-side resize. |
 | module | `normalizePrompt(model, prompt)`, `isLoopback(host)` | The prompt `predict` sends; whether a host is this machine. | Debugging prompts and resizing. |
 
-Not in the JS SDK (use the [Python SDK](python.md#utilities) or write a few lines): grasp
-helpers (`filterGrasps`, a grasp's pose or jaw points; the SVG example above has the jaw maths), camera and
-robot helpers (back-projection, distances in metres, target selection), and a `toJSON` in the
-server's format: `JSON.stringify(res)` writes the object's own names (`cls`, `depthMap`, ...),
-which `Result.fromJSON` does not read back.
+The grasp and robot helpers are a port of Python's (`visionserve/postprocess.py`): the same
+maths and defaults, checked by the same cases in both SDKs (`clients/testdata/postprocess_sync.json`,
+generated from the Python code).
 
 ### Filters and depth
 
@@ -663,21 +705,93 @@ null
 true 320 320 200
 ```
 
-### JSON
+### Grasps and robot helpers
+
+A metric depth image from an RGB-D camera, aligned with the photo, is `{ data, width, height }`:
+an integer array (`Uint16Array`) is read as millimetres, a float array (`Float32Array`,
+`number[]`) as metres, `0` = no reading; `depthScale` (metres per unit) overrides that. A depth
+model's answer (`midas`) has no scale, so the distance helpers refuse it.
 
 ```ts
+import { Client, graspDistances, objectDistances, selectTargetGrasp, selectTargetObject } from "visionserve";
+
+const client = new Client();
+const g = await client.predict("grasp-rfdetr", "food.jpg");
+const top = g.filterGrasps(3);                                  // the best 3 per object, as Python's default
+console.log(g.grasps.length, "grasps ->", top.grasps.length, "after filterGrasps(3)");
+const best = selectTargetGrasp(top.grasps)!;                    // highest quality
+console.log(best.cls, "pose [x, y, width, theta]:", best.pose.map((v) => +v.toFixed(2)));
+console.log("jaw contacts:", best.contacts().map((p) => p.map((v) => +v.toFixed(1))));
+const fit = selectTargetGrasp(top.grasps, { gripperMin: 60, gripperMax: 80 })!;   // what the gripper can open to
+console.log("for a 60-80 px opening:", fit.cls, fit.width.toFixed(1), "q", fit.quality.toFixed(2));
+console.log(Object.fromEntries(Object.entries(top.groupByClass()).map(([k, r]) => [k, r.grasps.length])));
+
+// Metric depth from an RGB-D camera, aligned with the photo: here a made-up tilted table,
+// 0.9 m away at the top of the frame and 0.6 m at the bottom, in uint16 millimetres.
+const [w, h] = [640, 543];
+const depth = { data: new Uint16Array(w * h), width: w, height: h };
+for (let y = 0; y < h; y++) depth.data.fill(Math.round(900 - (300 * y) / h), y * w, (y + 1) * w);
+const K = { fx: 600, fy: 600, cx: 320, cy: 271.5 };            // or [fx, fy, cx, cy]
+console.log("object distances (m):", objectDistances(depth, g, K).map((v) => +v!.toFixed(3)));
+console.log("grasp distances (m):", graspDistances(depth, top.grasps.slice(0, 3), K).map((v) => +v!.toFixed(3)));
+const near = selectTargetObject(g, { depth, intrinsics: K, targetDistance: 0.7 })!;
+console.log("object nearest 0.7 m:", "cls" in near ? near.cls : "mask", near.bbox.map(Math.round));
+```
+
+```text
+60 grasps -> 9 after filterGrasps(3)
+bowl pose [x, y, width, theta]: [ 274, 228.5, 11.18, 0.46 ]
+jaw contacts: [ [ 269, 226 ], [ 279, 231 ] ]
+for a 60-80 px opening: broccoli 76.5 q 0.97
+{ broccoli: 3, carrot: 3, bowl: 3 }
+object distances (m): [ 0.727, 0.818, 0.81 ]
+grasp distances (m): [ 0.731, 0.731, 0.732 ]
+object nearest 0.7 m: broccoli [ 373, 278, 105, 129 ]
+```
+
+The depth frame is made up, only to show the calls. `selectTargetObject` scores the candidates on
+`conf`, `area`, `near` (closeness to `nearPoint`, a pixel or `"center"`) and `distance`
+(closeness of the camera distance to `targetDistance`); without `weights` it uses the most
+specific one given (distance, else near, else conf), with `weights: { conf: 1, area: 1 }` a mix.
+`selectTargetGrasp` does the same with `quality`, `near` (`targetPoint`), `distance` and `width`
+(an opening in the middle of `gripperMin`–`gripperMax`). Both return the result's own object, or
+`null` when nothing passes `cls`, `minConf` or the gripper limits; the defaults are Python's
+([`select_target_object`](python.md#utilities)).
+
+### JSON
+
+`JSON.stringify(res)` writes the server's JSON (`class`, `duration_ms`, empty fields left out),
+so a saved result reads back with `Result.fromJSON`, and the file is the same as one saved from a
+plain HTTP call. A photo the client shrank keeps its `clientResize` as an extra `client_resize`
+field.
+
+```ts
+import { deepStrictEqual } from "node:assert/strict";
 import { Client, Result } from "visionserve";
 
 const client = new Client();
 const res = await client.predict("grounded-sam", "dogs.jpg", { prompt: "dog." });
-console.log(Object.keys(JSON.parse(JSON.stringify(res))).slice(0, 6));   // the object's own names
-const back = Result.fromJSON({ task: "detection", model: "m", detections: [{ bbox: [1, 2, 3, 4], class: "dog", conf: 0.9 }] });
-console.log(back.detections[0]!.cls, back.detections[0]!.bbox);
+const text = JSON.stringify(res);                              // the server's wire format
+const obj = JSON.parse(text);
+console.log(Object.keys(obj), Object.keys(obj.detections[0]));
+deepStrictEqual(Result.fromJSON(obj), res);                    // reads back the same
+console.log("round trip ok,", text.length, "bytes");
+const arrays = await client.predict("midas", "dogs.jpg");
+console.log(Object.keys(arrays.toJSON({ encoding: "base64" })));   // depth as base64 float32
 ```
 
 ```text
-[ 'task', 'model', 'detections', 'masks', 'grasps', 'classifications' ]
-dog [ 1, 2, 3, 4 ]
+[ 'task', 'model', 'device', 'detections', 'masks', 'duration_ms' ] [ 'bbox', 'class', 'conf' ]
+round trip ok, 2419 bytes
+[
+  'task',
+  'model',
+  'device',
+  'depth_width',
+  'depth_height',
+  'duration_ms',
+  'depth_map_base64'
+]
 ```
 
 ## Errors

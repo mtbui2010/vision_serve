@@ -1,4 +1,5 @@
 import { Result } from "./types.js";
+import { AGGREGATES, depthUnderBoxes, isDepthResult, type DepthImage } from "./postprocess.js";
 
 export interface SizeFilterOptions {
   /**
@@ -71,44 +72,63 @@ export type DepthMode = "median" | "mean" | "min" | "max";
 export interface DepthAtDetectionOptions {
   /** `"median"` (default), `"mean"`, `"min"` or `"max"`. */
   mode?: DepthMode;
-  /** Width of the ORIGINAL image the boxes refer to (the photo sent to both models). */
-  imageWidth: number;
-  /** Height of the ORIGINAL image the boxes refer to. */
-  imageHeight: number;
+  /**
+   * Width of the ORIGINAL image the boxes refer to (the photo sent to both models). Required with
+   * a depth `Result`; with a metric {@link DepthImage} only when it is not at the photo's size.
+   */
+  imageWidth?: number;
+  /** Height of the ORIGINAL image the boxes refer to (see `imageWidth`). */
+  imageHeight?: number;
+  /**
+   * Metres per unit of a metric {@link DepthImage} (default 0.001 for integer arrays, i.e.
+   * millimetres, 1 otherwise). Refused with a depth `Result`, which has no metric scale.
+   */
+  depthScale?: number | null;
 }
 
 /**
  * The depth under each detection (or each mask, when there are no detections) of `detResult`.
+ * Two kinds of depth, with different units (as Python's `get_depth_at_detection`):
  *
- * A depth model (`midas`, `depth-anything-v2`) answers at the MODEL's resolution
- * (`depthWidth` x `depthHeight`, e.g. 256 x 256) whatever the photo's size, while boxes are in
- * ORIGINAL image pixels. The boxes are therefore scaled onto the map by
- * `depthWidth / imageWidth` and `depthHeight / imageHeight`, so `imageWidth` and `imageHeight`
- * (the photo's size) are required. A map that already has the photo's size is read 1:1.
+ * - a depth `Result` from a depth model (`midas`, `depth-anything-v2`): the map is at the MODEL's
+ *   resolution (`depthWidth` x `depthHeight`, e.g. 256 x 256) whatever the photo's size, while
+ *   boxes are in ORIGINAL image pixels, so `imageWidth` and `imageHeight` (the photo's size) are
+ *   required and the boxes are scaled onto the map. The values are the server's RELATIVE inverse
+ *   depth min-max normalised to `[0, 1]` per image (larger = closer), not metres; every finite
+ *   value counts, including `0` (the farthest point of the map).
+ * - a metric {@link DepthImage} from an RGB-D sensor (`{ data: Uint16Array, width, height }`):
+ *   values in METRES (`depthScale`), pixels `<= 0` are "no reading" and ignored. It is assumed to
+ *   be at the photo's size unless `imageWidth` / `imageHeight` say otherwise.
  *
- * The values are the server's map: RELATIVE inverse depth min-max normalised to `[0, 1]` per
- * image (larger = closer), not metres. Every finite value counts, including `0` (the farthest
- * point of the map). Same rule as the Python `get_depth_at_detection(..., image_size=(W, H))`.
- *
- * @returns one value per box, `null` where the box misses the map.
- * @throws if the depth result has no depth map, the image size is missing or not positive, or
- *   `mode` is unknown.
+ * @returns one value per box, `null` where the box misses the map or has no valid pixel.
+ * @throws if the depth result has no depth map, the image size is missing (depth `Result`) or not
+ *   positive, `depthScale` is given with a depth `Result`, or `mode` is unknown.
  */
 export function getDepthAtDetection(
-  depthResult: Result,
+  depthResult: Result | DepthImage,
   detResult: Result,
-  opts: DepthAtDetectionOptions,
+  opts: DepthAtDetectionOptions = {},
 ): Array<number | null> {
-  const { depthMap, depthWidth, depthHeight } = depthResult;
-  const options = (opts ?? {}) as Partial<DepthAtDetectionOptions>;
+  const options = (opts ?? {}) as DepthAtDetectionOptions;
   const mode = options.mode ?? "median";
-  if (!["median", "mean", "min", "max"].includes(mode)) {
+  if (!Object.hasOwn(AGGREGATES, mode)) {
     throw new Error(`unknown mode ${JSON.stringify(mode)}; use "median", "mean", "min" or "max"`);
+  }
+  const { imageWidth, imageHeight } = options;
+  if (!isDepthResult(depthResult)) {
+    const size: [number, number] | null = imageWidth != null && imageHeight != null ? [imageWidth, imageHeight] : null;
+    return depthUnderBoxes(depthResult, detResult, mode, options.depthScale, size);
+  }
+  const { depthMap, depthWidth, depthHeight } = depthResult;
+  if (options.depthScale != null) {
+    throw new Error(
+      "depthScale cannot turn a server depth Result into metres: it is relative inverse depth " +
+        "(normalised per image, larger = closer). Use a metric depth image from an RGB-D sensor.",
+    );
   }
   if (!depthMap.length || depthWidth <= 0 || depthHeight <= 0) {
     throw new Error("depthResult has no depth map");
   }
-  const { imageWidth, imageHeight } = options;
   if (imageWidth == null || imageHeight == null) {
     throw new Error(
       `a depth result is at the model's resolution (${depthWidth}x${depthHeight}), not the image's: ` +
@@ -120,16 +140,7 @@ export function getDepthAtDetection(
   }
   const sx = depthWidth / imageWidth;
   const sy = depthHeight / imageHeight;
-
-  const aggregate = (vals: number[]): number | null => {
-    if (vals.length === 0) return null;
-    if (mode === "min") return vals.reduce((a, b) => (b < a ? b : a));
-    if (mode === "max") return vals.reduce((a, b) => (b > a ? b : a));
-    if (mode === "mean") return vals.reduce((s, v) => s + v, 0) / vals.length;
-    const sorted = vals.slice().sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    return sorted.length % 2 === 0 ? (sorted[mid - 1]! + sorted[mid]!) / 2 : sorted[mid]!;
-  };
+  const aggregate = AGGREGATES[mode]!;
 
   const bboxes =
     detResult.detections.length > 0
@@ -150,6 +161,6 @@ export function getDepthAtDetection(
         if (v != null && Number.isFinite(v)) vals.push(v);
       }
     }
-    return aggregate(vals);
+    return vals.length ? aggregate(vals) : null;
   });
 }
