@@ -80,14 +80,15 @@ def Ixy2xyz(Ix, Iy, Z, cam_params):
 
 
 def xyz2Ixy(x, y, z, cam_params, eps=1e-10):
-    """3D camera-frame coordinates → pixel coordinates."""
+    """3D camera-frame coordinates → pixel coordinates, rounded to the nearest pixel (plain
+    ``int`` for numbers, ``int`` arrays for arrays)."""
     fx, fy, cx, cy = cam_params[:4]
-    Ix = np.divide(x, z + eps) * fx + cx
-    Iy = np.divide(y, z + eps) * fy + cy
-    try:
-        return Ix.astype("int"), Iy.astype("int")
-    except AttributeError:
+    # Round, not truncate: (0.25 / (1.5 + eps)) * 600 + 320 is 419.99..., i.e. pixel 420.
+    Ix = np.rint(np.divide(x, z + eps) * fx + cx)
+    Iy = np.rint(np.divide(y, z + eps) * fy + cy)
+    if np.ndim(Ix) == 0 and np.ndim(Iy) == 0:
         return int(Ix), int(Iy)
+    return Ix.astype("int"), Iy.astype("int")
 
 def show_mask_on_rgb(rgb, mask):
     """A copy of ``rgb`` with the pixels where ``mask > 0`` tinted one fixed light colour (OpenCV)."""

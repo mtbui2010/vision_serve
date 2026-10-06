@@ -48,6 +48,15 @@ def test_opencv_drawing_helpers_accept_pil_images():
     assert np.asarray(pil)[2, 5, 0] == 100            # the input is not drawn on
 
 
+def test_xyz2Ixy_rounds_and_inverts_Ixy2xyz():
+    cam = [600, 600, 320, 213]
+    X, Y, Z = U.Ixy2xyz(420, 313, 1.5, cam)
+    got = U.xyz2Ixy(X, Y, Z, cam)
+    assert got == (420, 313) and all(type(v) is int for v in got)  # was (419, 312): truncated
+    xs, ys = U.xyz2Ixy(np.array([X, 0.0]), np.array([Y, 0.0]), np.array([Z, 1.0]), cam)
+    assert xs.tolist() == [420, 320] and ys.tolist() == [313, 213]
+
+
 def test_select_target_object_distance_sigma_default_is_half_the_target():
     # Two objects at 1.3 m (conf 0.9) and 1.0 m (conf 0.5), target 1.0 m, conf + distance
     # weighted equally. With the default sigma 0.5 * 1.0 the confident object still wins
