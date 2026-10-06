@@ -45,6 +45,11 @@ var (
 
 func init() {
 	models.Register("background", New)
+	// An uploaded depth map replaces MiDaS in the depth and auto methods; without a MiDaS
+	// session (files.depth) neither method runs the plane fit, so the map would be ignored.
+	models.RegisterAcceptsDepth("background", func(files map[string]string) bool {
+		return files[roleDepth] != ""
+	})
 }
 
 const (

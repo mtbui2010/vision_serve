@@ -10,7 +10,8 @@ import (
 	"visionserve/internal/registry"
 	"visionserve/internal/templates"
 
-	_ "visionserve/internal/models/detr" // rf-detr / rt-detr register their useful side
+	_ "visionserve/internal/models/background" // background registers accepts_depth
+	_ "visionserve/internal/models/detr"       // rf-detr / rt-detr register their useful side
 )
 
 // GET /api/models carries the client-resize hint: the bounded side follows the preprocessing
@@ -72,6 +73,58 @@ func TestModelsListsUsefulSide(t *testing.T) {
 		if m["max_useful_side"] != w.long || m["max_useful_short_side"] != w.short {
 			t.Errorf("%s: max_useful_side=%v max_useful_short_side=%v, want %v / %v",
 				name, m["max_useful_side"], m["max_useful_short_side"], w.long, w.short)
+		}
+	}
+}
+
+// GET /api/models says which models read an uploaded depth map (accepts_depth): `background`
+// with a MiDaS session does; one without it (sam/cv/automask only) never reaches the plane fit,
+// and a detector never reads depth. The key is always present, false included.
+func TestModelsListsAcceptsDepth(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		d := filepath.Join(dir, name)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		y := "name: " + name + "\nlicense: Apache-2.0\n" + body
+		if err := os.WriteFile(filepath.Join(d, "manifest.yaml"), []byte(y), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("bg-midas", "task: segmentation\narchitecture: background\nfiles: {depth: d.onnx, encoder: e.onnx, decoder: m.onnx}\ninput: {width: 1024, height: 1024}\n")
+	write("bg-sam", "task: segmentation\narchitecture: background\nfiles: {encoder: e.onnx, decoder: m.onnx}\ninput: {width: 1024, height: 1024}\n")
+	write("det", "task: detection\narchitecture: rf-detr\nmodel_file: m.onnx\ninput: {width: 560, height: 560}\n")
+	reg := registry.New(dir)
+	if _, err := reg.Scan(); err != nil {
+		t.Fatal(err)
+	}
+	s := newServer(reg, &fakeRuntime{}, templates.New(), "")
+	rec := do(s.http.Handler, httptest.NewRequest("GET", "/api/models", nil))
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	var raw []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"bg-midas": true, "bg-sam": false, "det": false}
+	if len(raw) != len(want) {
+		t.Fatalf("got %d models, want %d: %s", len(raw), len(want), rec.Body)
+	}
+	for _, m := range raw {
+		name, _ := m["name"].(string)
+		v, ok := m["accepts_depth"]
+		if !ok {
+			t.Errorf("%s: key accepts_depth missing (it must be present, false included)", name)
+			continue
+		}
+		if v != want[name] {
+			t.Errorf("%s: accepts_depth=%v, want %v", name, v, want[name])
+		}
+		if want[name] && (m["max_useful_side"] != nil || m["max_useful_short_side"] != nil) {
+			t.Errorf("%s accepts depth but has a client-resize hint: %v", name, m)
 		}
 	}
 }

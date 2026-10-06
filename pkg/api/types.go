@@ -99,6 +99,13 @@ type ModelInfo struct {
 	// region of interest is bounded the same way, measured on the region.
 	MaxUsefulSide      *int `json:"max_useful_side"`
 	MaxUsefulShortSide *int `json:"max_useful_short_side"`
+
+	// AcceptsDepth: the model reads an uploaded depth map (the depth / depth_base64 fields of
+	// /api/predict, pixel-aligned to the photo). SDKs upload a camera's depth frame only when it
+	// is true (Python Client.watch(depth="auto")); every other model ignores the map. Only
+	// `background` with a MiDaS session sets it today; a model that accepts depth never gets a
+	// client-resize hint (the map is aligned to the full photo).
+	AcceptsDepth bool `json:"accepts_depth"`
 }
 
 // PredictJSONRequest is the option list of /api/predict (and /api/preprocess). It is the JSON

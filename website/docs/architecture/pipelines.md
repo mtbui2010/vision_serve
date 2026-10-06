@@ -378,7 +378,7 @@ func (m *backgroundModel) backgroundAuto(img image.Image, prompt models.Prompt, 
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/background/background.go#L222-L234)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/background/background.go#L227-L239)
 
 A manifest may declare only the sessions it needs; asking for a method whose sessions are missing
 is an error that names the missing `files:` role. `bg_max_area`, `fg_min_area` and `grid_size`

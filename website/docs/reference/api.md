@@ -31,11 +31,11 @@ Routes are declared in
 ```json
 [
   {"name": "rf-detr", "task": "detection", "license": "Apache-2.0", "state": "loaded",
-   "max_useful_side": null, "max_useful_short_side": 1120},
+   "max_useful_side": null, "max_useful_short_side": 1120, "accepts_depth": false},
   {"name": "rf-detr-nano", "task": "detection", "license": "Apache-2.0", "state": "available",
-   "max_useful_side": 768, "max_useful_short_side": null},
-  {"name": "mobile-sam", "task": "segmentation", "license": "Apache-2.0", "state": "available",
-   "max_useful_side": null, "max_useful_short_side": null}
+   "max_useful_side": 768, "max_useful_short_side": null, "accepts_depth": false},
+  {"name": "background", "task": "segmentation", "license": "Apache-2.0", "state": "available",
+   "max_useful_side": null, "max_useful_short_side": null, "accepts_depth": true}
 ]
 ```
 
@@ -58,6 +58,16 @@ a server that predates them sends neither, which clients read as "no hint". The
 [Python and JavaScript SDKs](../clients/python.md#client-side-resizing-on-by-default) apply the
 hint by default (on a server on the same machine only when it at least halves the photo's
 sides) and map every result back to the original photo's pixels.
+
+`accepts_depth` is `true` when the model reads an uploaded depth image (the `depth` /
+`depth_base64` request fields): today only `background`, and only when its manifest has a MiDaS
+session (`files.depth`), because the external depth replaces MiDaS in its `depth` and `auto`
+methods. Every other model, the grasp models included, ignores a depth upload. SDKs use it to
+send a camera's depth frame only where it is read (the Python SDK's
+[`watch(depth="auto")`](../clients/python.md#watching-a-camera-or-video)). A model that accepts
+depth never gets a resize hint, because the depth image is aligned to the full photo. The key is
+always present; a server that predates it sends none, which the Python SDK reads as "unknown"
+(no depth upload in `auto`).
 
 ## `POST /api/predict`
 
@@ -94,7 +104,7 @@ sides) and map every result back to the original photo's pixels.
 | `bg_max_area`, `fg_min_area`, `grid_size` | `background`, `mobile-sam` (`grid_size` also `grasp`) | automatic-mask tuning |
 | `claim_threshold`, `crop_temp` | `rfdetr-textalign` with `method=dual` (`crop_temp` also `gdino-siglip`) | open-vocabulary naming tuning |
 | `gripper_min`, `gripper_max` | grasp models | gripper opening range in pixels |
-| `depth` / `depth_base64` (+ `depth_dtype`, `depth_width`, `depth_height`) | `background` | an aligned depth image |
+| `depth` / `depth_base64` (+ `depth_dtype`, `depth_width`, `depth_height`) | `background` (the models with `accepts_depth`) | an aligned depth image: raw little-endian `uint16` (read as value / 65535, `0` = no reading) or `float32` (as is; ≤ 0, NaN and ±inf = no reading), resized to the photo by nearest neighbour |
 | `template_name` | template-prompted models | a name registered with `/api/templates` |
 | `encoding` | depth, embeddings | `base64`: return big float arrays as base64 float32 (≈6× faster than JSON numbers) |
 
