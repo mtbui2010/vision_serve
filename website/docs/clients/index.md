@@ -37,7 +37,9 @@ reference for the other three.
     |---|---|---|
     | *(none)* | nothing | paths and bytes in, JSON-shaped results out |
     | `images` | `numpy`, `pillow` | numpy / PIL inputs, `Mask.to_ndarray`, `depth=`, `preprocess()`, `draw()` / `visualize()` |
-    | `dev` | the above + `pytest` | running the SDK's tests |
+    | `opencv` | `opencv-python-headless` + `images` | [`watch()`](python.md#watching-a-camera-or-video) on a webcam, video file or RTSP stream |
+    | `realsense` / `orbbec` | `pyrealsense2` / `pyorbbecsdk2` + `images` | `watch()` on an Intel RealSense / Orbbec RGB-D camera |
+    | `dev` | `images` + `pytest` | running the SDK's tests |
     | `convert` | PyTorch, ONNX, transformers, … (several GB) | the checkpoint converter (`visionserve-convert`), not the client |
 
     From a checkout: `pip install -e "clients/python[images]"`. Python 3.8 or newer.

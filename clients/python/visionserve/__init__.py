@@ -18,9 +18,11 @@ Quickstart::
 """
 
 # Single source of the package version: pyproject.toml reads it (tool.setuptools.dynamic).
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .client import Client, PreprocessResult, VisionServeError
+from .sources import Frame, FrameSource, open_source
+from .track import IoUTracker
 from .types import Classification, Detection, FloatArray, Grasp, Mask, Result, ModelInfo
 from .postprocess import (
     CameraIntrinsics,
@@ -44,6 +46,10 @@ __all__ = [
     "Mask",
     "Result",
     "ModelInfo",
+    "Frame",
+    "FrameSource",
+    "open_source",
+    "IoUTracker",
     "draw",
     "CameraIntrinsics",
     "backproject",

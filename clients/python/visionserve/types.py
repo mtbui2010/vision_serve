@@ -131,23 +131,33 @@ class Detection:
         bbox: ``[x, y, w, h]`` (top-left corner + width/height) in ORIGINAL image pixels.
         cls:  class label string.
         conf: confidence in ``[0, 1]``.
+        track_id: the object's id across frames, set by :meth:`Client.watch` with
+            ``track=True`` (client side, a simple IoU tracker); ``None`` otherwise. Not compared
+            by ``==``.
     """
 
     bbox: List[float]
     cls: str
     conf: float
+    track_id: Optional[int] = field(default=None, compare=False)
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "Detection":
+        tid = d.get("track_id")
         return cls(
             bbox=[float(v) for v in d.get("bbox", [0, 0, 0, 0])],
             cls=str(d.get("class", "")),
             conf=float(d.get("conf", 0.0)),
+            track_id=int(tid) if isinstance(tid, (int, float)) and not isinstance(tid, bool) else None,
         )
 
     def to_json(self) -> Dict[str, Any]:
-        """The wire dict (``class``, not ``cls``); inverse of :meth:`from_json`."""
-        return {"bbox": list(self.bbox), "class": self.cls, "conf": self.conf}
+        """The wire dict (``class``, not ``cls``); inverse of :meth:`from_json`. ``track_id`` is
+        included only when set (the server never sends it)."""
+        out: Dict[str, Any] = {"bbox": list(self.bbox), "class": self.cls, "conf": self.conf}
+        if self.track_id is not None:
+            out["track_id"] = self.track_id
+        return out
 
 
 @dataclass
@@ -371,6 +381,11 @@ class Result:
                         quality) — or ``None`` when the original bytes were sent. Coordinates
                         above are ALWAYS in original-image pixels either way. Client-side only
                         (not in :meth:`to_json`, ignored by ``==``).
+        frame_id, timestamp, frame: set by :meth:`Client.watch` (``None`` otherwise): the
+                        source frame's index in the stream and its capture time in seconds, and
+                        the :class:`~visionserve.sources.Frame` itself with
+                        ``return_frames=True``. Client-side only (not in :meth:`to_json`,
+                        ignored by ``==``).
 
     The depth map of a ``midas`` / ``depth-anything-v2`` result is RELATIVE inverse depth
     (disparity) min-max normalised to ``[0, 1]`` per image — larger = closer, no units — at
@@ -391,6 +406,9 @@ class Result:
     device: str = ""
     hint: str = ""
     client_resize: Optional[Any] = field(default=None, compare=False)
+    frame_id: Optional[int] = field(default=None, compare=False)
+    timestamp: Optional[float] = field(default=None, compare=False)
+    frame: Optional[Any] = field(default=None, compare=False, repr=False)
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "Result":
@@ -668,6 +686,10 @@ class ModelInfo:
     longest LONGER side / SHORTER side worth uploading for this model (it resizes to its own
     input anyway). At most one is set; both ``None`` = send full resolution (masks, OCR,
     templates, ..., or a server that predates the hint). :class:`Client` applies it by default.
+
+    ``accepts_depth`` says whether the model reads an uploaded depth map (``predict(depth=...)``);
+    :meth:`Client.watch` with ``depth="auto"`` uploads a camera's depth only then. ``None`` = a
+    server that predates the field.
     """
 
     name: str
@@ -676,6 +698,7 @@ class ModelInfo:
     state: str  # "not_downloaded" | "available" | "loaded"
     max_useful_side: Optional[int] = None
     max_useful_short_side: Optional[int] = None
+    accepts_depth: Optional[bool] = None
 
     @classmethod
     def from_json(cls, d: Dict[str, Any]) -> "ModelInfo":
@@ -686,6 +709,7 @@ class ModelInfo:
             state=str(d.get("state", "")),
             max_useful_side=_positive_int(d.get("max_useful_side")),
             max_useful_short_side=_positive_int(d.get("max_useful_short_side")),
+            accepts_depth=d["accepts_depth"] if isinstance(d.get("accepts_depth"), bool) else None,
         )
 
 

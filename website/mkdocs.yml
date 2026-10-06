@@ -94,6 +94,7 @@ nav:
       - Check it behaves like training: guides/check-training.md
       - Make it smaller and faster for Jetson: guides/jetson.md
       - Measure speed: guides/measure-speed.md
+      - Run a model on a camera or video: guides/camera-and-video.md
       - My served model is worse than in training: guides/worse-than-training.md
       - Deep dives:
           - Inspect and verify a model (tiers A, B1, B2, C): guides/inspect.md

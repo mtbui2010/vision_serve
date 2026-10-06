@@ -71,7 +71,7 @@ that unlock array and PIL inputs, mask decoding and drawing.
         self._hints_lock = threading.Lock()
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L83-L104)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L83-L105)
 
 `Client.predict(model, image, ...)` accepts a file path, encoded bytes, a `PIL.Image` or a
 `numpy` array. Prompts and options become multipart form fields: boxes as `"x,y,w,h"` joined by
@@ -125,7 +125,7 @@ and answer 503 without receiving megabytes for nothing (see [HTTP server](server
         _write_file("image", image_bytes, filename)
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L745-L765)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L828-L848)
 
 Other calls mirror the HTTP routes: `health()`, `list_models()`, `load()`, `unload()`, `ps()`,
 and `preprocess()` / `tokenize()`, which return the exact tensors the server would feed the
@@ -150,7 +150,7 @@ by column. `Mask.to_ndarray` undoes that encoding:
         return flat.reshape((height, width), order="F")
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L238-L244)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L248-L254)
 
 `Result` also has client-side helpers that never touch the server: `filter_by_size`,
 `filter_by_conf`, `sort_by_conf`, `top_k`, `nms`, `filter_grasps`, `group_by_class`,
@@ -178,17 +178,34 @@ callers never see base64.
             embeddings = [[float(v) for v in row] for row in (d.get("embeddings") or [])]
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L400-L408)
+[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L418-L426)
 
 With numpy installed, the decoded arrays are `FloatArray` objects: read-only, list-like
 (`len`, indexing, iteration, `==` with a list) and handed to numpy without a copy. They are not
 lists, though: `json.dumps`, `+` and `append` need `.tolist()` first. That difference is why the
 option is off by default.
 
+### Cameras and video: `watch()` (Python)
+
+`Client.watch(source, model)` keeps the server stateless: it is a loop of ordinary `predict()`
+calls, one per frame. The pieces live in the SDK. `visionserve/sources/` defines one interface,
+`read(timeout) -> Frame | None` and `close()`, with thin adapters that import their vendor
+package only when used: OpenCV (webcam, file, RTSP), GStreamer (a `gst-launch-1.0` subprocess
+writing raw RGB to a pipe, so no Python bindings), RealSense, Orbbec and ROS 2 (decoded with
+numpy, no `cv_bridge`). `visionserve/watch.py` runs a reader thread that keeps only the latest
+frame (bounded memory, answers never more than a request behind), spaces request starts by
+`1 / fps`, runs up to `in_flight` requests on daemon threads and yields their results in frame
+order. Depth goes up only to models whose `accepts_depth` is true in `GET /api/models`
+(`models.RegisterAcceptsDepth`, today `background` with a MiDaS session); a frame sent with depth
+is never resized, so depth and colour stay aligned. An optional IoU tracker
+(`visionserve/track.py`) adds `track_id` on the client. Details:
+[Watching a camera or video](../clients/python.md#watching-a-camera-or-video).
+
 ### The command-line clients
 
 Both SDKs install a command named `visionserve` that drives a *running* server over HTTP:
-`predict` (alias `run` in JS), `list`, `ps`, `load`, `unload` (alias `rm`) and `health`.
+`predict` (alias `run` in JS), `list`, `ps`, `load`, `unload` (alias `rm`) and `health`; the
+Python one also has `watch` (a camera or video, one line per frame).
 `predict` prints the result JSON to stdout and a one-line summary with client and server
 timings to stderr; `--save` writes an annotated image named
 `<stem>.python.<model>.<task>.png` (the JS CLI writes an SVG, `<stem>.js.<model>.<task>.svg`), so

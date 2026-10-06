@@ -10,6 +10,7 @@ Installed as the ``visionserve`` console command (see ``pyproject.toml``)::
     visionserve predict rf-detr cat.jpg
     visionserve predict grounding-dino kitchen.jpg --prompt "cat. remote."
     visionserve predict mobile-sam dog.jpg --box 50,40,200,180 --save
+    visionserve watch 0 --model rf-detr --fps 5
     visionserve list
     visionserve ps
 
@@ -102,6 +103,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  visionserve predict grounding-dino kitchen.jpg --prompt 'cat. remote.'\n"
             "  visionserve predict mobile-sam dog.jpg --box 50,40,200,180 --save\n"
             "  visionserve predict grasp-gd bin.jpg --prompt 'mug.' --save-as out.png\n"
+            "  visionserve watch 0 --model rf-detr --fps 5\n"
             "  visionserve list\n"
             "  visionserve ps --host http://10.0.0.5:11435\n"
         ),
@@ -324,6 +326,52 @@ def build_parser() -> argparse.ArgumentParser:
         help="suppress the stderr summary line (stdout JSON is unaffected)",
     )
     p.set_defaults(func=cmd_predict)
+
+    # ---- watch --------------------------------------------------------------
+    pw = sub.add_parser(
+        "watch",
+        parents=[common],
+        help="run a model on a camera or video, one line per processed frame",
+        description=(
+            "Run MODEL on every frame it can keep up with from SOURCE and print one line per "
+            "result (JSON lines with --json). Frames that arrive while a request runs are "
+            "skipped (latest frame wins) unless --every-frame. Stop with Ctrl-C, --max-frames "
+            "or --duration."
+        ),
+        epilog=(
+            "SOURCE: 0 | /dev/video0 | video.mp4 | rtsp://... | http(s)://... (OpenCV)\n"
+            "        gst:'<pipeline>' (gst-launch-1.0) | realsense[:serial] | orbbec[:index]\n"
+            "        ros2:<color_topic>[,<depth_topic>]\n"
+            "Examples:\n"
+            "  visionserve watch 0 --model rf-detr --fps 5\n"
+            "  visionserve watch traffic.mp4 --model rf-detr --track --json\n"
+            "  visionserve watch realsense --model background --method depth\n"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    pw.add_argument("source", help="camera index, device, file, URL or spec (see below)")
+    pw.add_argument("--model", "-m", required=True, help="model name, e.g. rf-detr")
+    pw.add_argument("--fps", type=float, metavar="N", help="at most N requests per second (default: as fast as answers come)")
+    pw.add_argument("--prompt", metavar="TEXT", help='text prompt for open-vocab models, e.g. "cup. bottle."')
+    pw.add_argument("--box-threshold", type=float, metavar="T", help="GroundingDINO / OWLv2 box score floor")
+    pw.add_argument("--method", metavar="NAME", help="background model: auto|depth|sam|cv|automask")
+    pw.add_argument(
+        "--depth",
+        choices=("auto", "always", "never"),
+        default="auto",
+        help="upload the camera's depth: auto (default) = only to models that read it "
+        "(accepts_depth), always, or never",
+    )
+    pw.add_argument("--max-frames", type=int, metavar="N", help="stop after sending N frames")
+    pw.add_argument("--duration", type=float, metavar="SEC", help="stop sending after SEC seconds")
+    pw.add_argument("--in-flight", type=int, default=1, metavar="N", help="requests at once (default: %(default)s)")
+    pw.add_argument("--track", action="store_true", help="add a track_id to detections (simple client-side IoU tracker)")
+    pw.add_argument("--every-frame", action="store_true",
+                    help="send every frame instead of skipping to the latest (offline video)")
+    pw.add_argument("--resize", type=_resize_arg, default=None, metavar="auto|off|N",
+                    help="client-side resizing before upload, as for predict (default auto)")
+    pw.add_argument("--json", action="store_true", help="print one JSON object per frame (JSON lines)")
+    pw.set_defaults(func=cmd_watch)
 
     # ---- list / models ------------------------------------------------------
     pl = sub.add_parser(
@@ -570,6 +618,50 @@ def _summary_counts(res: Result) -> str:
     return "(" + ", ".join(parts) + ")" if parts else "(no objects)"
 
 
+def _watch_line(res: Result) -> str:
+    """One human line per watched frame: frame, objects (with track ids), server time."""
+    objs = []
+    for d in res.detections[:5]:
+        tid = " #%d" % d.track_id if d.track_id is not None else ""
+        objs.append("%s %.2f%s" % (d.cls, d.conf, tid))
+    more = ", ..." if len(res.detections) > 5 else ""
+    what = _summary_counts(res)
+    if objs:
+        what += " " + ", ".join(objs) + more
+    return "frame %-6s %s  server %.0f ms" % (res.frame_id, what, res.duration_ms)
+
+
+def cmd_watch(client: Client, args: argparse.Namespace) -> int:
+    kwargs: Dict[str, object] = {}
+    for key in ("prompt", "box_threshold", "method", "resize"):
+        val = getattr(args, key, None)
+        if val is not None:
+            kwargs[key] = val
+    n, t0, last = 0, time.monotonic(), None
+    gen = client.watch(
+        args.source, args.model, fps=args.fps, max_frames=args.max_frames, duration=args.duration,
+        depth=args.depth, in_flight=args.in_flight, track=args.track, drop_frames=not args.every_frame,
+        **kwargs,
+    )
+    try:
+        for res in gen:
+            n, last = n + 1, res.frame_id
+            if args.json:
+                line = dict(frame_id=res.frame_id, timestamp=res.timestamp, **res.to_json())
+                sys.stdout.write(json.dumps(line) + "\n")
+            else:
+                sys.stdout.write(_watch_line(res) + "\n")
+            sys.stdout.flush()
+    finally:
+        gen.close()
+        dt = time.monotonic() - t0
+        if n:
+            skipped = (last + 1 - n) if isinstance(last, int) else 0
+            print("watch: %d frames in %.1f s (%.1f per second); %d skipped to stay real time"
+                  % (n, dt, n / dt if dt > 0 else 0.0, max(skipped, 0)), file=sys.stderr)
+    return 0
+
+
 def cmd_list(client: Client, args: argparse.Namespace) -> int:
     models = client.list_models()
     if args.json:
@@ -610,7 +702,8 @@ def cmd_health(client: Client, args: argparse.Namespace) -> int:
 
 def _model_to_dict(m: ModelInfo) -> Dict[str, object]:
     return {"name": m.name, "task": m.task, "license": m.license, "state": m.state,
-            "max_useful_side": m.max_useful_side, "max_useful_short_side": m.max_useful_short_side}
+            "max_useful_side": m.max_useful_side, "max_useful_short_side": m.max_useful_short_side,
+            "accepts_depth": m.accepts_depth}
 
 
 def _print_models_table(models: Sequence[ModelInfo]) -> None:
@@ -644,7 +737,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     except VisionServeError as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 1
-    except (ValueError, FileNotFoundError, OSError) as exc:
+    except (ValueError, FileNotFoundError, OSError, ImportError, RuntimeError) as exc:
         print("error: %s" % exc, file=sys.stderr)
         return 1
     except KeyboardInterrupt:
