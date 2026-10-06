@@ -1,0 +1,4 @@
+PASS: p50 430 ms, 2.36 req/s on cpu
+  device (EP used)         cpu
+  latency p50 / p95 / p99  430 / 718 / 818 ms
+  throughput               2.36 req/s at concurrency 1

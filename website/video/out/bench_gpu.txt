@@ -1,0 +1,4 @@
+PASS: p50 18.0 ms, 52.2 req/s on gpu:0
+  device (EP used)         gpu:0
+  latency p50 / p95 / p99  18.0 / 29.5 / 31.8 ms
+  throughput               52.2 req/s at concurrency 1

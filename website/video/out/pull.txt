@@ -1,0 +1,5 @@
+pulling rf-detr-nano (detection, Apache-2.0) from huggingface.co/PierreMarieCurie/rf-detr-onnx
+  wrote coco91.txt
+  wrote manifest.yaml
+success: rf-detr-nano is ready in /root/.models/rf-detr-nano
+  run it with:  visionserve run rf-detr-nano <image>

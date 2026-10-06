@@ -1,0 +1,501 @@
+{
+ "output": "visionserve-3min.mp4",
+ "video": {
+  "width": 1280,
+  "height": 720,
+  "fps": 30,
+  "lead": 0.3,
+  "tail": 0.5,
+  "fade": 0.25,
+  "crf": 24
+ },
+ "voice": {
+  "dir": "voice",
+  "sample_rate": 24000
+ },
+ "subtitles": {
+  "size": 22,
+  "max_lines": 3
+ },
+ "replace": {},
+ "display_map": [
+  [
+   "vision serve",
+   "VisionServe"
+  ],
+  [
+   "Java script",
+   "JavaScript"
+  ],
+  [
+   "O N N X",
+   "ONNX"
+  ],
+  [
+   "A G P L",
+   "AGPL"
+  ],
+  [
+   "H T T P",
+   "HTTP"
+  ],
+  [
+   "A I",
+   "AI"
+  ],
+  [
+   "one hundred eight megabytes",
+   "108 MB"
+  ],
+  [
+   "eighteen milliseconds",
+   "18 ms"
+  ],
+  [
+   "four hundred thirty",
+   "430 ms"
+  ],
+  [
+   "one hundred forty",
+   "140"
+  ],
+  [
+   "fifty one",
+   "51"
+  ],
+  [
+   "three hundredths",
+   "0.03"
+  ],
+  [
+   "Step one",
+   "Step 1"
+  ],
+  [
+   "Step two",
+   "Step 2"
+  ],
+  [
+   "Step three",
+   "Step 3"
+  ],
+  [
+   "Step four",
+   "Step 4"
+  ],
+  [
+   "Step five",
+   "Step 5"
+  ],
+  [
+   "Step six",
+   "Step 6"
+  ]
+ ],
+ "scenes": [
+  {
+   "id": "s01_title",
+   "type": "title",
+   "title": "VisionServe",
+   "title_size": 84,
+   "y": 200,
+   "subtitle_lines": [
+    "Run computer-vision AI models on your own machine:",
+    "from a trained model to a small, fast, verified one."
+   ],
+   "note": "Every output shown is a real run on real photos."
+  },
+  {
+   "id": "s02_start",
+   "type": "terminal",
+   "step": "Step 1",
+   "heading": "Start a server and get a model",
+   "pace": 1.3,
+   "size": 18,
+   "box": [
+    48,
+    112,
+    1232,
+    560
+   ],
+   "ok_words": [
+    "ready"
+   ],
+   "commands": [
+    {
+     "cmd": "docker run -d -p 11436:11435 -v ~/.visionserve_models:/root/.models --name visionserve mtbui2010/visionserve:latest-cpu",
+     "output_file": "out/docker_run.txt"
+    },
+    {
+     "cmd": "docker exec visionserve visionserve pull rf-detr-nano",
+     "output_file": "out/pull.txt"
+    }
+   ]
+  },
+  {
+   "id": "s03_code",
+   "type": "code_terminal",
+   "step": "Step 2",
+   "heading": "Call the model from your code",
+   "code": [
+    "from visionserve import Client",
+    "",
+    "c = Client(\"http://localhost:11436\")",
+    "res = c.predict(\"rf-detr-nano\", \"cats.jpg\")",
+    "print(res.task, f\"{res.duration_ms:.0f} ms\")",
+    "for d in res.detections:",
+    "    print(d.cls, round(d.conf, 2), [round(v) for v in d.bbox])"
+   ],
+   "code_size": 20,
+   "split_y": 330,
+   "terminal_delay": 2.5,
+   "pace": 1.6,
+   "commands": [
+    {
+     "cmd": "python detect.py",
+     "output_file": "out/py_detect.txt"
+    }
+   ]
+  },
+  {
+   "id": "s04_bring",
+   "type": "diagram",
+   "step": "Step 3",
+   "heading": "Bring your own model",
+   "boxes": [
+    {
+     "rect": [
+      48,
+      210,
+      428,
+      430
+     ],
+     "title": "Your model",
+     "lines": [
+      "checkpoint saved after training",
+      "HuggingFace model",
+      "or an ONNX file"
+     ]
+    },
+    {
+     "rect": [
+      450,
+      210,
+      830,
+      430
+     ],
+     "title": "Convert or import",
+     "lines": [
+      "$ visionserve convert ...",
+      "$ visionserve import ...",
+      "",
+      "checks the result"
+     ]
+    },
+    {
+     "rect": [
+      852,
+      210,
+      1232,
+      430
+     ],
+     "title": "Ready to serve",
+     "lines": [
+      "manifest + model file",
+      "open licenses only",
+      "AGPL models are refused"
+     ]
+    }
+   ],
+   "arrows": [
+    {
+     "from": [
+      430,
+      320
+     ],
+     "to": [
+      448,
+      320
+     ],
+     "label": "",
+     "color": "accent",
+     "at": 6
+    },
+    {
+     "from": [
+      832,
+      320
+     ],
+     "to": [
+      850,
+      320
+     ],
+     "label": "",
+     "color": "accent",
+     "at": 11
+    }
+   ]
+  },
+  {
+   "id": "s05_convert",
+   "type": "terminal",
+   "heading": "The conversion is verified automatically",
+   "pace": 1.4,
+   "size": 16,
+   "box": [
+    48,
+    112,
+    1232,
+    560
+   ],
+   "ok_words": [
+    "PASS",
+    "installed"
+   ],
+   "commands": [
+    {
+     "cmd": "visionserve convert rfdetr rf-detr-nano.pth --name rfdetr-nano --labels coco91.txt --images ./photos",
+     "output_file": "out/convert.txt"
+    }
+   ]
+  },
+  {
+   "id": "s06_check",
+   "type": "image",
+   "step": "Step 4",
+   "heading": "Catch mistakes early",
+   "image": "figures/check_wrong.png",
+   "box": [
+    48,
+    120,
+    1232,
+    600
+   ]
+  },
+  {
+   "id": "s07_bits",
+   "type": "diagram",
+   "step": "Step 5",
+   "heading": "Fewer bits per number: a smaller model",
+   "boxes": [
+    {
+     "rect": [
+      48,
+      210,
+      318,
+      430
+     ],
+     "title": "32 bits",
+     "lines": [
+      "the original",
+      "",
+      "108 MB"
+     ]
+    },
+    {
+     "rect": [
+      348,
+      210,
+      618,
+      430
+     ],
+     "title": "16 bits",
+     "lines": [
+      "half the size",
+      "",
+      "54 MB"
+     ]
+    },
+    {
+     "rect": [
+      648,
+      210,
+      918,
+      430
+     ],
+     "title": "8 bits",
+     "lines": [
+      "a quarter",
+      "",
+      "29 MB"
+     ]
+    },
+    {
+     "rect": [
+      948,
+      210,
+      1232,
+      430
+     ],
+     "title": "4 bits",
+     "lines": [
+      "weights only",
+      "",
+      "28 MB"
+     ]
+    }
+   ],
+   "arrows": [
+    {
+     "from": [
+      320,
+      320
+     ],
+     "to": [
+      346,
+      320
+     ],
+     "label": "",
+     "color": "accent",
+     "at": 7
+    },
+    {
+     "from": [
+      620,
+      320
+     ],
+     "to": [
+      646,
+      320
+     ],
+     "label": "",
+     "color": "accent",
+     "at": 9
+    },
+    {
+     "from": [
+      920,
+      320
+     ],
+     "to": [
+      946,
+      320
+     ],
+     "label": "",
+     "color": "accent",
+     "at": 11
+    }
+   ]
+  },
+  {
+   "id": "s08_sens",
+   "type": "image",
+   "heading": "Which layers tolerate fewer bits?",
+   "image": "figures/sens.png",
+   "box": [
+    48,
+    120,
+    1232,
+    600
+   ]
+  },
+  {
+   "id": "s09_optimize",
+   "type": "terminal",
+   "heading": "The optimizer recommends one option",
+   "pace": 1.4,
+   "size": 14,
+   "box": [
+    48,
+    112,
+    1232,
+    560
+   ],
+   "ok_words": [
+    "recommended"
+   ],
+   "bad_words": [
+    "over budget"
+   ],
+   "commands": [
+    {
+     "cmd": "visionserve optimize rfdetr-nano --target jetson-orin --images ./photos --install",
+     "output_file": "out/optimize.txt"
+    }
+   ]
+  },
+  {
+   "id": "s10_photos",
+   "type": "image",
+   "heading": "The same photo at different precisions",
+   "image": "figures/photos.png",
+   "box": [
+    48,
+    120,
+    1232,
+    600
+   ]
+  },
+  {
+   "id": "s11_accuracy",
+   "type": "two_column",
+   "heading": "Accuracy on a held-out test set",
+   "left_label": "Model variant (fine-tuned detector)",
+   "right_label": "Accuracy (mAP)",
+   "rows": [
+    [
+     "Original, 32-bit \u00b7 114 MB",
+     "63.5"
+    ],
+    [
+     "16-bit \u00b7 58 MB",
+     "63.4"
+    ],
+    [
+     "Mixed precision \u00b7 43 to 51 MB",
+     "62.7 to 64.2"
+    ],
+    [
+     "8-bit everywhere \u00b7 32 MB",
+     "58.7"
+    ],
+    [
+     "4-bit everywhere \u00b7 30 MB",
+     "60.8"
+    ]
+   ]
+  },
+  {
+   "id": "s12_speed",
+   "type": "terminal",
+   "step": "Step 6",
+   "heading": "Measure speed on your own machine",
+   "pace": 1.3,
+   "size": 17,
+   "box": [
+    48,
+    112,
+    1232,
+    560
+   ],
+   "ok_words": [
+    "PASS"
+   ],
+   "commands": [
+    {
+     "cmd": "visionserve bench rfdetr-nano --ep cpu",
+     "output_file": "out/bench_cpu.txt"
+    },
+    {
+     "cmd": "visionserve bench rfdetr-nano --ep cuda        # GPU image",
+     "output_file": "out/bench_gpu.txt"
+    }
+   ]
+  },
+  {
+   "id": "s13_end",
+   "type": "end",
+   "title": "Try it",
+   "links": [
+    [
+     "Docs",
+     "mtbui2010.github.io/vision_serve"
+    ],
+    [
+     "Code",
+     "github.com/mtbui2010/vision_serve"
+    ]
+   ]
+  }
+ ]
+}

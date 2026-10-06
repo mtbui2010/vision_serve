@@ -1,0 +1,15 @@
+{
+"s01_title": "This is vision serve. It runs computer vision A I models on your own computer. In three minutes, we make a trained model small, fast, and verified. Every result is a real run on real photos.",
+"s02_start": "Step one. Start a server and get a model. One command starts a container that acts as the server. A second downloads a ready made model from the catalog.",
+"s03_code": "Step two. Call the model from your code. This Python script asks for detections on one photo. Each answer gives the object, the model's confidence, and its position. Java script and H T T P work the same way.",
+"s04_bring": "Step three. Bring your own model. A checkpoint is the file saved after training. Convert it, or import an O N N X file. Only open licenses are accepted, so an A G P L model is refused.",
+"s05_convert": "The conversion is verified automatically. The tool compares the new model with the original on real photos. Inputs and detections match, so every check passes.",
+"s06_check": "Step four. Catch mistakes early. Here, a wrong image resize setting is detected at once, with its likely cause and the fix.",
+"s07_bits": "Step five. Make the model smaller. A model stores millions of numbers. Fewer bits per number shrink the file from one hundred eight megabytes to under thirty, but accuracy can suffer.",
+"s08_sens": "Which parts tolerate this? The sensitivity test reduces one layer at a time and measures the change. Of one hundred forty layers, fifty one are fragile at eight bits, but only five at sixteen.",
+"s09_optimize": "The optimizer tests the options and recommends one. Mixed precision gives each layer the smallest format it tolerates. Here it recommends sixteen bits: half the size, with an error of three hundredths.",
+"s10_photos": "On real photos, the difference is visible. Eight bits everywhere adds two false detections, a cat and a bed. Four bits lowers every confidence. Sixteen bits and mixed precision match the original.",
+"s11_accuracy": "On a held out test set, a fine tuned model stays within one point of the original at under half the size. Eight bits everywhere loses almost five points.",
+"s12_speed": "Step six. Measure speed on your own machine. On a graphics card, this model answers in eighteen milliseconds, against four hundred thirty on a busy processor. Smaller is guaranteed. Faster must be measured.",
+"s13_end": "In short, convert and check your model, measure sensitivity before shrinking it, and trust accuracy measured on your own data. The tools are open source."
+}

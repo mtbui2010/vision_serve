@@ -1,0 +1,7 @@
+rfdetr: variant nano (from state_dict shapes (patch, dim, pe grid, decoder layers) = (16, 384, 24, 2))
+rfdetr: exporting nano at 384x384, opset 17 ...
+installed rfdetr-nano (detection, Apache-2.0) -> /root/.models/rfdetr-nano  [3 files]
+overall: PASS
+  tier  check                                           status  result
+  B1    preprocessing vs rfdetr predict() preprocessi~  PASS    mean|Δ| 0.37 gray levels (tensor 0.00642), max 10.9 levels, p99 1.6; 8 image(s)
+  B2    outputs vs rfdetr RFDETR.predict                PASS    50/50 matched (100.0%), |Δconf| mean 0.00454 max 0.0456, box err mean 0.0835 px max 1.11 px (ref 51 / served 50 dets)

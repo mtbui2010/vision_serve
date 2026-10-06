@@ -17,6 +17,18 @@ the same idea for images.
   <figcaption>Grounded-SAM: the words "dog. person. bench." in, boxes and outlines out<br/><code>grounded-sam</code> · prompt='dog. person. bench.' · 225 ms on gpu:0 · Photo: COCO val2017 #372819 (<a href="http://farm3.staticflickr.com/2046/2516944023_d00345997d_z.jpg">Flickr</a>, CC BY 2.0)</figcaption>
 </figure>
 
+## Watch: the 3-minute tour
+
+<video controls preload="metadata" playsinline style="width:100%;border-radius:8px"
+       poster="assets/video/visionserve-3min-poster.jpg">
+  <source src="assets/video/visionserve-3min.mp4" type="video/mp4">
+  Your browser cannot play this video. <a href="assets/video/visionserve-3min.mp4">Download it</a>.
+</video>
+
+From a trained model to a small, fast, verified one: start a server, call it from Python, convert
+and check your own model, find which layers tolerate fewer bits, and measure speed. Every output
+in the video is a real run. English voice-over and subtitles, 2 min 48 s.
+
 ## In one minute
 
 ```bash

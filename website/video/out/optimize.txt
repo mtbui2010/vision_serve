@@ -1,0 +1,8 @@
+WARN: recommended rfdetr-nano-fp16: 2.0× smaller, output error 0.0309, 433 vs 239 ms FP32 on this host (cpu); accuracy NOT measured (pass --labels)
+
+Variants for jetson-orin
+  variant  file size               output error mean / max  mAP (Δ vs FP32)  latency p50 / p95 (THIS host)  status
+  fp32     107.8 MB                0 / 0                    not measured     239 / 412 ms (cpu)             within budget
+  ✓ fp16   54.2 MB (2.0× smaller)  0.0309 / 0.201           not measured     433 / 657 ms (cpu)             recommended ✓
+  int8     29.2 MB (3.7× smaller)  0.309 / 0.768            not measured     322 / 541 ms (cpu)             over budget: error 0.309 > 0.05
+  mixed    56.5 MB (1.9× smaller)  0.0352 / 0.212           not measured     328 / 442 ms (cpu)             within budget
