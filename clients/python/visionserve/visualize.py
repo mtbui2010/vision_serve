@@ -85,8 +85,17 @@ def draw(
     max_grasps_per_object: Optional[int] = 3,
     target_grasp: Optional[Any] = None,
     target_box: Optional[Any] = None,
+    mask_boxes: bool = True,
 ) -> Any:
     """Draw *result* predictions on *image* and return an annotated PIL image.
+
+    What is drawn: masks as translucent colour fills, detection boxes with ``"class conf%"``
+    labels on top of them, then a box and a ``"mask conf%"`` label for each mask that has no
+    detection with the same box (Grounded-SAM and the grasp pipelines copy the detection's box
+    onto its mask, so such a mask is labelled once, with its class), grasps, and the
+    classification labels in the top-left corner. A ``depth`` result is returned as a colour
+    picture of the depth map alone (blue = far, red = near) at the MODEL's resolution
+    (``depth_width x depth_height``); *image* is not drawn on.
 
     Args:
         result: :class:`~visionserve.Result` from :meth:`~visionserve.Client.predict`.
@@ -96,6 +105,10 @@ def draw(
                 * ``str`` / ``pathlib.Path`` file path,
                 * ``bytes`` raw encoded image data,
                 * ``numpy.ndarray`` ``(H, W)``, ``(H, W, 1)``, ``(H, W, 3)`` or ``(H, W, 4)``.
+
+                A JPEG given as a path or bytes is turned upright by its EXIF orientation tag,
+                as the server does, so the boxes land on the right pixels. A PIL image or an
+                array is drawn as it is (the SDK uploads those without the tag).
         alpha:  Opacity for mask colour overlays (0.0 = transparent, 1.0 = opaque).
         max_grasps_per_object: For a ``grasp`` result, draw at most this many
                 highest-quality grasps PER object (grouped by the detection/mask
@@ -112,6 +125,8 @@ def draw(
                 detections/masks that item is highlighted in place; otherwise the box
                 is drawn as a standalone red rectangle (handy when the box came from a
                 separate detect call). ``None`` disables it.
+        mask_boxes: ``False`` draws masks as colour fills only, without their box and label
+                (for the dozens of overlapping masks of an automatic-mask result).
 
     Returns:
         Annotated ``PIL.Image.Image``.
@@ -145,11 +160,16 @@ def draw(
         for it in (list(result.detections) + list(result.masks))
     )
 
+    # Mask fills first, so the boxes and labels drawn after them stay sharp.
+    if result.masks:
+        img = _fill_masks(result, img, alpha, Image)
+
     if result.detections:
         img = _draw_detections(result, img, ImageDraw, ImageFont, target_box)
 
-    if result.masks:
-        img = _draw_masks(result, img, alpha, Image, ImageDraw, ImageFont, target_box)
+    if result.masks and (mask_boxes or target_box is not None):
+        # With mask_boxes=False only a target mask still gets its (red) box.
+        img = _draw_mask_boxes(result, img, ImageDraw, ImageFont, target_box, all_boxes=mask_boxes)
 
     if result.grasps:
         img = _draw_grasps(result, img, ImageDraw, ImageFont, max_grasps_per_object, target_grasp)
@@ -254,36 +274,61 @@ def _draw_masks(
     ImageFont: Any,
     target_box: Any = None,
 ) -> Any:
-    w_img, h_img = img.size
-    target_bbox = _target_bbox(target_box)
+    """Mask fills, then the boxes of masks without a matching detection."""
+    img = _fill_masks(result, img, alpha, Image)
+    return _draw_mask_boxes(result, img, ImageDraw, ImageFont, target_box)
 
+
+def _fill_masks(result: "Result", img: Any, alpha: float, Image: Any) -> Any:
+    """Composite every mask's colour onto *img* (RGBA). Mask ``i`` gets palette colour ``i``."""
+    w_img, h_img = img.size
     # All masks go into ONE RGBA overlay composited once (a full-image composite per mask was
     # O(masks x pixels)); where masks overlap, the later one's colour wins.
     try:
         import numpy as np
     except ImportError:  # no numpy: bbox outlines only
-        np = None
-    if np is not None:
-        overlay_arr = np.zeros((h_img, w_img, 4), np.uint8)
-        a_val = int(round(max(0.0, min(1.0, alpha)) * 255))
-        any_mask = False
-        for i, mask in enumerate(result.masks):
-            try:
-                arr = mask.to_ndarray(w_img, h_img)
-            except ValueError:  # RLE for another image size: outline only
-                continue
-            overlay_arr[arr] = _colour(i) + (a_val,)
-            any_mask = True
-        if any_mask:
-            img = Image.alpha_composite(img, Image.fromarray(overlay_arr, "RGBA"))
+        return img
+    overlay_arr = np.zeros((h_img, w_img, 4), np.uint8)
+    a_val = int(round(max(0.0, min(1.0, alpha)) * 255))
+    any_mask = False
+    for i, mask in enumerate(result.masks):
+        try:
+            arr = mask.to_ndarray(w_img, h_img)
+        except ValueError:  # RLE for another image size: outline only
+            continue
+        overlay_arr[arr] = _colour(i) + (a_val,)
+        any_mask = True
+    if any_mask:
+        img = Image.alpha_composite(img, Image.fromarray(overlay_arr, "RGBA"))
+    return img
 
+
+def _draw_mask_boxes(
+    result: "Result",
+    img: Any,
+    ImageDraw: Any,
+    ImageFont: Any,
+    target_box: Any = None,
+    all_boxes: bool = True,
+) -> Any:
+    """Box + ``"mask conf%"`` label for each mask that no detection already labels.
+
+    A mask whose bbox equals a detection's bbox (Grounded-SAM / grasp pipelines copy the
+    detection box onto its mask) was drawn with its class by :func:`_draw_detections`; drawing
+    it again would cover that label. ``all_boxes=False`` draws only the target mask's box.
+    """
+    target_bbox = _target_bbox(target_box)
+    det_boxes = {tuple(float(v) for v in d.bbox) for d in result.detections}
     draw_ctx = ImageDraw.Draw(img)
     for i, mask in enumerate(result.masks):
-        colour = _colour(i)
+        if tuple(float(v) for v in mask.bbox) in det_boxes:
+            continue
         is_target = _is_target_item(mask, target_box, target_bbox)
+        if not (all_boxes or is_target):
+            continue
         # Draw bbox outline + label (red + thicker when this is the target).
         x, y, bw, bh = mask.bbox
-        box_colour = _TARGET_BOX_COLOUR if is_target else colour
+        box_colour = _TARGET_BOX_COLOUR if is_target else _colour(i)
         _draw_box(draw_ctx, x, y, bw, bh, box_colour, thickness=4 if is_target else 2)
         label = "mask %.0f%%" % (mask.conf * 100)
         _draw_label(draw_ctx, x, y, label, box_colour, ImageFont)
@@ -389,6 +434,12 @@ def _draw_classifications(
         colour = _colour(i)
         label = "%s %.0f%%" % (clf.cls, clf.conf * 100)
         ty = margin_y + i * line_height
+        # A dark band behind the text keeps it readable on a light photo (sky, snow, paper).
+        try:
+            l, t, r, b = draw_ctx.textbbox((margin_x, ty), label, font=font)
+        except AttributeError:  # Pillow < 8: rough size
+            l, t, r, b = margin_x, ty, margin_x + 9 * len(label), ty + 16
+        draw_ctx.rectangle([l - 4, t - 3, r + 4, b + 3], fill=(20, 20, 20, 255))
         draw_ctx.text((margin_x, ty), label, fill=colour + (255,), font=font)
     return img
 
@@ -483,10 +534,10 @@ def _open_image(image: Any, Image: Any) -> Any:
     if isinstance(image, Image.Image):
         return image
     if isinstance(image, (str, os.PathLike)):
-        return Image.open(image)
+        return _upright(Image.open(image))
     if isinstance(image, (bytes, bytearray)):
         import io as _io
-        return Image.open(_io.BytesIO(bytes(image)))
+        return _upright(Image.open(_io.BytesIO(bytes(image))))
     from .client import _maybe_ndarray, _ndarray_to_pil  # the same ndarray rule as predict()
 
     if _maybe_ndarray(image) is not None:
@@ -495,6 +546,19 @@ def _open_image(image: Any, Image: Any) -> Any:
         "unsupported image type %r; expected PIL.Image, str path, bytes, or numpy.ndarray"
         % type(image)
     )
+
+
+def _upright(img: Any) -> Any:
+    """A JPEG turned upright by its EXIF orientation tag, as the server decodes it
+    (``imaging.AutoOrientation``, JPEG only), so result coordinates match its pixels."""
+    if getattr(img, "format", None) != "JPEG":
+        return img
+    try:
+        from PIL import ImageOps
+
+        return ImageOps.exif_transpose(img)
+    except Exception:  # noqa: BLE001 — a broken EXIF block: the server ignores it too
+        return img
 
 
 def _load_font(ImageFont: Any, size: int = 14) -> Any:
