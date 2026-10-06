@@ -1080,12 +1080,18 @@ class Builder:
             pid = e.get("image", {}).get("coco_id")
             if pid:
                 used.setdefault(pid, []).append(e["file"])
+        # Figures made by hand (not in figures.json) that still show a COCO photo.
+        if (self.out / "inspect-input-177015.jpg").exists():
+            used.setdefault(177015, []).append("inspect-input-177015.jpg")
         for pid in PHOTOS:
             if pid in used:
-                lines.append(f"- {self.credit(pid)}  \n  used in: " + ", ".join(f"`{f}`" for f in used[pid]))
+                lines.append(f"- {self.credit(pid)}  \n  used in: " + ", ".join(f"`{f}`" for f in sorted(used[pid])))
         lines += ["", "The OCR receipt is a synthetic image rendered by `website/tools/figures.py`.",
-                  "Figures are regenerated with `website/tools/figures.py`, and the `clients-*` ones with",
-                  "`website/tools/clients_figures.py` (usage at the top of each file).", ""]
+                  "Figures are regenerated with `website/tools/figures.py`, the `clients-*` ones with",
+                  "`website/tools/clients_figures.py`, and the `clients-draw-*` ones with",
+                  "`website/tools/clients_utils_figures.py` (usage at the top of each file).",
+                  "`inspect-input-177015.jpg` puts the photo next to the picture `visionserve inspect my-detector",
+                  "--image photo.jpg` wrote (`my-detector-input.png`, the official RF-DETR Nano export).", ""]
         (self.out / "CREDITS.md").write_text("\n".join(lines))
 
 
