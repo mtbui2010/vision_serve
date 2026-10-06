@@ -14,7 +14,7 @@ ends up as the same `POST /api/predict` request, so pick whichever fits your pro
 | Images you can pass | path, bytes, PIL, numpy | path (Node), bytes, `Blob` | file upload or base64 | path |
 | Decodes masks / base64 arrays | yes (`Mask.to_ndarray`, `FloatArray`) | yes (`Mask.toMask`, `base64Arrays`) | you do it | prints the JSON |
 | `503` `Retry-After` | `e.retry_after` | `e.retryAfter` | the header | no queue |
-| Drawing | `Result.visualize()` (PNG) | `toSVG()` (SVG overlay) | — | `--save` (PNG) |
+| Drawing | `draw()` / `Result.visualize()`: boxes, masks, grasps, depth, labels as a PIL image ([how](python.md#visualize-results)) | `toSVG()`: boxes and labels as an SVG overlay ([how](javascript.md#visualize-results)) | — | `--save` (PNG) |
 | Page | [Python](python.md) | [JavaScript](javascript.md) | [Plain HTTP](http.md) | [Configuration](../reference/configuration.md) |
 
 The Python SDK is the most complete one. Its keyword arguments have the **same names** as the
@@ -107,7 +107,8 @@ named `visionserve`. It only talks to a running server (`predict`, `list`, `ps`,
 
 ## Where to next
 
-- [Python](python.md): every `predict` option with real outputs, the `Result` object, errors and
+- [Python](python.md): every `predict` option with real outputs, the `Result` object,
+  [drawing results](python.md#visualize-results), [every helper](python.md#utilities), errors and
   retries, threads, and recipes (a folder of photos to CSV, masks to PNG, depth to numpy, CLIP
   ranking, grasping with a depth camera).
 - [JavaScript / TypeScript](javascript.md): the same for Node and the browser.
