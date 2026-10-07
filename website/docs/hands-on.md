@@ -33,8 +33,8 @@ The full instructions are in the folder's
 
 1. **Python packages.** In a new conda or venv environment, from the repository folder:
    `pip install -r hands-on/requirements.txt` (the VisionServe client, JupyterLab, matplotlib,
-   ipywidgets, pandas, Pillow, numpy). If the client is not on PyPI in version 0.2.0 yet, use
-   `pip install -e clients/python`.
+   ipywidgets, pandas, Pillow, numpy). To use the client from your checkout instead (for example
+   a version newer than the one on PyPI), run `pip install -e clients/python`.
 2. **A running server** at `http://127.0.0.1:11435`: Docker
    (`docker run -d --gpus all -p 11435:11435 -v ~/.visionserve_models:/root/.models --name visionserve mtbui2010/visionserve:latest`,
    or the `:latest-cpu` image without `--gpus all`), or from source (`make build`, then

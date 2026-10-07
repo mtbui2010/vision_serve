@@ -29,7 +29,7 @@ GPU    ?= 1
 
 # Python interpreter used to build the client package for PyPI.
 PYTHON ?= python3
-# PyPI project name (used by `make pypi-next-version` to auto-detect the latest release).
+# PyPI project name (used by `make pypi-next-version` to check what is already released).
 PYPI_PKG ?= visionserve
 
 # Conda env that provides the LaTeX engine (tectonic) for `make pdf`. tectonic is a
@@ -312,40 +312,39 @@ pypi: ## Build + validate the Python client package (clients/python -> dist/). P
 	$(PYTHON) -m pip install --quiet --upgrade build twine
 	cd clients/python && rm -rf dist build *.egg-info && $(PYTHON) -m build && $(PYTHON) -m twine check dist/*
 	@echo "→ built clients/python/dist/"
-	@echo "  Publish to PyPI:      git tag vX.Y.Z && git push origin vX.Y.Z   (CI Trusted Publishing)"
+	@echo "  Publish to PyPI:      git tag py-vX.Y.Z && git push origin py-vX.Y.Z   (CI Trusted Publishing; X.Y.Z = __version__)"
 	@echo "  Publish to TestPyPI:  run the 'Publish Python client' workflow manually (workflow_dispatch)"
 
-pypi-next-version: ## Query PyPI for the latest version, bump patch in pyproject, build, commit + push tag vX.Y.Z (CI publishes)
+PYPI_VERSION_FILE := clients/python/visionserve/__init__.py
+
+pypi-next-version: ## Release the Python client: __version__ if PyPI lacks it, else bump its patch; build, commit, push tag py-vX.Y.Z (CI publishes)
 	@set -e; \
 	if [ -n "$$(git status --porcelain)" ]; then \
 	    echo "ERROR: working tree has uncommitted changes — commit them first so the release tag is a complete, reproducible build." >&2; \
 	    git status --short >&2; exit 1; \
 	fi; \
-	echo "=== Querying PyPI for latest $(PYPI_PKG) version ==="; \
-	LATEST=$$(curl -sf "https://pypi.org/pypi/$(PYPI_PKG)/json" \
-	    | python3 -c "import sys,json,re; \
-	      rels=[k for k in json.load(sys.stdin).get('releases',{}) if re.match(r'^[0-9]+\.[0-9]+\.[0-9]+$$',k)]; \
-	      rels.sort(key=lambda x:[int(n) for n in x.split('.')]); \
-	      print(rels[-1] if rels else '0.0.0')" 2>/dev/null || echo ""); \
-	if [ -z "$$LATEST" ]; then \
-	    CUR=$$(grep -m1 '^version' clients/python/pyproject.toml | sed -E 's/.*"([^"]+)".*/\1/'); \
-	    echo "  WARNING: PyPI query failed — falling back to pyproject version $$CUR"; \
-	    LATEST=$$CUR; \
+	CUR=$$(sed -nE 's/^__version__ = "([^"]+)"/\1/p' $(PYPI_VERSION_FILE)); \
+	echo "=== Querying PyPI for $(PYPI_PKG) (local __version__ = $$CUR) ==="; \
+	ON_PYPI=$$(curl -sf "https://pypi.org/pypi/$(PYPI_PKG)/json" \
+	    | python3 -c "import sys,json; print(' '.join(json.load(sys.stdin).get('releases',{})))") \
+	    || { echo "ERROR: PyPI query failed; not guessing a version." >&2; exit 1; }; \
+	if echo " $$ON_PYPI " | grep -q " $$CUR "; then \
+	    NEXT=$$(echo "$$CUR" | python3 -c "import sys; v=sys.stdin.read().strip().split('.'); v[2]=str(int(v[2])+1); print('.'.join(v))"); \
+	    echo "  $$CUR is already on PyPI → bumping to $$NEXT"; \
+	    sed -i -E "s|^__version__ = \"[^\"]*\"|__version__ = \"$$NEXT\"|" $(PYPI_VERSION_FILE); \
+	    $(MAKE) pypi; \
+	    git add $(PYPI_VERSION_FILE); \
+	    git commit -m "client: release $$NEXT"; \
+	    git push origin HEAD; \
+	else \
+	    NEXT=$$CUR; \
+	    echo "  $$CUR is not on PyPI yet → releasing it as is"; \
+	    $(MAKE) pypi; \
 	fi; \
-	NEXT=$$(echo "$$LATEST" | python3 -c "import sys; v=sys.stdin.read().strip().split('.'); v[2]=str(int(v[2])+1); print('.'.join(v))"); \
-	echo "  Latest on PyPI: $$LATEST  →  Next: $$NEXT"; \
-	echo "=== Bumping clients/python/pyproject.toml → $$NEXT ==="; \
-	sed -i -E "s|^version = \"[^\"]*\"|version = \"$$NEXT\"|" clients/python/pyproject.toml; \
-	echo "=== Building + validating the package ==="; \
-	$(MAKE) pypi; \
-	echo "=== Committing + tagging v$$NEXT ==="; \
-	git add clients/python/pyproject.toml; \
-	git commit -m "client: release v$$NEXT"; \
-	git tag "v$$NEXT"; \
-	git push origin HEAD; \
-	git push origin "v$$NEXT"; \
+	git tag "py-v$$NEXT"; \
+	git push origin "py-v$$NEXT"; \
 	echo ""; \
-	echo "=== Done — pushed tag v$$NEXT; CI 'Publish Python client' uploads to PyPI ==="; \
+	echo "=== Done — pushed tag py-v$$NEXT; CI 'Publish Python client' uploads to PyPI ==="; \
 	echo "  https://pypi.org/project/$(PYPI_PKG)/$$NEXT/"
 
 clean: ## Remove build artifacts
