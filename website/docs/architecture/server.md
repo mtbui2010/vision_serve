@@ -62,7 +62,7 @@ func (s *Server) routes() http.Handler {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L75-L92)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/server.go#L75-L92)
 
 CORS is off unless `VISIONSERVE_ORIGINS` lists the web origins allowed to call the API from a
 browser ([configuration](../reference/configuration.md)); without it the middleware is not
@@ -90,7 +90,7 @@ pass. Port 11435 avoids clashing with Ollama's 11434.
 const DefaultAddr = "127.0.0.1:11435"
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L22-L25)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/server.go#L22-L25)
 
 On a loopback address the startup log says so, so a user who cannot reach the server from another
 machine sees why: `VisionServe listening on 127.0.0.1:11435 (this machine only; --addr :11435
@@ -116,7 +116,7 @@ type Request struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L38-L52)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/request.go#L38-L52)
 
 `ToPrompt` is where options become a `models.Prompt`, the one value every model receives:
 
@@ -135,7 +135,7 @@ func (q *Request) ToPrompt(imgW, imgH int) (models.Prompt, error) {
 	p.TemplateName = q.TemplateName
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L158-L173)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/request.go#L158-L173)
 
 ### Admission before decoding
 
@@ -167,7 +167,7 @@ func (s *Server) predict(w http.ResponseWriter, r *http.Request) (api.Result, st
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L145-L168)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/handlers.go#L145-L168)
 
 The bound itself (by default `max(32, 2 × the model's inference slots)`, tunable with
 `VISIONSERVE_MAX_QUEUE`) lives in the lifecycle package; see
@@ -195,7 +195,7 @@ the upload.
 		u, err := spool(p, limit, &fileMemLeft, &memLeft)
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/multipart.go#L210-L219)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/multipart.go#L210-L219)
 
 Why a probe and not the real slot? A slot held during the upload would let a few dozen slow
 clients fill a model's bound and lock everyone else out for as long as the server's
@@ -233,7 +233,7 @@ func decodeImage(r io.Reader) (image.Image, error) {
 	img, err := imageproc.Decode(raw)
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/limits.go#L26-L45)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/limits.go#L26-L45)
 
 `imageproc.Decode` applies the EXIF orientation and decodes JPEG, PNG, WebP, BMP, GIF and TIFF.
 A lossy WebP is converted to RGB with libwebp's own limited-range transform: the plain
@@ -292,7 +292,7 @@ func statusOf(err error) int {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/errors.go#L60-L87)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/errors.go#L60-L87)
 
 The body is always `{"error": "..."}`. A 499 ("client closed request", borrowed from nginx)
 means the client disconnected before inference started, so the server did not run the model;
@@ -335,7 +335,7 @@ func Predict(ctx context.Context, p Predictor, model string, img image.Image, pr
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L24-L44)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/predict.go#L24-L44)
 
 ### Big arrays as base64 (opt-in)
 
@@ -354,7 +354,7 @@ func writeResult(w http.ResponseWriter, res api.Result, encoding string) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/response.go#L33-L38)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/response.go#L33-L38)
 
 `writeJSON` encodes the body **before** writing the status line. If a result contains a NaN
 (which JSON cannot represent), the client gets a clean 500 instead of a 200 with a truncated
@@ -379,7 +379,7 @@ type preprocessResponse struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/preprocess.go#L14-L20)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/preprocess.go#L14-L20)
 
 **`/api/infer_tensor?model=...&shape=N,C,H,W`** takes a body of raw little-endian float32 that
 is already preprocessed, skipping image decoding and preprocessing. It is meant for clients
@@ -414,7 +414,7 @@ image against what the store may still hold, using only the image headers.
 			if px += int64(w) * int64(h); px > room {
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/templates.go#L41-L50)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/templates.go#L41-L50)
 
 ### Graceful shutdown
 
@@ -429,7 +429,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L117-L121)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/server.go#L117-L121)
 
 ## Where in the code
 

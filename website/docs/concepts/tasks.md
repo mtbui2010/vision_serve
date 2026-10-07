@@ -2,11 +2,11 @@
 
 Every example on this page is a **real output** of VisionServe on a real photo. The pictures were
 drawn from the JSON answers by
-[`website/tools/figures.py`](https://github.com/mtbui2010/vision_serve/blob/main/website/tools/figures.py),
+[`website/tools/figures.py`](https://github.com/mtbui2010/visionserve/blob/main/website/tools/figures.py),
 so you can regenerate them yourself.
 
 All tasks return the same JSON shape (`api.Result` in
-[`pkg/api/types.go`](https://github.com/mtbui2010/vision_serve/blob/main/pkg/api/types.go)):
+[`pkg/api/types.go`](https://github.com/mtbui2010/visionserve/blob/main/pkg/api/types.go)):
 only the fields that make sense for the task are filled in.
 
 ## Object detection — "what is here, and where?"

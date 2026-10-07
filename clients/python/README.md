@@ -219,7 +219,7 @@ visionserve load rf-detr
 | `useful_side(model)` | `GET /api/models` (cached) | `(max_useful_side, max_useful_short_side)` |
 
 Every `predict` option, what it does and which models read it, with real outputs:
-[Clients › Python](https://mtbui2010.github.io/vision_serve/clients/python/) on the docs site.
+[Clients › Python](https://mtbui2010.github.io/visionserve/clients/python/) on the docs site.
 
 `min_size` / `max_size` filter by bounding-box area as a **percentage of the image area** (0–100; `0` = no limit). Example: `min_size=0.5` keeps only objects covering at least 0.5% of the image. The conversion to absolute pixels is done server-side using the uploaded image dimensions.
 
@@ -292,7 +292,7 @@ grasping, `background`, templates, crop-naming pipelines, `depth-anything-v2`), 
 within the hint (sent exactly as given), and requests with `depth`, `dilate`, `gripper_min` /
 `gripper_max` or `template_name`. Needs Pillow; without it photos are sent as given.
 `preprocess()` sends the photo as given unless you pass `resize="auto"`. Measured cost and gain
-(bytes, latency, COCO mAP): [Clients › Python](https://mtbui2010.github.io/vision_serve/clients/python/#client-side-resizing-on-by-default).
+(bytes, latency, COCO mAP): [Clients › Python](https://mtbui2010.github.io/visionserve/clients/python/#client-side-resizing-on-by-default).
 
 Prompts (serialized to the server's string format):
 - `box`: `[x, y, w, h]` or a list of boxes → `"x,y,w,h"` joined by `;`.
@@ -437,7 +437,7 @@ res = c.predict("grounding-dino", "coffee.jpg", prompt="canned coffee. cup.", bo
 
 Both apply to `grounding-dino`, `grounded-sam`, `grasp-gd` and the GroundingDINO pass of the
 `gdino-siglip*` / `rfdetr-gdino*` models. `None` (default) defers to the model's manifest value.
-Every option, with real outputs: <https://mtbui2010.github.io/vision_serve/clients/python/>.
+Every option, with real outputs: <https://mtbui2010.github.io/visionserve/clients/python/>.
 
 ### Depth estimation
 

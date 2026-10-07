@@ -106,7 +106,7 @@ lifecycle manager and the engine are never edited to add a model.
 	_ "visionserve/internal/models/textalign"
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L12-L31)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/cmd/visionserve/main.go#L12-L31)
 
 Which network file to load, how to preprocess for it, which hardware to prefer and under which
 license it is distributed is **data**, written in the model's `manifest.yaml`, not code.
@@ -128,7 +128,7 @@ func (s *Session) Predict(ctx context.Context, img image.Image, prompt models.Pr
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L148-L159)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/session.go#L148-L159)
 
 ```go title="internal/lifecycle/session.go"
 func (s *Session) predictSimple(ctx context.Context, img image.Image) (api.Result, error) {
@@ -144,7 +144,7 @@ func (s *Session) predictSimple(ctx context.Context, img image.Image) (api.Resul
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L213-L223)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/session.go#L213-L223)
 
 The request's `ctx` travels with the call, so a request whose client has gone away stops waiting
 for a session instead of running inference nobody will read.
@@ -176,7 +176,7 @@ type Result struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/pkg/api/types.go#L21-L44)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/pkg/api/types.go#L21-L44)
 
 ### Hardware: a fallback chain that always ends on CPU
 
@@ -193,7 +193,7 @@ the [engine page](engine.md) explains why it is not the default.
 	return out, nil
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L199-L202)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/provider.go#L199-L202)
 
 ### Only permissive licenses get in
 
@@ -210,7 +210,7 @@ var licenseAllowlist = map[string]string{
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L29-L34)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/manifest.go#L29-L34)
 
 ### Design principles
 

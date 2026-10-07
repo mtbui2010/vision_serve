@@ -71,7 +71,7 @@ that unlock array and PIL inputs, mask decoding and drawing.
         self._hints_lock = threading.Lock()
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L83-L105)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/client.py#L83-L105)
 
 `Client.predict(model, image, ...)` accepts a file path, encoded bytes, a `PIL.Image` or a
 `numpy` array. Prompts and options become multipart form fields: boxes as `"x,y,w,h"` joined by
@@ -125,7 +125,7 @@ and answer 503 without receiving megabytes for nothing (see [HTTP server](server
         _write_file("image", image_bytes, filename)
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L828-L848)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/client.py#L828-L848)
 
 Other calls mirror the HTTP routes: `health()`, `list_models()`, `load()`, `unload()`, `ps()`,
 and `preprocess()` / `tokenize()`, which return the exact tensors the server would feed the
@@ -150,7 +150,7 @@ by column. `Mask.to_ndarray` undoes that encoding:
         return flat.reshape((height, width), order="F")
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L248-L254)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/types.py#L248-L254)
 
 `Result` also has client-side helpers that never touch the server: `filter_by_size`,
 `filter_by_conf`, `sort_by_conf`, `top_k`, `nms`, `filter_grasps`, `group_by_class`,
@@ -178,7 +178,7 @@ callers never see base64.
             embeddings = [[float(v) for v in row] for row in (d.get("embeddings") or [])]
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/types.py#L418-L426)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/types.py#L418-L426)
 
 With numpy installed, the decoded arrays are `FloatArray` objects: read-only, list-like
 (`len`, indexing, iteration, `==` with a list) and handed to numpy without a copy. They are not
@@ -247,7 +247,7 @@ default) is not listening.
     return cr.clientResize ? mapResult(result, cr.clientResize) : result;
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/client.ts#L224-L320)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/clients/js/src/client.ts#L224-L320)
 
 The JS `predict` takes the same options as the Python one, in camelCase (`boxThreshold` is sent
 as `box_threshold`), and normalises prompts with the same rule; both SDKs run the shared cases in
@@ -266,7 +266,7 @@ your user so installed files are not owned by root, and passes every other flag 
 const defaultConvertImage = "mtbui2010/visionserve-convert:latest"
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/cli/convert.go#L11-L14)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/cli/convert.go#L11-L14)
 
 The container uses `--network host` so the verification steps can reach your running server at
 `localhost:11435`. Supported formats: `rfdetr` (a training `.pth`), `hf` (a HuggingFace folder or
@@ -292,7 +292,7 @@ esac
 exec "$PY" -m visionserve.convert "$@"
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/convert/vsconvert-entrypoint.sh#L5-L9)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/convert/vsconvert-entrypoint.sh#L5-L9)
 
 ### Verification tiers
 
@@ -310,7 +310,7 @@ what the original returned. The converter checks in stages, and any FAIL uninsta
     A FAILED check uninstalls the model (unless --keep-on-fail) and exits 1.
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/convert/cli.py#L11-L17)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/convert/cli.py#L11-L17)
 
 - **Tier A** runs the framework model and the ONNX graph on the same input and compares the
   outputs (numerical parity). It also checks the graph's real tensor shapes against what the
@@ -350,7 +350,7 @@ def install(bundles: Sequence[Bundle], staging: Path, models_dir: Path, force: b
             raise ConvertError(f"visionserve refused {d.name} (see above); nothing was installed for it")
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/convert/common.py#L576-L592)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/convert/common.py#L576-L592)
 
 Before any of this, the converter applies the license gate twice: the declared `--license` (or
 the model card's) must be on the permissive allowlist, and `license_scan` looks inside the
@@ -380,7 +380,7 @@ ENTRYPOINT ["visionserve"]
 CMD ["serve", "--addr", ":11435"]
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile#L135-L146)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/deploy/Dockerfile#L135-L146)
 
 Weights are never baked into an image. Pull them into the running container
 (`docker exec -it visionserve visionserve pull rf-detr`) or bind-mount a host folder onto

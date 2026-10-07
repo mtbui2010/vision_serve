@@ -42,7 +42,7 @@ The caller checks it right away. You saw this in every snippet so far:
     outs = self.engine.run([inp])
     ```
 
-([session.go#L214-L221](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L214-L221))
+([session.go#L214-L221](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/session.go#L214-L221))
 
 Yes, Go is more verbose here. The benefit: every place that can fail is visible in the
 code, and you decide at each step what to do. There is also a hard reason in a server: in
@@ -67,7 +67,7 @@ original stays reachable for code that wants to inspect it.
 	}
 ```
 
-[load.go#L416-L424 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L416-L424)
+[load.go#L416-L424 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load.go#L416-L424)
 
 A client asking for a model that does not exist then receives:
 
@@ -82,7 +82,7 @@ with HTTP status 404. How the server knows "404" from that error is the next sec
     wrapped error later. Use `%w` whenever a caller might need to know *what* went wrong.
     `%v` is a deliberate choice to hide the cause: `ParsePrompt` writes
     `fmt.Errorf("invalid box %q: %v", part, err)`
-    ([prompt.go#L26](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/prompt.go#L26)),
+    ([prompt.go#L26](https://github.com/mtbui2010/visionserve/blob/main/internal/models/prompt.go#L26)),
     because callers only need the message, not the `strconv` error inside.
 
 ## Sentinel errors and `errors.Is`
@@ -108,7 +108,7 @@ var (
 )
 ```
 
-[errors.go#L1-L15 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/errors.go#L1-L15)
+[errors.go#L1-L15 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/errors.go#L1-L15)
 
 `errors.Is(err, ErrModelNotFound)` walks down the chain of `%w` wraps and reports whether
 any link *is* that sentinel. The server does all of its status mapping in one function:
@@ -144,7 +144,7 @@ func statusOf(err error) int {
 }
 ```
 
-[server/errors.go#L60-L87 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/errors.go#L60-L87)
+[server/errors.go#L60-L87 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/errors.go#L60-L87)
 
 ```mermaid
 flowchart LR
@@ -197,7 +197,7 @@ func (b badPrompt) Unwrap() error      { return b.error }
 func (badPrompt) Is(target error) bool { return target == ErrBadPrompt }
 ```
 
-[prompt.go#L84-L96 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/prompt.go#L84-L96)
+[prompt.go#L84-L96 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/prompt.go#L84-L96)
 
 `badPrompt` **embeds** the `error` interface (chapter 2), so it gets the wrapped error's
 `Error()` method for free: the message stays exactly what the model wrote. GroundingDINO
@@ -211,11 +211,11 @@ func (m *groundingDINO) Infer(img image.Image, prompt models.Prompt, r models.Ru
 	}
 ```
 
-[groundingdino.go#L144-L148 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/groundingdino/groundingdino.go#L144-L148)
+[groundingdino.go#L144-L148 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/groundingdino/groundingdino.go#L144-L148)
 
 The server's `requestError` does the same for malformed HTTP requests and answers
 `true` for `lifecycle.ErrInvalidRequest`
-([server/errors.go#L35-L52](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/errors.go#L35-L52)).
+([server/errors.go#L35-L52](https://github.com/mtbui2010/visionserve/blob/main/internal/server/errors.go#L35-L52)).
 
 !!! note "When you write a model"
     Return plain `fmt.Errorf` errors for real failures (a tensor with the wrong shape is a
@@ -255,7 +255,7 @@ func (s *Session) runOnThread(inputs, into []Tensor) ([]Tensor, error) {
 	// ... copy the outputs into Go slices and return them
 ```
 
-[ort.go#L588-L624 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L588-L624)
+[ort.go#L588-L624 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L588-L624)
 
 === "Go"
 
@@ -274,7 +274,7 @@ func (s *Session) runOnThread(inputs, into []Tensor) ([]Tensor, error) {
 
 The two most common defers in this repository are `defer mu.Unlock()` right after
 `mu.Lock()` and `defer release()` right after taking a resource
-([manager.go#L107-L111](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L107-L111)).
+([manager.go#L107-L111](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/manager.go#L107-L111)).
 
 ## Panics: only for "impossible", recovered at the edges
 
@@ -301,12 +301,12 @@ func (m *Manager) lead(name string, call *loadCall) (err error) {
 		// ...
 ```
 
-[load.go#L104-L114 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L104-L114)
+[load.go#L104-L114 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load.go#L104-L114)
 
 `recover()` only works inside a deferred function. Because `lead` has a *named* result
 `(err error)`, the deferred function can overwrite what the function returns. The other
 safety net is on each ONNX session's worker thread
-([ort.go#L557-L570](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L557-L570)),
+([ort.go#L557-L570](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L557-L570)),
 which chapter 5 explains.
 
 ## Try it

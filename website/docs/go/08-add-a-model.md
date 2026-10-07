@@ -212,7 +212,7 @@ How each part maps to the earlier chapters:
   normalisation and the NCHW layout, and returns the `Meta`. The same code serves every model
   and is tested against the Python reference (chapter 6). Compare with the classification
   model, which does exactly this
-  ([classification/preprocess.go#L11-L34](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/preprocess.go#L11-L34)).
+  ([classification/preprocess.go#L11-L34](https://github.com/mtbui2010/visionserve/blob/main/internal/models/classification/preprocess.go#L11-L34)).
 - **Postprocess checks the shape it verified in step 1**, then reads `out.Data` as a flat
   slice (chapter 1). The result goes into the shared `models.Result` (an alias of
   `api.Result`, chapter 2); there is no per-model schema.
@@ -223,7 +223,7 @@ How each part maps to the earlier chapters:
     A detector must also use the `meta` argument: `Detection.BBox` is **always in original
     image coordinates**, `[x, y, w, h]`. `meta.Affine()` gives the mapping from model-input
     pixels back to the original image
-    ([spec.go#L347-L351](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L347-L351)).
+    ([spec.go#L347-L351](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/spec.go#L347-L351)).
     A classifier has no coordinates, so `top1` ignores `meta` (`_`).
 
 ## Step 3: test pre- and postprocess
@@ -402,7 +402,7 @@ The struct tags of chapter 2 turn this file into a `registry.Manifest`, and life
 the fields into the `models.Config` that `New` receives: `conf_threshold` becomes
 `cfg.ConfThresh`, the lines of `imagenet1k.txt` become `cfg.Labels`, `input:` becomes the
 preprocessing spec
-([load.go#L452-L476](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L452-L476)).
+([load.go#L452-L476](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load.go#L452-L476)).
 
 !!! danger "The license field is not decoration"
     Change `license:` to `AGPL-3.0` and the registry refuses the whole manifest:

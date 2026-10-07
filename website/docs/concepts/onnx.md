@@ -72,9 +72,9 @@ If an EP is missing (for example no GPU), ORT falls back silently to the next on
 `device` field (`cpu`, `gpu:0`, `gpu:0+trt`).
 
 !!! code "Where in the code"
-    - [`internal/engine/ort.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go) — creating sessions with an EP chain and running them.
-    - [`internal/engine/provider.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go) — the EP allowlist and how the chain is resolved (`VISIONSERVE_EP`, `--tensorrt`).
-    - [`internal/engine/onnxheader.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/onnxheader.go) — reads a model's input and output names straight from the file.
+    - [`internal/engine/ort.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go) — creating sessions with an EP chain and running them.
+    - [`internal/engine/provider.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/provider.go) — the EP allowlist and how the chain is resolved (`VISIONSERVE_EP`, `--tensorrt`).
+    - [`internal/engine/onnxheader.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/onnxheader.go) — reads a model's input and output names straight from the file.
 
 ## Same input, same answer?
 

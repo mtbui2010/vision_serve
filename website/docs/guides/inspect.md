@@ -229,12 +229,12 @@ func readONNXHeader(path string) (inputs, outputs []IOInfo, err error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/onnxheader.go#L94-L107)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/onnxheader.go#L94-L107)
 
 It uses the names to bind inputs and outputs when a manifest does not list them, and the shapes
 for a check at load time (below). The converter reads the header with the same `onnx` code as
 the script above, in
-[`onnx_io`](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/convert/common.py#L429-L440),
+[`onnx_io`](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/convert/common.py#L429-L440),
 and refuses an export whose shapes the target architecture cannot decode (`check_contract`).
 
 ### Size mismatch: the manifest and the file disagree
@@ -287,7 +287,7 @@ and compares the tensor with the input shape in the file header:
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/inputshape.go#L221-L236)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/inputshape.go#L221-L236)
 
 `visionserve inspect` runs this same function and prints what it compared (`Fits the graph`).
 
@@ -340,7 +340,7 @@ $ curl -s -F model=rf-detr -F image=@photo.jpg http://127.0.0.1:11670/api/prepro
   `letterbox: true` you would see one scale (0.875 for both axes) and `pad_y: 70`.
 
 The fields are declared in
-[`internal/server/preprocess.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/preprocess.go#L13-L39).
+[`internal/server/preprocess.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/server/preprocess.go#L13-L39).
 There is no `visionserve preprocess` command; from Python use `Client.preprocess` (and
 `Client.tokenize` for the token ids of a text model). It returns numpy arrays, bit-exact. Turn
 the tensor back into a picture and compare it with what your training code builds:
@@ -371,7 +371,7 @@ mean |Δ| 0.30 gray levels, max 3.0
 ```
 
 `my_transform` here is
-[`website/tools/inspect_reference.py`](https://github.com/mtbui2010/vision_serve/blob/main/website/tools/inspect_reference.py),
+[`website/tools/inspect_reference.py`](https://github.com/mtbui2010/visionserve/blob/main/website/tools/inspect_reference.py),
 a ten-line RF-DETR training transform (squash to 560, /255, ImageNet mean/std). The difference is
 measured in **gray levels**, the 0–255 pixel units, so the number means the same thing whatever
 the normalisation. How to read it:
@@ -407,7 +407,7 @@ The B1 reference is, strongest first: your own transform (`--reference-script FI
 HuggingFace image processor), or the manifest's preprocessing re-implemented in numpy. Only the
 first two check that the manifest matches **training**; the third only checks the Go code. The
 thresholds are in
-[`convert/report.py`](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/convert/report.py#L24-L54)
+[`convert/report.py`](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/convert/report.py#L24-L54)
 and can be changed with `--threshold key=value`.
 
 ### A real run
@@ -520,7 +520,7 @@ diagnosis looks for the fingerprint each common mistake leaves in the two tensor
   resampling filter     high r^2, a ~= 1, b ~= 0, small residual
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/convert/diagnose.py#L7-L12)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/convert/diagnose.py#L7-L12)
 
 For the mean/std case it even recovers the right values: a per-channel fit `ref = a × server + b`
 turns back into the mean and std the reference used, here recognised as ImageNet. In the BGR
@@ -535,7 +535,7 @@ re-exporting; the other two are one-line manifest fixes.
     ([above](#quick-way-visionserve-check)) runs them on any installed model. The functions behind them
     (`tier_b1`, `tier_b2`, `tier_c` in `visionserve.convert.verify` / `.evaluate`) also work on
     any installed model; the `inspect` step of
-    [`website/tools/figures.py`](https://github.com/mtbui2010/vision_serve/blob/main/website/tools/figures.py),
+    [`website/tools/figures.py`](https://github.com/mtbui2010/visionserve/blob/main/website/tools/figures.py),
     which produced the figure and numbers above, is a worked example.
 
 ## 4. Inspect the postprocessing
@@ -642,7 +642,7 @@ How to read it:
 ### Tests that pin the decode
 
 Every model's pre- and postprocessing is pinned by golden tests in
-[`internal/models/golden`](https://github.com/mtbui2010/vision_serve/tree/main/internal/models/golden):
+[`internal/models/golden`](https://github.com/mtbui2010/visionserve/tree/main/internal/models/golden):
 fixed synthetic images and synthetic ONNX outputs with the **real** tensor shapes of the shipped
 exports, and the exact `Result` they must produce. A change that moves any number fails them:
 

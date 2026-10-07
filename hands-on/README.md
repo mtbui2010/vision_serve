@@ -9,7 +9,7 @@ Each notebook has the same shape:
 - an **overview**: what you will learn, the time it takes, what you need, the steps;
 - **sections**: a short explanation, the code, **What you see** (how to read the output), and a
   folded **In detail** part with more background and links to the
-  [documentation](https://mtbui2010.github.io/vision_serve/);
+  [documentation](https://mtbui2010.github.io/visionserve/);
 - a **recap** and the **next** notebook.
 
 The notebooks are saved **with their outputs**, so you can read them on GitHub first, and run
@@ -43,7 +43,7 @@ the `visionserve` program, and Jupyter.
 ### 1. Python and the packages
 
 Use Python 3.9 or newer, in a separate environment (so these packages do not change other
-projects). Pick conda **or** venv. Run the commands in the repository folder (`vision_serve`).
+projects). Pick conda **or** venv. Run the commands in the repository folder (`visionserve`).
 
 ```bash
 # conda
@@ -83,7 +83,7 @@ docker run -d -p 11435:11435 -v ~/.visionserve_models:/root/.models \
 Models are stored in `~/.visionserve_models` on your computer, so they stay after a restart.
 
 **From source** (you need Go 1.22 or newer and the ONNX Runtime library; see
-[Getting started](https://mtbui2010.github.io/vision_serve/getting-started/)):
+[Getting started](https://mtbui2010.github.io/visionserve/getting-started/)):
 
 ```bash
 make build                 # makes bin/visionserve
@@ -168,6 +168,6 @@ some scores can change a little (in the second or third digit).
 
 - First check the server: <http://127.0.0.1:11435/api/health>, and `visionserve version`.
 - Look at the "In detail" part of the section: it often explains the cause.
-- If this does not help, open an issue: <https://github.com/mtbui2010/vision_serve/issues>. Please write
+- If this does not help, open an issue: <https://github.com/mtbui2010/visionserve/issues>. Please write
   the notebook name and section, the full error message, how you run the server (Docker or from
   source, CPU or GPU), and the output of `visionserve version`.

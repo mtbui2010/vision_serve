@@ -82,7 +82,7 @@ Both SDKs talk to `http://…:11435` by default, the server's default port (one 
 loopback address `127.0.0.1` by default. Python's `urllib` tries every address `localhost`
 resolves to, so `localhost` works. Node 18's `fetch` may resolve `localhost` to the IPv6 address
 `::1` first, where nothing is listening, and fail; the JS SDK therefore defaults to `127.0.0.1`
-([`client.ts`](https://github.com/mtbui2010/vision_serve/blob/main/clients/js/src/client.ts#L224-L234)).
+([`client.ts`](https://github.com/mtbui2010/visionserve/blob/main/clients/js/src/client.ts#L224-L234)).
 If you pass your own URL to the JS client, prefer `127.0.0.1` over `localhost` too.
 
 **Another machine.** `visionserve serve` only accepts connections from the same machine unless

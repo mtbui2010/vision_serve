@@ -3,7 +3,7 @@
 Every model is a folder: weights (`.onnx`), an optional labels file, and a `manifest.yaml` that
 tells VisionServe everything else. Think of it as a *Modelfile for computer vision*. This page is
 the short version; the complete field-by-field specification is
-[`docs/manifest-spec.md`](https://github.com/mtbui2010/vision_serve/blob/main/docs/manifest-spec.md).
+[`docs/manifest-spec.md`](https://github.com/mtbui2010/visionserve/blob/main/docs/manifest-spec.md).
 
 ```text
 models/
@@ -81,6 +81,6 @@ any manifest that breaks a rule:
 - SHA-256 pins are checked when the model loads (the weights may not be downloaded at scan time).
 
 !!! code "Where in the code"
-    - [`internal/registry/manifest.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go) — parsing and validation.
-    - [`internal/registry/preprocess.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/preprocess.go) — the `preprocess:` block and its legacy aliases.
-    - [`internal/catalog/catalog.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/catalog.go) — manifests generated for models installed with `visionserve pull`.
+    - [`internal/registry/manifest.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/manifest.go) — parsing and validation.
+    - [`internal/registry/preprocess.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/preprocess.go) — the `preprocess:` block and its legacy aliases.
+    - [`internal/catalog/catalog.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/catalog/catalog.go) — manifests generated for models installed with `visionserve pull`.

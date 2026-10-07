@@ -40,7 +40,7 @@ package. A test is a function `TestXxx(t *testing.T)`:
         assert len(keep) == 1 and keep[0].conf == 0.9, keep
     ```
 
-[nms_test.go#L13-L22 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/nms/nms_test.go#L13-L22)
+[nms_test.go#L13-L22 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/nms/nms_test.go#L13-L22)
 
 There is no `assert`. You compare with ordinary `if` statements and report with:
 
@@ -50,7 +50,7 @@ There is no `assert`. You compare with ordinary `if` statements and report with:
 Because the test is in package `nms`, it can call unexported functions too. When you want
 to test only the public surface, name the package `nms_test` instead; the
 `internal/vision/preprocess` tests do this (`package preprocess_test` in
-[sync_test.go#L1](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/sync_test.go#L1)).
+[sync_test.go#L1](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/sync_test.go#L1)).
 
 | Command | What it does |
 |---|---|
@@ -88,7 +88,7 @@ func TestStatusOf(t *testing.T) {
 	}
 ```
 
-[handlers_test.go#L28-L54 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers_test.go#L28-L54)
+[handlers_test.go#L28-L54 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/handlers_test.go#L28-L54)
 
 Adding a case is one line. With `t.Run(name, func(t *testing.T) {...})` each case becomes a
 named **subtest** that reports separately and can be run alone:
@@ -119,7 +119,7 @@ func TestPhraseSpansEdgeCases(t *testing.T) {
 }
 ```
 
-[postprocess_test.go#L46-L68 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/groundingdino/postprocess_test.go#L46-L68)
+[postprocess_test.go#L46-L68 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/groundingdino/postprocess_test.go#L46-L68)
 
 ```console
 $ go test ./internal/models/groundingdino -run 'TestPhraseSpansEdgeCases/double_period' -v
@@ -155,7 +155,7 @@ func testTokenizer(t *testing.T) *Tokenizer {
 }
 ```
 
-[postprocess_test.go#L17-L24 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/groundingdino/postprocess_test.go#L17-L24)
+[postprocess_test.go#L17-L24 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/groundingdino/postprocess_test.go#L17-L24)
 
 `go test` runs with the package directory as the working directory, which is why the path
 climbs `../../..` to the repository root.
@@ -175,14 +175,14 @@ func newFakeManager(t *testing.T, reg *registry.Registry) (*Manager, *fakeOpener
 }
 ```
 
-[fixtures_test.go#L175-L183 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/fixtures_test.go#L175-L183)
+[fixtures_test.go#L175-L183 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/fixtures_test.go#L175-L183)
 
 `m.openRunnable = op.open` is a common Go testing **seam**: production code calls a
 function stored in a field or package variable, and the test replaces it. You will find
 several, e.g. `var createORTSession = createSession` in the engine
-([ort.go#L263-L264](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L263-L264))
+([ort.go#L263-L264](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L263-L264))
 and `newEngineSession` swapped in
-[pool_threads_test.go#L56-L74](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/pool_threads_test.go#L56-L74)
+[pool_threads_test.go#L56-L74](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/pool_threads_test.go#L56-L74)
 together with `t.Setenv`. It is Go's version of `unittest.mock.patch`, but explicit. The
 HTTP tests use the other approach, a fake behind an interface (chapter 3).
 
@@ -217,7 +217,7 @@ func TestMatchesNaive(t *testing.T) {
 }
 ```
 
-[nms_test.go#L137-L171 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/nms/nms_test.go#L137-L171)
+[nms_test.go#L137-L171 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/nms/nms_test.go#L137-L171)
 
 `rand.NewSource(seed)` makes the "random" data the same on every run, so a failure is
 reproducible. This pattern is very useful for model code: keep a slow, obviously correct
@@ -255,14 +255,14 @@ func TestGeometrySyncCorpus(t *testing.T) {
 }
 ```
 
-[sync_test.go#L14-L127 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/sync_test.go#L14-L127)
+[sync_test.go#L14-L127 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/sync_test.go#L14-L127)
 
 This one does double duty: the Python converter's tests read the **same** JSON file, so the
 Go and Python preprocessing cannot drift apart. The package `internal/models/golden` pins
 the end-to-end pre/postprocess output of most model packages the same way, with synthetic
 ONNX outputs of the real shapes; regenerate with `go test ./internal/models/golden -update`
 only when a behaviour change is intended
-([harness_test.go#L1-L15](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/golden/harness_test.go#L1-L15)).
+([harness_test.go#L1-L15](https://github.com/mtbui2010/visionserve/blob/main/internal/models/golden/harness_test.go#L1-L15)).
 
 ## Benchmarks
 
@@ -279,7 +279,7 @@ func BenchmarkNMS16800(b *testing.B) {
 }
 ```
 
-[nms_test.go#L83-L89 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/nms/nms_test.go#L83-L89)
+[nms_test.go#L83-L89 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/nms/nms_test.go#L83-L89)
 
 `b.ResetTimer()` excludes the setup. Benchmarks only run with `-bench`; `-run XXX` (a regexp
 that matches no test) skips the ordinary tests:
@@ -309,8 +309,8 @@ package preprocess_test
 const raceEnabled = true
 ```
 
-[race_on_test.go](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/race_on_test.go),
-[race_off_test.go](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/race_off_test.go)
+[race_on_test.go](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/race_on_test.go),
+[race_off_test.go](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/race_off_test.go)
 (`//go:build !race`, `const raceEnabled = false`).
 
 ## Try it

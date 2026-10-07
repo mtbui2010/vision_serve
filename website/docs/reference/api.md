@@ -24,7 +24,7 @@ The server listens on `http://127.0.0.1:11435` by default. Requests are `multipa
 | `DELETE` | `/api/templates/{name}` | Remove a template. |
 
 Routes are declared in
-[`internal/server/server.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go).
+[`internal/server/server.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/server/server.go).
 
 ## `GET /api/models`
 
@@ -109,7 +109,7 @@ always present; a server that predates it sends none, which the Python SDK reads
 | `encoding` | depth, embeddings | `base64`: return big float arrays as base64 float32 (≈6× faster than JSON numbers) |
 
 All fields are listed in `PredictJSONRequest` in
-[`pkg/api/types.go`](https://github.com/mtbui2010/vision_serve/blob/main/pkg/api/types.go).
+[`pkg/api/types.go`](https://github.com/mtbui2010/visionserve/blob/main/pkg/api/types.go).
 For every field's default, valid range, the models that read it and a real example, see
 [Clients › Python](../clients/python.md#every-option-at-a-glance) (the Python keyword arguments
 have the same names as these fields).
@@ -152,7 +152,7 @@ Errors are `{"error": "message"}` with a status code that says whose fault it wa
 | `500` | A server-side failure (for example a broken model file). |
 
 The mapping lives in `statusOf` in
-[`internal/server/errors.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/errors.go).
+[`internal/server/errors.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/server/errors.go).
 
 ## Clients
 

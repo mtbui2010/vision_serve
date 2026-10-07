@@ -3,7 +3,7 @@
 Real outputs of VisionServe on real photos. Each caption gives the model, the request, the
 server-side time on one RTX A6000 GPU (CUDA execution provider), and the photo's source.
 Regenerate them all with
-[`website/tools/figures.py`](https://github.com/mtbui2010/vision_serve/blob/main/website/tools/figures.py);
+[`website/tools/figures.py`](https://github.com/mtbui2010/visionserve/blob/main/website/tools/figures.py);
 the raw numbers are in [`figures.json`](assets/img/figures.json).
 
 ## Detection

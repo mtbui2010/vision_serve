@@ -154,4 +154,4 @@ The grasp models do not read depth; in Python, keep it for 3-D on your side with
 <small>Run on 6 October 2026 with SDK 0.3.0 against a server on an RTX A6000 shared with other
 jobs (CUDA, ONNX Runtime 1.26); GStreamer 1.20. Photos: COCO val2017 #177015, #389381, #372819 and
 #29596 (CC BY 2.0, see
-[CREDITS.md](https://github.com/mtbui2010/vision_serve/blob/main/website/docs/assets/img/CREDITS.md)).</small>
+[CREDITS.md](https://github.com/mtbui2010/visionserve/blob/main/website/docs/assets/img/CREDITS.md)).</small>

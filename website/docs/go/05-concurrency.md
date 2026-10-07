@@ -34,7 +34,7 @@ all CPU cores, moving them between OS threads as it likes.
     ```
 
 The lifecycle manager starts its idle reaper this way
-([manager.go#L62-L75](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L62-L75)).
+([manager.go#L62-L75](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/manager.go#L62-L75)).
 
 ## Channels and `select`
 
@@ -74,13 +74,13 @@ func parallelForW(n, workers int, fn func(w, i int)) {
 }
 ```
 
-[automask.go#L291-L313 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/mobilesam/automask.go#L291-L313)
+[automask.go#L291-L313 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/mobilesam/automask.go#L291-L313)
 
 `sync.WaitGroup` counts running goroutines; `wg.Wait()` blocks until all called `Done`. In
 Python this is `ThreadPoolExecutor(max_workers).map(fn, range(n))`. The worker number `w`
 lets each worker keep buffers of its own across the items it handles: the full-resolution
 pass gives every worker one mask buffer that the decoder writes into
-([automask.go#L238-L248](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/mobilesam/automask.go#L238-L248)),
+([automask.go#L238-L248](https://github.com/mtbui2010/visionserve/blob/main/internal/models/mobilesam/automask.go#L238-L248)),
 instead of allocating a new one (30 MB at 3200×2400) per mask. Since only one goroutine ever uses
 `logits[w]`, no lock is needed. The plain `parallelFor(n, workers, fn)` just drops `w`.
 
@@ -106,7 +106,7 @@ func (m *Manager) reaper() {
 }
 ```
 
-[reaper.go#L8-L23 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/reaper.go#L8-L23)
+[reaper.go#L8-L23 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/reaper.go#L8-L23)
 
 ## Mutexes and `sync.Once`
 
@@ -131,7 +131,7 @@ type Manager struct {
 }
 ```
 
-[manager.go#L30-L60 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L30-L60)
+[manager.go#L30-L60 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/manager.go#L30-L60)
 
 The convention is that the fields declared after `mu` are the ones it protects. The rule the
 code follows everywhere: **hold the lock briefly, never across slow work**. Closing a GPU
@@ -159,7 +159,7 @@ func ensureORT() error {
 }
 ```
 
-[ort.go#L42-L56 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L42-L56)
+[ort.go#L42-L56 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L42-L56)
 
 ## The engine: one OS thread per ONNX session
 
@@ -200,7 +200,7 @@ type Session struct {
 }
 ```
 
-[ort.go#L139-L166 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L139-L166)
+[ort.go#L139-L166 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L139-L166)
 
 **The solution.** Each `Session` starts one goroutine, the *worker*, and pins it to its OS
 thread with `runtime.LockOSThread()`. The worker creates the ORT session, then runs every
@@ -237,11 +237,11 @@ func (s *Session) worker(modelPath string, providers []Provider, so SessionOptio
 }
 ```
 
-[ort.go#L234-L261 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L234-L261)
+[ort.go#L234-L261 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L234-L261)
 
 `chan<- error` is a *send-only* channel: the worker may only send on `ready`. `NewSession`
 waits on `<-ready` so it returns only once the session exists
-([ort.go#L226-L231](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L226-L231)).
+([ort.go#L226-L231](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L226-L231)).
 
 A request goroutine never touches ORT. `Run` wraps the work in a closure and **submits** it:
 
@@ -287,7 +287,7 @@ func (s *Session) submit(ctx context.Context, work func() ([]Tensor, error)) ([]
 }
 ```
 
-[ort.go#L543-L581 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L543-L581)
+[ort.go#L543-L581 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L543-L581)
 
 ```mermaid
 sequenceDiagram
@@ -320,7 +320,7 @@ Four things to notice:
   because an ORT run cannot be interrupted. (`context.Context` is explained at the end of
   this chapter.)
 - **Closing is safe.** `Close` takes the write lock, sets `closed`, and closes `jobs`
-  ([ort.go#L651-L667](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L651-L667)).
+  ([ort.go#L651-L667](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L651-L667)).
   A late `submit` sees `closed` under the read lock and returns `ErrClosed` instead of
   panicking with "send on closed channel".
 
@@ -328,7 +328,7 @@ When one session is not enough (MobileSAM's decoder is called ~256 times per ima
 automask mode), lifecycle wraps N sessions in a `SessionPool`. The pool is a buffered
 channel of free sessions, used as a semaphore: `take` receives one (or gives up when the
 pool closes or `ctx` ends, again with a `select`), and the caller sends it back when done
-([pool.go#L73-L122](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/pool.go#L73-L122)).
+([pool.go#L73-L122](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/pool.go#L73-L122)).
 
 ## Loading a model once (single-flight)
 
@@ -384,8 +384,8 @@ func (m *Manager) Load(ctx context.Context, name string) error {
 }
 ```
 
-[load.go#L23-L31](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L23-L31),
-[#L41-L91](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L41-L91)
+[load.go#L23-L31](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load.go#L23-L31),
+[#L41-L91](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load.go#L41-L91)
 
 The build itself runs in a goroutine of its own (`go func() { ... m.lead(name, call) }()`),
 owned by no request. Every caller, including the one that started the load, then waits in
@@ -402,7 +402,7 @@ func (m *Manager) waitLoad(ctx context.Context, name string, call *loadCall) err
 }
 ```
 
-[load.go#L95-L102 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L95-L102)
+[load.go#L95-L102 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load.go#L95-L102)
 
 `chan struct{}` carries no data; it exists only to be closed. When the build finishes,
 `lead` closes `call.done` and every waiter wakes up at once, loops, and finds the model in
@@ -410,7 +410,7 @@ func (m *Manager) waitLoad(ctx context.Context, name string, call *loadCall) err
 carries on for everyone else: one client leaving, even the one that started the load,
 never cancels it. Only `Unload` and `Close` do. The test `TestConcurrentLoadsBuildOnce`
 starts 8 goroutines and checks the factory ran exactly once
-([load_test.go#L39-L73](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load_test.go#L39-L73)).
+([load_test.go#L39-L73](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load_test.go#L39-L73)).
 
 ## Admission control, leases and the reaper
 
@@ -445,7 +445,7 @@ func (m *Manager) Admit(ctx context.Context, name string) (release func(), err e
 }
 ```
 
-[admission.go#L86-L106 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/admission.go#L86-L106)
+[admission.go#L86-L106 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/admission.go#L86-L106)
 
 It returns a `release` **closure**: a function that remembers `name` and `once`. Wrapping
 it in `sync.Once` makes calling `release()` twice harmless.
@@ -481,11 +481,11 @@ decrements it. Unload and the reaper only *retire* a session that is in use; the
     }
     ```
 
-    [lease.go#L32-L53 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/lease.go#L32-L53)
+    [lease.go#L32-L53 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/lease.go#L32-L53)
 
 `PredictPrompt` uses it as `s, release, err := m.loadAndAcquire(ctx, name)` (load if needed,
 then `acquire`) followed by `defer release()`
-([manager.go#L106-L130](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L106-L130)).
+([manager.go#L106-L130](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/manager.go#L106-L130)).
 
 **Reaper.** Shown above: every 30 s it retires models idle longer than their
 `idle_unload_seconds`, skipping any with `refs > 0`.
@@ -513,13 +513,13 @@ func Predict(ctx context.Context, p Predictor, model string, img image.Image, pr
 	res, err := p.PredictPrompt(ctx, model, img, prompt)
 ```
 
-[predict.go#L24-L30 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L24-L30)
+[predict.go#L24-L30 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/predict.go#L24-L30)
 
 By convention `ctx` is the first parameter of every function that can wait on behalf of a
 request, which is why `PredictPrompt`, `Load`, `Run` and `RunNamed` all take one.
 
 The server's admit helper does the same check around admission
-([handlers.go#L95-L112](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L95-L112)).
+([handlers.go#L95-L112](https://github.com/mtbui2010/visionserve/blob/main/internal/server/handlers.go#L95-L112)).
 On shutdown, `serve` waits for SIGINT/SIGTERM on a channel and gives in-flight requests
 10 seconds with `context.WithTimeout`.
 
@@ -547,7 +547,7 @@ On shutdown, `serve` waits for SIGINT/SIGTERM on a channel and gives in-flight r
     	return nil
     ```
 
-    [serve.go#L92-L110 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/cli/serve.go#L92-L110)
+    [serve.go#L92-L110 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/cli/serve.go#L92-L110)
 
 ## Data races and the race detector
 

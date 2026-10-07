@@ -54,7 +54,7 @@ package engine
 // does) and one call through the OrtApi function table.
 ```
 
-[deterministic_cgo.go#L1-L9 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic_cgo.go#L1-L9)
+[deterministic_cgo.go#L1-L9 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/deterministic_cgo.go#L1-L9)
 
 `//go:build !windows` means "compile this file on every OS except Windows". It must be the
 first line, followed by a blank line. (Build constraints are explained below.)
@@ -98,7 +98,7 @@ static int vs_set_deterministic(const char *lib, void *options, bool value, uint
 import "C"
 ```
 
-[deterministic_cgo.go#L11-L51 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic_cgo.go#L11-L51)
+[deterministic_cgo.go#L11-L51 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/deterministic_cgo.go#L11-L51)
 
 Read it as a recipe:
 
@@ -116,7 +116,7 @@ function, and Go calls that.
 
 The index 273 is not a guess. The test `TestOrtAPIIndices` parses the `onnxruntime_c_api.h`
 header that ships with the binding and recounts the table entries
-([deterministic_test.go#L68](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic_test.go#L68)),
+([deterministic_test.go#L68](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/deterministic_test.go#L68)),
 so a binding upgrade that moved them would fail the test, not corrupt memory.
 
 ### 3. The Go side
@@ -153,7 +153,7 @@ func setDeterministicCompute(o *ort.SessionOptions) error {
 }
 ```
 
-[deterministic_cgo.go#L53-L84 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic_cgo.go#L53-L84)
+[deterministic_cgo.go#L53-L84 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/deterministic_cgo.go#L53-L84)
 
 The rules of the border between Go and C, as this function follows them:
 
@@ -168,7 +168,7 @@ The rules of the border between Go and C, as this function follows them:
 
 The function never fails the session. Its caller only logs a failure and continues with
 nondeterministic kernels
-([deterministic.go#L86-L105](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic.go#L86-L105)).
+([deterministic.go#L86-L105](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/deterministic.go#L86-L105)).
 
 ### 4. `unsafe`: reaching an unexported pointer
 
@@ -198,7 +198,7 @@ func sessionOptionsHandle(o *ort.SessionOptions) (unsafe.Pointer, error) {
 }
 ```
 
-[deterministic.go#L66-L84 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic.go#L66-L84)
+[deterministic.go#L66-L84 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/deterministic.go#L66-L84)
 
 `unsafe.Pointer` is a pointer with no type, which the compiler lets you reinterpret as any
 other pointer. Line 98 says: "take the address of field 0, treat it as the address of a
@@ -225,7 +225,7 @@ is exactly why each `engine.Session` pins its worker with `runtime.LockOSThread(
     scheduler sends a signal (`SIGURG`) to preempt long-running goroutines; arriving during a C
     call it aborted the process under load. `main()` therefore re-executes the binary once with
     `GODEBUG=asyncpreemptoff=1`, which turns that preemption signal off
-    ([main.go#L41-L65](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L41-L65)).
+    ([main.go#L41-L65](https://github.com/mtbui2010/visionserve/blob/main/cmd/visionserve/main.go#L41-L65)).
     You do not need to do anything about it; it explains the odd re-exec you may see in a
     debugger.
 
@@ -265,8 +265,8 @@ Windows a lock file with a heartbeat:
     func lockDir(dir string, out io.Writer, what string) (func(), error) {
     ```
 
-[lock_unix.go](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/lock_unix.go#L1-L21),
-[lock_other.go](https://github.com/mtbui2010/vision_serve/blob/main/internal/catalog/lock_other.go#L1-L23)
+[lock_unix.go](https://github.com/mtbui2010/visionserve/blob/main/internal/catalog/lock_unix.go#L1-L21),
+[lock_other.go](https://github.com/mtbui2010/visionserve/blob/main/internal/catalog/lock_other.go#L1-L23)
 
 Both files define `lockDir` with the same signature; exactly one is compiled. The rest of the
 package calls `lockDir` without knowing which.
@@ -282,12 +282,12 @@ package calls `lockDir` without knowing which.
 
 Expressions combine with `&&`, `||`, `!` and parentheses, e.g. `//go:build linux || darwin`
 for Linux or macOS
-([verify_fileid_unix.go#L1](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/verify_fileid_unix.go#L1)).
+([verify_fileid_unix.go#L1](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/verify_fileid_unix.go#L1)).
 
 The engine combines the two styles: `stderr_linux.go` / `stderr_other.go`, and
 `deterministic_cgo.go` (`!windows`) / `deterministic_other.go` (`windows`), which on Windows
 returns an "unsupported" error instead
-([deterministic_other.go](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic_other.go)).
+([deterministic_other.go](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/deterministic_other.go)).
 
 ## `CGO_ENABLED` and cross-compiling for arm64
 
@@ -322,10 +322,10 @@ for the Jetson target:
         run: go build ./...
 ```
 
-[ci.yml#L78-L86 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/.github/workflows/ci.yml#L78-L86)
+[ci.yml#L78-L86 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/.github/workflows/ci.yml#L78-L86)
 
 The edge Docker image does the same in its build stage
-([deploy/Dockerfile.edge#L52-L72](https://github.com/mtbui2010/vision_serve/blob/main/deploy/Dockerfile.edge#L52-L72)):
+([deploy/Dockerfile.edge#L52-L72](https://github.com/mtbui2010/visionserve/blob/main/deploy/Dockerfile.edge#L52-L72)):
 `CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build ...`, then copies
 the binary into an arm64 image that also contains `libonnxruntime.so`. The stage installs
 `libc6-dev-arm64-cross` (the arm64 C library headers) next to the compiler: with
@@ -336,7 +336,7 @@ headers.
     The Makefile target runs the same command: `CGO_ENABLED=1` with
     `CC=aarch64-linux-gnu-gcc` (override with `ARM64_CC=...`), and it stops with a clear
     message when that compiler is not installed
-    ([Makefile#L146-L151](https://github.com/mtbui2010/vision_serve/blob/main/Makefile#L146-L151)).
+    ([Makefile#L146-L151](https://github.com/mtbui2010/visionserve/blob/main/Makefile#L146-L151)).
     `make docker-arm` builds the whole arm64 image instead.
 
 ## Try it

@@ -134,7 +134,7 @@ Notebooks 03 to 07 (and pulling models) need it. Pick ONE way:
       VISIONSERVE_CLI="docker exec visionserve visionserve"
     (before you start Jupyter, or in a cell: os.environ["VISIONSERVE_CLI"] = "...")
   * You built it from source (make build): set
-      VISIONSERVE_BIN=/path/to/vision_serve/bin/visionserve
+      VISIONSERVE_BIN=/path/to/visionserve/bin/visionserve
     or put bin/ on your PATH.
 
 Note: `pip install visionserve` also installs a Python command called `visionserve`.

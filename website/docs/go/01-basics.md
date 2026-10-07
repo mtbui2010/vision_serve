@@ -49,7 +49,7 @@ func main() {
 }
 ```
 
-[main.go#L1-L40 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L1-L40)
+[main.go#L1-L40 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/cmd/visionserve/main.go#L1-L40)
 
 Things to notice:
 
@@ -72,7 +72,7 @@ import (
 )
 ```
 
-[preprocess.go#L3-L9 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/preprocess.go#L3-L9)
+[preprocess.go#L3-L9 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/classification/preprocess.go#L3-L9)
 
 Outside packages (`github.com/disintegration/imaging`, `gopkg.in/yaml.v3`) are listed in
 `go.mod` with a version; `go.sum` stores their hashes so every build gets the same bytes.
@@ -116,9 +116,9 @@ type box struct {
 }
 ```
 
-[nms.go#L15-L30](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/nms/nms.go#L15-L30),
-[#L42](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/nms/nms.go#L42),
-[#L120-L123](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/nms/nms.go#L120-L123)
+[nms.go#L15-L30](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/nms/nms.go#L15-L30),
+[#L42](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/nms/nms.go#L42),
+[#L120-L123](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/nms/nms.go#L120-L123)
 
 The same rule applies to struct fields. This matters for JSON: `encoding/json` can only
 see exported fields, which is why every field of `api.Result` starts with a capital letter
@@ -150,13 +150,13 @@ const (
 )
 ```
 
-[apply.go#L12-L19 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/apply.go#L12-L19)
+[apply.go#L12-L19 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/apply.go#L12-L19)
 
 More often the project uses *string* constants of a named type, so the JSON and YAML stay
 readable: `TaskDetection Task = "detection"` in
-[pkg/api/types.go#L9-L18](https://github.com/mtbui2010/vision_serve/blob/main/pkg/api/types.go#L9-L18)
+[pkg/api/types.go#L9-L18](https://github.com/mtbui2010/visionserve/blob/main/pkg/api/types.go#L9-L18)
 or `ProviderCUDA Provider = "cuda"` in
-[engine/provider.go#L15-L22](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L15-L22).
+[engine/provider.go#L15-L22](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/provider.go#L15-L22).
 
 ## Functions with several results
 
@@ -183,7 +183,7 @@ func LetterboxSize(w, h, W, H int) (nw, nh int, scale float64, padX, padY int) {
 }
 ```
 
-[geometry.go#L9-L25 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/geometry.go#L9-L25)
+[geometry.go#L9-L25 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/geometry.go#L9-L25)
 
 Notice:
 
@@ -194,7 +194,7 @@ Notice:
   inside the `if`. You will see this pattern everywhere, especially with errors:
   `if err := f(); err != nil { ... }`.
 - The caller unpacks like a Python tuple: `nw, nh, scale, px, py := LetterboxSize(ow, oh, W, H)`
-  ([apply.go#L44](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/apply.go#L44)).
+  ([apply.go#L44](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/apply.go#L44)).
 
 ## Slices: Go's lists (and numpy views)
 
@@ -247,7 +247,7 @@ Softmax in the classification model shows the everyday operations:
         return (e / e.sum()).astype(np.float32)
     ```
 
-[postprocess.go#L83-L111 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/postprocess.go#L83-L111)
+[postprocess.go#L83-L111 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/classification/postprocess.go#L83-L111)
 
 There is no vectorised maths in Go: you write the loop. That is fine. A Go loop compiles to
 machine code, so it is in the same league as the C loop inside numpy, not a slow Python loop.
@@ -280,7 +280,7 @@ type Tensor struct {
 }
 ```
 
-[tensor.go#L8-L13 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/tensor.go#L8-L13)
+[tensor.go#L8-L13 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/tensor.go#L8-L13)
 
 The preprocessing code writes an NCHW tensor by cutting the flat buffer into three channel
 planes. Each plane is a slice that *shares memory* with `data`, just like
@@ -302,7 +302,7 @@ planes. Each plane is a slice that *shares memory* with `data`, just like
 		}
 ```
 
-[apply.go#L199-L211 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/apply.go#L199-L211)
+[apply.go#L199-L211 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/apply.go#L199-L211)
 
 `pix` is the image's raw RGBA bytes (4 per pixel), `lut` a 256-entry lookup table that
 already holds `(p/255 - mean) / std` for every byte value.
@@ -334,7 +334,7 @@ func canonicalLicense(declared string) (string, bool) {
 }
 ```
 
-[manifest.go#L29-L47 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L29-L47)
+[manifest.go#L29-L47 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/manifest.go#L29-L47)
 
 === "Go"
 
@@ -359,7 +359,7 @@ func canonicalLicense(declared string) (string, bool) {
 !!! note "Map order is random on purpose"
     Go randomises map iteration order, so code cannot depend on it by accident. When the
     order matters, collect the keys and sort them, as `models.Registered()` does
-    ([model.go#L323-L333](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L323-L333)).
+    ([model.go#L323-L333](https://github.com/mtbui2010/visionserve/blob/main/internal/models/model.go#L323-L333)).
 
 ## `switch`
 
@@ -382,7 +382,7 @@ clean if/else-if chain. The classification postprocess checks the output shape t
 	}
 ```
 
-[postprocess.go#L30-L42 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/postprocess.go#L30-L42)
+[postprocess.go#L30-L42 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/classification/postprocess.go#L30-L42)
 
 ## Try it
 

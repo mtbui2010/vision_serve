@@ -4,20 +4,20 @@
 machine over HTTP: detection, segmentation, open-vocabulary detection, depth, faces, OCR,
 embeddings, grasping. No account, no cloud, no telemetry. Apache-2.0.
 
-📖 **Documentation: <https://mtbui2010.github.io/vision_serve/>**: concepts, how it works,
+📖 **Documentation: <https://mtbui2010.github.io/visionserve/>**: concepts, how it works,
 model gallery, HTTP API, and a Go tutorial built on this code base.
 
 | I want to… | Read |
 |---|---|
-| Install it (Docker or from source, GPU setup) | [Getting started](https://mtbui2010.github.io/vision_serve/getting-started/) |
-| Choose a model and run it | [Models and performance](https://mtbui2010.github.io/vision_serve/reference/models/) · [What the models do](https://mtbui2010.github.io/vision_serve/concepts/tasks/) · [Run your first request](https://mtbui2010.github.io/vision_serve/getting-started/#4-make-a-request) |
-| Learn by doing (notebooks) | [Hands-on notebooks](hands-on/) · [Hands-on on the website](https://mtbui2010.github.io/vision_serve/hands-on/) |
-| Use a model you trained (convert a checkpoint, import an ONNX file) | [Use a model you trained](https://mtbui2010.github.io/vision_serve/guides/use-your-model/) · [Getting started, step 6](https://mtbui2010.github.io/vision_serve/getting-started/#6-use-a-model-you-trained) |
-| Inspect a model: what it takes and returns, does it behave like training | [See what a model takes and returns](https://mtbui2010.github.io/vision_serve/guides/see-a-model/) · [Check it behaves like training](https://mtbui2010.github.io/vision_serve/guides/check-training/) · [Worse than in training?](https://mtbui2010.github.io/vision_serve/guides/worse-than-training/) |
-| Make it fast on Jetson (Orin, Thor) | [Make it smaller and faster for Jetson](https://mtbui2010.github.io/vision_serve/guides/jetson/) · [Measure speed](https://mtbui2010.github.io/vision_serve/guides/measure-speed/) |
-| Call it from Python / JavaScript, with every parameter explained | [Clients](https://mtbui2010.github.io/vision_serve/clients/) · [Python](https://mtbui2010.github.io/vision_serve/clients/python/) |
-| Call the HTTP API directly | [HTTP API](https://mtbui2010.github.io/vision_serve/reference/api/) |
-| Understand or change the code | [How it works](https://mtbui2010.github.io/vision_serve/architecture/) · [Go for this project](https://mtbui2010.github.io/vision_serve/go/) |
+| Install it (Docker or from source, GPU setup) | [Getting started](https://mtbui2010.github.io/visionserve/getting-started/) |
+| Choose a model and run it | [Models and performance](https://mtbui2010.github.io/visionserve/reference/models/) · [What the models do](https://mtbui2010.github.io/visionserve/concepts/tasks/) · [Run your first request](https://mtbui2010.github.io/visionserve/getting-started/#4-make-a-request) |
+| Learn by doing (notebooks) | [Hands-on notebooks](hands-on/) · [Hands-on on the website](https://mtbui2010.github.io/visionserve/hands-on/) |
+| Use a model you trained (convert a checkpoint, import an ONNX file) | [Use a model you trained](https://mtbui2010.github.io/visionserve/guides/use-your-model/) · [Getting started, step 6](https://mtbui2010.github.io/visionserve/getting-started/#6-use-a-model-you-trained) |
+| Inspect a model: what it takes and returns, does it behave like training | [See what a model takes and returns](https://mtbui2010.github.io/visionserve/guides/see-a-model/) · [Check it behaves like training](https://mtbui2010.github.io/visionserve/guides/check-training/) · [Worse than in training?](https://mtbui2010.github.io/visionserve/guides/worse-than-training/) |
+| Make it fast on Jetson (Orin, Thor) | [Make it smaller and faster for Jetson](https://mtbui2010.github.io/visionserve/guides/jetson/) · [Measure speed](https://mtbui2010.github.io/visionserve/guides/measure-speed/) |
+| Call it from Python / JavaScript, with every parameter explained | [Clients](https://mtbui2010.github.io/visionserve/clients/) · [Python](https://mtbui2010.github.io/visionserve/clients/python/) |
+| Call the HTTP API directly | [HTTP API](https://mtbui2010.github.io/visionserve/reference/api/) |
+| Understand or change the code | [How it works](https://mtbui2010.github.io/visionserve/architecture/) · [Go for this project](https://mtbui2010.github.io/visionserve/go/) |
 
 ![Grounded-SAM: "dog. person. bench."](website/docs/assets/img/grounded-sam-372819.jpg)
 
@@ -50,7 +50,7 @@ bin/visionserve serve                        # http://127.0.0.1:11435
 
 **Clients:** `pip install visionserve` (Python), `npm install visionserve` (JS/TS).
 
-See [Getting started](https://mtbui2010.github.io/vision_serve/getting-started/) for GPU setup,
+See [Getting started](https://mtbui2010.github.io/visionserve/getting-started/) for GPU setup,
 prompts, Python and JavaScript examples.
 
 ## Models
@@ -66,8 +66,8 @@ prompts, Python and JavaScript examples.
 | Robotics | `grasp-rfdetr`, `grasp-gd`, `background` |
 
 `visionserve list` shows what is installed and what can be pulled. Sources, licences, a selection
-guide and GPU latency: [Models and performance](https://mtbui2010.github.io/vision_serve/reference/models/).
-Real outputs: [model gallery](https://mtbui2010.github.io/vision_serve/gallery/).
+guide and GPU latency: [Models and performance](https://mtbui2010.github.io/visionserve/reference/models/).
+Real outputs: [model gallery](https://mtbui2010.github.io/visionserve/gallery/).
 
 ## Principles
 
@@ -82,7 +82,7 @@ Real outputs: [model gallery](https://mtbui2010.github.io/vision_serve/gallery/)
 Read [CLAUDE.md](CLAUDE.md) (project rules) and
 [docs/engineering-rules.md](docs/engineering-rules.md) (rules learned from real bugs). Adding a
 model: [docs/contributing-models.md](docs/contributing-models.md) and the
-[walkthrough](https://mtbui2010.github.io/vision_serve/go/08-add-a-model/).
+[walkthrough](https://mtbui2010.github.io/visionserve/go/08-add-a-model/).
 Reference material that used to live here: [docs/architecture.md](docs/architecture.md),
 [docs/manifest-spec.md](docs/manifest-spec.md), [deploy/README.md](deploy/README.md) (Docker),
 [clients/python](clients/python/README.md), [clients/js](clients/js/README.md).

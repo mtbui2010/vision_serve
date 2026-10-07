@@ -64,7 +64,7 @@ type Manager struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L31-L60)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/manager.go#L31-L60)
 
 The request entry point is `PredictPrompt`: load if needed, take a lease, run, give the lease back.
 
@@ -82,7 +82,7 @@ func (m *Manager) PredictPrompt(ctx context.Context, name string, img image.Imag
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L106-L116)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/manager.go#L106-L116)
 
 `loadAndAcquire` calls `Load` and then `acquire`, and checks `ctx` in between, so a request whose
 client left during the load takes no lease.
@@ -141,7 +141,7 @@ the GPU memory, and nine copies would be thrown away.
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L45-L90)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load.go#L45-L90)
 
 The load runs on its own goroutine, owned by no request. `ctx` bounds only each caller's *wait*:
 if one waiter's client leaves, even the one that started the load, that waiter returns and the
@@ -189,7 +189,7 @@ func (m *Manager) release(s *Session) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/lease.go#L32-L53)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/lease.go#L32-L53)
 
 Unloading only *retires* a session: it disappears from the live map at once (new requests load a
 fresh copy), but the actual close happens when the last lease is released. Before leases existed,
@@ -219,7 +219,7 @@ func (m *Manager) expireIdle(now time.Time) []*Session {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/reaper.go#L28-L40)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/reaper.go#L28-L40)
 
 The timeout comes from the manifest (`runtime.idle_unload_seconds`, 300 in almost every shipped manifest;
 `0` means never). `visionserve serve --idle-unload-seconds N` overrides it for every model: `-1`
@@ -262,7 +262,7 @@ func newRunnable(path string, inputNames, outputNames []string, n, threads int, 
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L257-L292)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load.go#L257-L292)
 
 `VS_POOL_OVERRIDE=n` forces every role (and plain models too) to a pool of `n`. It exists for
 benchmark sweeps, not for normal use.
@@ -289,7 +289,7 @@ func (r runner) Run(role string, inputs map[string]engine.Tensor) ([]engine.Tens
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L250-L261)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/session.go#L250-L261)
 
 The runner carries the request's `ctx`, so the model's `Infer` keeps its `(img, prompt, Runner)`
 signature while every session call still waits under the request's context. The runner also
@@ -322,7 +322,7 @@ func (s *Session) inferPipeline(ctx context.Context, img image.Image, prompt mod
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L123-L136)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/session.go#L123-L136)
 
 ### Admission control
 
@@ -349,7 +349,7 @@ func (m *Manager) admitLimitLocked(name string) int {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/admission.go#L119-L131)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/admission.go#L119-L131)
 
 The automatic bound is `max(32, 2 × slots)`, where *slots* is the model's largest session pool (1
 for a single session, and 1 for an Exclusive model whatever its pools). `VISIONSERVE_MAX_QUEUE=n`
@@ -393,7 +393,7 @@ func poolIntraOpThreads(n, ncpu int, env string) (threads int, warn string) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L351-L367)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load.go#L351-L367)
 
 The rules, in order of precedence:
 
@@ -433,7 +433,7 @@ func (c *digestCache) sha256(path string) (string, error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/verify.go#L527-L559)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/verify.go#L527-L559)
 
 ### Preprocess without inference
 
@@ -455,7 +455,7 @@ func (r *recordingRunner) Run(role string, inputs map[string]engine.Tensor) ([]e
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/preprocess.go#L111-L116)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/preprocess.go#L111-L116)
 
 ### Explain (heatmaps)
 
@@ -488,7 +488,7 @@ var (
 )
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/errors.go#L8-L15)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/errors.go#L8-L15)
 
 ## Where in the code
 

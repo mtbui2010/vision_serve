@@ -9,7 +9,7 @@ VisionServe keeps it exact.
 Most models take a fixed square input, such as 640 × 640. A photo is rarely that shape, so
 there are several ways to fit it. VisionServe implements each as a **mode** of one shared
 preprocessing library,
-[`internal/vision/preprocess`](https://github.com/mtbui2010/vision_serve/tree/main/internal/vision/preprocess).
+[`internal/vision/preprocess`](https://github.com/mtbui2010/visionserve/tree/main/internal/vision/preprocess).
 Here is the same photo prepared for five different models — these are the real tensors, fetched
 from the server's `/api/preprocess` endpoint and turned back into pictures:
 
@@ -70,10 +70,10 @@ pixels:
 </figure>
 
 !!! code "Where in the code"
-    - [`spec.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go) — the `Spec` (mode, size, mean/std…) and the `Meta` record.
-    - [`apply.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/apply.go) — one function that runs every mode.
-    - [`geometry.go`](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/geometry.go) — the size arithmetic of each mode, copied from each model's reference code.
-    - [`internal/vision/geom`](https://github.com/mtbui2010/vision_serve/tree/main/internal/vision/geom) — mapping boxes back (`Affine.BoxToOrig`).
+    - [`spec.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/spec.go) — the `Spec` (mode, size, mean/std…) and the `Meta` record.
+    - [`apply.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/apply.go) — one function that runs every mode.
+    - [`geometry.go`](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/geometry.go) — the size arithmetic of each mode, copied from each model's reference code.
+    - [`internal/vision/geom`](https://github.com/mtbui2010/visionserve/tree/main/internal/vision/geom) — mapping boxes back (`Affine.BoxToOrig`).
 
 !!! warning "Why so much care?"
     The most common bug in serving vision models is a preprocessing mismatch: a model trained

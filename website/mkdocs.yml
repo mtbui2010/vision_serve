@@ -1,8 +1,8 @@
 site_name: VisionServe
 site_description: One small Go binary that serves computer-vision models locally — detection, segmentation, open-vocabulary detection, depth and more — through ONNX Runtime.
-site_url: https://mtbui2010.github.io/vision_serve/
-repo_url: https://github.com/mtbui2010/vision_serve
-repo_name: mtbui2010/vision_serve
+site_url: https://mtbui2010.github.io/visionserve/
+repo_url: https://github.com/mtbui2010/visionserve
+repo_name: mtbui2010/visionserve
 edit_uri: edit/main/website/docs/
 copyright: VisionServe is Apache-2.0. Example photos are from COCO val2017 (CC BY 2.0, credited on each page).
 
@@ -117,4 +117,4 @@ nav:
       - HTTP API: reference/api.md
       - Configuration: reference/configuration.md
       - Manifest format: reference/manifest.md
-      - Engineering rules: https://github.com/mtbui2010/vision_serve/blob/main/docs/engineering-rules.md
+      - Engineering rules: https://github.com/mtbui2010/visionserve/blob/main/docs/engineering-rules.md

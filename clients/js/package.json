@@ -38,13 +38,13 @@
     "sdk"
   ],
   "license": "Apache-2.0",
-  "homepage": "https://github.com/mtbui2010/vision_serve/tree/main/clients/js#readme",
+  "homepage": "https://github.com/mtbui2010/visionserve/tree/main/clients/js#readme",
   "bugs": {
-    "url": "https://github.com/mtbui2010/vision_serve/issues"
+    "url": "https://github.com/mtbui2010/visionserve/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/mtbui2010/vision_serve.git",
+    "url": "git+https://github.com/mtbui2010/visionserve.git",
     "directory": "clients/js"
   },
   "devDependencies": {

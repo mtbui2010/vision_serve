@@ -65,7 +65,7 @@ type GraspPlanner interface {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/pipeline/stage.go#L31-L75)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/pipeline/stage.go#L31-L75)
 
 The concrete stages wrap existing model packages instead of copying them:
 
@@ -121,7 +121,7 @@ func (g Grounded) Infer(c Call, words []string) (models.Result, error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/pipeline/grounded.go#L13-L26)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/pipeline/grounded.go#L13-L26)
 
 The model package only declares its roles and plugs the stages in. MobileSAM's encoder runs once
 per request; the decoder runs once per box, on a pool of four decoder copies so boxes are
@@ -141,7 +141,7 @@ func (m *groundedSAM) PoolSizes() map[string]int { return map[string]int{roleDec
 func (m *groundedSAM) Exclusive() bool { return true }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/groundedsam/groundedsam.go#L57-L76)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/groundedsam/groundedsam.go#L57-L76)
 
 Masks come back index-aligned with the detections, and each mask carries its detection's `bbox`
 and `conf`, so a client can pair them without the detections list.
@@ -177,7 +177,7 @@ func packPhrases(pp []promptPhrase) [][]promptPhrase {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/groundingdino/groundingdino.go#L277-L289)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/groundingdino/groundingdino.go#L277-L289)
 
 A single phrase too long to fit on its own is rejected up front as a bad prompt (HTTP 400),
 before any pass runs. Thresholds resolve in one order for every GroundingDINO pipeline: the
@@ -214,7 +214,7 @@ word by word (`Partition`) and asks each detector only about the words it is sui
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/pipeline/router.go#L50-L77)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/pipeline/router.go#L50-L77)
 
 Some behaviour worth knowing:
 
@@ -261,7 +261,7 @@ multiplies its confidence by that probability:
 	return out, nil
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/pipeline/cropnamer.go#L148-L158)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/pipeline/cropnamer.go#L148-L158)
 
 The effect is mostly rejection: on a background crop SigLIP is confident about no word, the
 softmax flattens, and the false detection sinks. The same `CropNamer` also backs the crop head
@@ -286,7 +286,7 @@ func (e *TextEmbedder) Key(word string) string {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/pipeline/textembed.go#L113-L116)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/pipeline/textembed.go#L113-L116)
 
 The tokenizer is chosen from what the text tower's directory contains (`tokenizer.json` means
 SigLIP, `vocab.json` plus `merges.txt` means CLIP), so a manifest cannot claim one tokenizer
@@ -324,7 +324,7 @@ pairs that pass a friction-cone (force-closure) test and fit the gripper's openi
 		}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/pipeline/grasp.go#L76-L105)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/pipeline/grasp.go#L76-L105)
 
 The manifest picks the detector with `detector:`:
 
@@ -378,7 +378,7 @@ func (m *backgroundModel) backgroundAuto(img image.Image, prompt models.Prompt, 
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/background/background.go#L227-L239)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/background/background.go#L227-L239)
 
 A manifest may declare only the sessions it needs; asking for a method whose sessions are missing
 is an error that names the missing `files:` role. `bg_max_area`, `fg_min_area` and `grid_size`

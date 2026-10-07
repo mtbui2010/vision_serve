@@ -99,7 +99,7 @@ keyword-only:
     ) -> Result:
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L136-L164)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/client.py#L136-L164)
 
 An option left at `None` is not sent at all, and the server then uses the model's own default
 (from its `manifest.yaml`, or a built-in value). An option a model does not read is ignored
@@ -108,7 +108,7 @@ without an error: check the "Read by" column.
 ### Every option at a glance
 
 Each keyword is sent as the form field of the **same name** (`api.PredictJSONRequest` in
-[`pkg/api/types.go`](https://github.com/mtbui2010/vision_serve/blob/main/pkg/api/types.go)), so
+[`pkg/api/types.go`](https://github.com/mtbui2010/visionserve/blob/main/pkg/api/types.go)), so
 this table also documents the [plain HTTP](http.md) fields. The three exceptions are marked.
 
 | Option | Type | Default (`None`) | Read by | What it does |
@@ -458,7 +458,7 @@ The rule, from the SDK:
     return text
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/client.py#L898-L906)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/client.py#L898-L906)
 
 CLIP and SigLIP prompts are sent unchanged, because a comma is part of a sentence there
 (`"a photo of a cat, sleeping"`). GroundingDINO reads at most 256 text tokens per pass; a longer
@@ -1108,7 +1108,7 @@ def draw(
 ) -> Any:
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/clients/python/visionserve/visualize.py#L184-L201)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/clients/python/visionserve/visualize.py#L184-L201)
 
 | Argument | Default | What it does |
 |---|---|---|
@@ -2504,4 +2504,4 @@ COCO val2017, CC BY 2.0: `cat.jpg` is #177015
 #29596 ([Flickr](http://farm2.staticflickr.com/1174/4724268948_f93c2cb404_z.jpg)),
 `elephant.jpg` #564133 ([Flickr](http://farm9.staticflickr.com/8348/8197453784_a3be1b210e_z.jpg));
 `photos/` holds #177015, #263969, #29596, #363840, #372819, #389381, #564133 and #8021 (all
-credited in [CREDITS.md](https://github.com/mtbui2010/vision_serve/blob/main/website/docs/assets/img/CREDITS.md)).
+credited in [CREDITS.md](https://github.com/mtbui2010/visionserve/blob/main/website/docs/assets/img/CREDITS.md)).

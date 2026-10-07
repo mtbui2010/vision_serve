@@ -10,7 +10,7 @@
 #
 # ONE-TIME SETUP (on pypi.org and test.pypi.org → your account → Publishing):
 #   Add a "Trusted Publisher" for project `visionserve` with:
-#     Owner/Repository: mtbui2010/vision_serve
+#     Owner/Repository: mtbui2010/visionserve
 #     Workflow name:    pypi.yml
 #     Environment:      pypi        (for PyPI)   /   testpypi (for TestPyPI)
 #   The tag must equal __version__ in clients/python/visionserve/__init__.py (the build job

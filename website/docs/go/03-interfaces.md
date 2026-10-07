@@ -45,10 +45,10 @@ type Model interface {
 }
 ```
 
-[model.go#L40-L65 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L40-L65)
+[model.go#L40-L65 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/model.go#L40-L65)
 
 The classification package has a private struct with exactly these six methods
-([classification.go#L46-L59](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/classification.go#L46-L59)).
+([classification.go#L46-L59](https://github.com/mtbui2010/visionserve/blob/main/internal/models/classification/classification.go#L46-L59)).
 That is all it takes for `*classificationModel` to be a `models.Model`.
 
 Because nothing is declared, nothing would complain if a method were misspelled: the type
@@ -61,7 +61,7 @@ asks the compiler to check it (more on this trick in "Try it" below):
 var _ models.Model = (*classificationModel)(nil)
 ```
 
-[classification.go#L21-L23 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/classification.go#L21-L23)
+[classification.go#L21-L23 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/classification/classification.go#L21-L23)
 
 === "Go"
 
@@ -111,8 +111,8 @@ type PipelineModel interface {
 }
 ```
 
-[model.go#L124-L127](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L124-L127),
-[#L283-L289](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L283-L289)
+[model.go#L124-L127](https://github.com/mtbui2010/visionserve/blob/main/internal/models/model.go#L124-L127),
+[#L283-L289](https://github.com/mtbui2010/visionserve/blob/main/internal/models/model.go#L283-L289)
 
 ```mermaid
 classDiagram
@@ -188,7 +188,7 @@ func New(name string, cfg Config) (Base, error) {
 }
 ```
 
-[model.go#L291-L321 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L291-L321)
+[model.go#L291-L321 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/model.go#L291-L321)
 
 `Factory` is a *function type*: functions are values in Go, like in Python. Each model
 package registers its factory in a function called `init`:
@@ -200,7 +200,7 @@ func init() {
 }
 ```
 
-[classification.go#L25-L28 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/classification.go#L25-L28)
+[classification.go#L25-L28 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/classification/classification.go#L25-L28)
 
 `init` is special: Go runs it automatically when the package is loaded, before `main()`.
 But a package is only loaded if something imports it. Nothing calls the classification
@@ -245,7 +245,7 @@ with a **type switch**:
 	}
 ```
 
-[load.go#L165-L244 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L165-L244)
+[load.go#L165-L244 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load.go#L165-L244)
 
 Inside each `case`, `mdl` has the concrete interface type, so `mdl.Roles()` compiles in the
 first branch and `mdl.Preprocess(...)` in the second.
@@ -271,14 +271,14 @@ func newPipelineSession(name string, task api.Task, p models.PipelineModel, engs
 }
 ```
 
-[session.go#L77-L90 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L77-L90)
+[session.go#L77-L90 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/session.go#L77-L90)
 
 In Python you would write `isinstance(p, Exclusive) and p.exclusive()` or
 `getattr(p, "exclusive", None)`. `models.PoolSizer` works the same way
-([load.go#L175-L180](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/load.go#L175-L180)).
+([load.go#L175-L180](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/load.go#L175-L180)).
 You can even assert to an interface written on the spot:
 `r.(interface{ Size() int })` in
-[session.go#L240-L245](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L240-L245).
+[session.go#L240-L245](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/session.go#L240-L245).
 
 ## Two implementations behind one interface
 
@@ -303,7 +303,7 @@ type Runnable interface {
 }
 ```
 
-[pool.go#L8-L22 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/pool.go#L8-L22)
+[pool.go#L8-L22 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/pool.go#L8-L22)
 
 The first argument, `ctx context.Context`, is Go's standard way to say "this call belongs to a
 request, and the request may be cancelled"; chapter 5 shows it in use.
@@ -329,7 +329,7 @@ func (r runner) Run(role string, inputs map[string]engine.Tensor) ([]engine.Tens
 }
 ```
 
-[session.go#L247-L261 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L247-L261)
+[session.go#L247-L261 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/session.go#L247-L261)
 
 ## Small interfaces make testing easy
 
@@ -356,10 +356,10 @@ type modelRuntime interface {
 }
 ```
 
-[server.go#L27-L43 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L27-L43)
+[server.go#L27-L43 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/server.go#L27-L43)
 
 `*lifecycle.Manager` has all these methods, so production code passes the real manager
-([server.go#L54-L56](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L54-L56)).
+([server.go#L54-L56](https://github.com/mtbui2010/visionserve/blob/main/internal/server/server.go#L54-L56)).
 The tests pass a `fakeRuntime` that records calls and returns canned answers:
 
 ```go title="internal/server/fake_test.go (lines 23-43, 105-117, trimmed)"
@@ -391,13 +391,13 @@ func (f *fakeRuntime) PredictPrompt(ctx context.Context, name string, img image.
 }
 ```
 
-[fake_test.go#L23-L117 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/fake_test.go#L23-L117)
+[fake_test.go#L23-L117 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/fake_test.go#L23-L117)
 
 `wait` lets a test hold a call "waiting for the model" and then cancel the request's
 context, to check that the handler answers 499 and releases its admission slot.
 
 The same idea, even smaller: `server.Predict` takes a one-method `Predictor`
-([predict.go#L13-L16](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L13-L16)),
+([predict.go#L13-L16](https://github.com/mtbui2010/visionserve/blob/main/internal/server/predict.go#L13-L16)),
 which is why both the HTTP handler and the `visionserve run` command can share it.
 
 !!! tip "Go proverb: accept interfaces, return structs"

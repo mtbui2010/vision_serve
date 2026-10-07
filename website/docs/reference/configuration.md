@@ -78,7 +78,7 @@ the converter (Docker image, or a local Python with `--python`). See
 [Make it smaller and faster for Jetson](../guides/jetson.md).
 
 The source of truth for flags is `visionserve help` and
-[`internal/cli`](https://github.com/mtbui2010/vision_serve/tree/main/internal/cli).
+[`internal/cli`](https://github.com/mtbui2010/visionserve/tree/main/internal/cli).
 
 ## Environment variables
 

@@ -81,7 +81,7 @@ Quick reference for choosing the right model. All models are free (Apache-2.0 / 
 Measured on a single **NVIDIA RTX A6000 (48 GB VRAM)**, 48-core CPU, 251 GB RAM.
 Latency = median of 30 warm requests via the HTTP server (model already loaded).
 Cold-start = wall-clock time from server launch to first response (includes model load +
-ONNX session creation + first inference). Scripts live in [`benchmarks/`](https://github.com/mtbui2010/vision_serve/tree/main/benchmarks).
+ONNX session creation + first inference). Scripts live in [`benchmarks/`](https://github.com/mtbui2010/visionserve/tree/main/benchmarks).
 
 ### Latency — all models (VisionServe Go HTTP, GPU)
 

@@ -37,14 +37,14 @@ flowchart LR
     (`libonnxruntime.so`). New to Go? See [Go for this project](go/index.md).
 
     ```bash
-    git clone https://github.com/mtbui2010/vision_serve.git
-    cd vision_serve
+    git clone https://github.com/mtbui2010/visionserve.git
+    cd visionserve
     make build                       # -> bin/visionserve
     export ORT_DYLIB_PATH=/path/to/libonnxruntime.so
     ```
 
     `make serve` / `make run` find a CUDA-enabled ONNX Runtime for you through
-    [`scripts/gpu-env.sh`](https://github.com/mtbui2010/vision_serve/blob/main/scripts/gpu-env.sh)
+    [`scripts/gpu-env.sh`](https://github.com/mtbui2010/visionserve/blob/main/scripts/gpu-env.sh)
     and fall back to the CPU if there is none (`GPU=0` forces the CPU). The script only picks
     a library whose CUDA EP can load on your driver: an ORT built for CUDA 13 on a driver that
     supports CUDA 12.8 is skipped, and it prints which library it chose and why it skipped the

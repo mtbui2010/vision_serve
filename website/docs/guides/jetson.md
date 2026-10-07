@@ -136,7 +136,7 @@ $ docker buildx build --platform linux/arm64 -f deploy/Dockerfile.edge --build-a
 
 It builds on an ordinary x86 PC (checked on 5 October 2026), but has not run on an Orin yet.
 Jetson Thor (JetPack 7) has its own `deploy/Dockerfile.thor`. Details and the build options:
-[deploy/README.md](https://github.com/mtbui2010/vision_serve/blob/main/deploy/README.md#jetson--arm64).
+[deploy/README.md](https://github.com/mtbui2010/visionserve/blob/main/deploy/README.md#jetson--arm64).
 On the device, set the power mode before you measure (`sudo nvpmodel -q`; `sudo jetson_clocks`
 for stable clocks) and write down which one you used.
 

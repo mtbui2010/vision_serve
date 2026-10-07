@@ -36,7 +36,7 @@ handful of structs in `pkg/api`:
         conf: float
     ```
 
-[types.go#L52-L58 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/pkg/api/types.go#L52-L58)
+[types.go#L52-L58 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/pkg/api/types.go#L52-L58)
 
 You build a struct value with a **composite literal**, naming the fields:
 
@@ -66,7 +66,7 @@ type Result struct {
 }
 ```
 
-[types.go#L20-L44 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/pkg/api/types.go#L20-L44)
+[types.go#L20-L44 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/pkg/api/types.go#L20-L44)
 
 ## Struct tags: JSON out, YAML in
 
@@ -100,7 +100,7 @@ type Manifest struct {
 }
 ```
 
-[manifest.go#L123-L247 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L123-L247)
+[manifest.go#L123-L247 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/manifest.go#L123-L247)
 
 So this manifest fragment fills `m.Input.Normalize.Mean`:
 
@@ -127,7 +127,7 @@ func LoadManifest(path string) (*Manifest, error) {
 	}
 ```
 
-[manifest.go#L255-L264 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L255-L264)
+[manifest.go#L255-L264 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/manifest.go#L255-L264)
 
 !!! tip "Unknown YAML keys are ignored, with a warning"
     `yaml.Unmarshal` does not fail on a misspelt key (`idle_unload_second:`); it simply leaves
@@ -136,7 +136,7 @@ func LoadManifest(path string) (*Manifest, error) {
     `unknown key(s) ignored, check for a typo: runtime.idle_unload_second (line 14)`. When a
     manifest "does nothing", look for that warning, or compare its keys with the tags above. The
     tag `yaml:"-"` (used on `dir` at
-    [L237-L238](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L237-L238))
+    [L237-L238](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/manifest.go#L237-L238))
     means "never read this field from YAML".
 
 ## Zero values: empty means default
@@ -166,7 +166,7 @@ type Spec struct {
 }
 ```
 
-[spec.go#L99-L143 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L99-L143)
+[spec.go#L99-L143 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/spec.go#L99-L143)
 
 `NoRescale bool` is named so that its zero value (`false`) is the usual case (divide by 255).
 A manifest that does not mention it gets the right behaviour without a default value
@@ -195,8 +195,8 @@ const (
 func (m Mode) Pads() bool { return m == Letterbox || m == TopLeftPad || m == LongSidePad }
 ```
 
-[spec.go#L24-L31](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L24-L31),
-[#L65-L67](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L65-L67)
+[spec.go#L24-L31](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/spec.go#L24-L31),
+[#L65-L67](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/spec.go#L65-L67)
 
 `(m Mode)` before the name is the **receiver**: Go's `self`, but written explicitly and
 named by you (usually one or two letters). You call it as `spec.Resize.Pads()`. A function
@@ -224,7 +224,7 @@ func (w *wholeNumber) UnmarshalYAML(n *yaml.Node) error {
 }
 ```
 
-[manifest.go#L434-L448 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L434-L448)
+[manifest.go#L434-L448 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/manifest.go#L434-L448)
 
 This is the Go equivalent of a pydantic validator. yaml.v3 sees the method and calls it.
 
@@ -252,7 +252,7 @@ canonical license back, so it takes a pointer:
 	m.License = canonLicense
 ```
 
-[manifest.go#L290-L296 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L290-L296)
+[manifest.go#L290-L296 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/manifest.go#L290-L296)
 
 `preprocess.Spec`, `preprocess.Meta` and `engine.Tensor` use value receivers: they are
 plain data, and `Tensor` only holds slice *headers* (pointer + length), so copying it does
@@ -264,7 +264,7 @@ they contain a `sync.Mutex`, and copying a mutex breaks it (`go vet` warns about
     a pointer without writing `(*p).Field`. A pointer can be `nil`. The project uses that for
     *optional* values: `Preprocess *preprocess.Spec` in `models.Config` is `nil` when the
     manifest has no `preprocess:` block, like `Optional[Spec] = None`
-    ([model.go#L73-L77](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L73-L77)).
+    ([model.go#L73-L77](https://github.com/mtbui2010/visionserve/blob/main/internal/models/model.go#L73-L77)).
     There is no pointer arithmetic in normal Go code.
 
 ## Embedding: composition, not inheritance
@@ -283,10 +283,10 @@ type Request struct {
 }
 ```
 
-[request.go#L48-L52 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/request.go#L48-L52)
+[request.go#L48-L52 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/server/request.go#L48-L52)
 
 So the handler can write `q.Model` and `q.Encoding`
-([handlers.go#L166-L167](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L166-L167))
+([handlers.go#L166-L167](https://github.com/mtbui2010/visionserve/blob/main/internal/server/handlers.go#L166-L167))
 although those fields belong to `api.PredictJSONRequest`.
 
 The tests use embedding to build a variant of a fake model that adds one method:
@@ -303,7 +303,7 @@ type notExclusivePipe struct{ testPipe }
 func (p *notExclusivePipe) Exclusive() bool { return false }
 ```
 
-[fixtures_test.go#L34-L42 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/fixtures_test.go#L34-L42)
+[fixtures_test.go#L34-L42 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/fixtures_test.go#L34-L42)
 
 `exclusivePipe` has every method of `testPipe` (`Name`, `Task`, `Roles`, `Infer`) plus
 `Exclusive`. In Python you would subclass; in Go you embed. The difference: there is no
@@ -329,10 +329,10 @@ type (
 )
 ```
 
-[model.go#L19-L28 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L19-L28)
+[model.go#L19-L28 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/model.go#L19-L28)
 
 `models.PreprocessMeta = preprocess.Meta` works the same way
-([meta.go#L9](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/meta.go#L9)).
+([meta.go#L9](https://github.com/mtbui2010/visionserve/blob/main/internal/models/meta.go#L9)).
 This is how CLAUDE.md's rule "do NOT invent a per-model schema" is enforced by the type
 system: a `models.Result` *is* an `api.Result`.
 
@@ -347,7 +347,7 @@ system: a `models.Result` *is* an `api.Result`.
     	err   error
     }
     ```
-    [automask.go#L105-L110](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/mobilesam/automask.go#L105-L110).
+    [automask.go#L105-L110](https://github.com/mtbui2010/visionserve/blob/main/internal/models/mobilesam/automask.go#L105-L110).
     `[T any]` is like `Generic[T]` in Python typing. You will rarely need to write generic code
     for a model.
 
@@ -402,7 +402,7 @@ system: a `models.Result` *is* an `api.Result`.
    go test ./internal/registry -run 'TestValidate' -v
    ```
    Then change `"AGPL-3.0"` in `TestValidateRejectsAGPL`
-   ([manifest_test.go#L10](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest_test.go#L10))
+   ([manifest_test.go#L10](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/manifest_test.go#L10))
    to `"MIT"` and watch it fail. Undo the change.
 
 ## Recap

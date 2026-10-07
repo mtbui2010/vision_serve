@@ -62,7 +62,7 @@ func (s *Session) worker(modelPath string, providers []Provider, so SessionOptio
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L237-L261)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L237-L261)
 
 `Run` and `RunNamed` wrap the work in a closure and send it to the worker over the `jobs` channel.
 Because the worker handles one job at a time, this also makes a session safe to call from many
@@ -104,7 +104,7 @@ func (s *Session) submit(ctx context.Context, work func() ([]Tensor, error)) ([]
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L543-L581)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L543-L581)
 
 Three safety details are visible here. The hand-over to the worker follows the request's `ctx`: a
 caller whose client left (or whose deadline passed) while it queued behind other jobs gives up with
@@ -142,7 +142,7 @@ type Runnable interface {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/pool.go#L15-L22)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/pool.go#L15-L22)
 
 For a pool, `ctx` bounds the wait for a free copy in the same way: a call whose `ctx` ends first
 returns without running anything.
@@ -163,7 +163,7 @@ type Tensor struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/tensor.go#L8-L13)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/tensor.go#L8-L13)
 
 `Run` binds inputs by position; `RunNamed` binds them by name, which is what pipeline models use
 (the SAM decoder has six inputs whose order is not obvious).
@@ -179,7 +179,7 @@ reason, ORT has stopped writing into the buffers.
 func (s *Session) RunNamedInto(ctx context.Context, inputs, into map[string]Tensor) ([]Tensor, error) {
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L498)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L498)
 
 ### CPU sessions run without ORT's memory pattern
 
@@ -203,7 +203,7 @@ if ep == ProviderCPU {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L308-L313)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L308-L313)
 
 ### Execution providers and the fallback chain
 
@@ -242,7 +242,7 @@ func ResolveProviders(prefer []string) ([]Provider, error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L169-L203)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/provider.go#L169-L203)
 
 At session creation the engine tries one EP at a time, in order. An EP can fail in two ways, and
 both move on to the next one:
@@ -283,7 +283,7 @@ func epWasDropped(ortOutput string) bool {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L692-L708)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L692-L708)
 
 If it matches, the engine logs a warning and records the session as CPU. The binding offers no
 logging callback, so the capture briefly redirects the process's stderr (file descriptor 2). Only
@@ -308,7 +308,7 @@ func DeviceString(ep Provider) string {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/provider.go#L39-L50)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/provider.go#L39-L50)
 
 Each session falls back on its own, so a multi-session model can end up split. If its roles agree,
 `device` is that one value; otherwise it names every role, e.g.
@@ -369,7 +369,7 @@ func applyDeterministic(opts *ort.SessionOptions, ep Provider) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/deterministic.go#L88-L103)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/deterministic.go#L88-L103)
 
 No latency cost was measurable, but the deterministic kernels round differently, so turning it on
 shifts GPU outputs once (GroundingDINO scores by up to about 0.002, held-out mAP by up to 0.22). It
@@ -403,7 +403,7 @@ func Inspect(modelPath string) (inputs, outputs []IOInfo, err error) {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L96-L109)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L96-L109)
 
 A file the reader cannot parse falls back to ORT's own probe, logged once per file. Output shapes
 are the ones declared in the file; a live ORT session may resolve some symbolic dimensions further,

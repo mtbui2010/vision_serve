@@ -69,7 +69,7 @@ type Spec struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L110-L143)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/spec.go#L110-L143)
 
 Each pixel value `p` (0 to 255) on color channel `c` becomes `(p/255 - mean[c]) / std[c]`.
 With `NoRescale` and no mean/std the raw 0..255 value is kept (the MobileSAM encoder normalizes
@@ -84,7 +84,7 @@ func (n normalizer) value(c int, p float32) float32 {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/apply.go#L140-L145)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/apply.go#L140-L145)
 
 ### The resize modes
 
@@ -124,7 +124,7 @@ image maps into the input, for example:
 		return s.render(r, 0, 0, nw, nh, W, H, px, py, pixelPad), meta, nil
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/apply.go#L37-L47)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/apply.go#L37-L47)
 
 Resizing uses `disintegration/imaging` (pure Go, no OpenCV, no cgo), and the tensor is written
 by reading the image's pixel buffer row by row rather than calling `At()` per pixel.
@@ -168,7 +168,7 @@ func FromLegacy(l LegacyFields) Spec {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L161-L175)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/spec.go#L161-L175)
 
 When both a block and a legacy field are present, the registry
 (`registry.Manifest.PreprocessSpec`) requires them to agree and refuses the manifest with an
@@ -188,7 +188,7 @@ func arch(prefix string) preprocess.Arch {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/detr/preprocess.go#L18-L20)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/detr/preprocess.go#L18-L20)
 
 `Resolve` treats a declared block strictly and legacy fields leniently, so a manifest that
 loaded before the refactor still loads with the same behavior:
@@ -213,7 +213,7 @@ func (a Arch) Resolve(s Spec) (Spec, error) {
 	}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L288-L309)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/spec.go#L288-L309)
 
 For example, RF-DETR has always ignored `input.crop`, and SCRFD's legacy `letterbox: true` has
 always meant InsightFace's top-left pad; both readings are preserved. The same unsupported mode
@@ -233,7 +233,7 @@ var encoderSpec = preprocess.Spec{
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/mobilesam/preprocess.go#L19-L25)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/mobilesam/preprocess.go#L19-L25)
 
 Models with geometry no mode describes (GroundingDINO, OWLv2, per-detection SigLIP crops,
 PaddleOCR text lines) still do their own cropping, then call the shared `Spec.Tensor` for the
@@ -259,7 +259,7 @@ func (m Meta) Affine() geom.Affine {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/preprocess/spec.go#L338-L351)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/preprocess/spec.go#L338-L351)
 
 A decoder inverts it with `geom.Affine.BoxToOrig` and then clips with `geom.Clamp`. The box
 format is `[x, y, w, h]`, top-left corner plus size, everywhere.
@@ -280,7 +280,7 @@ func (a Affine) BoxToOrig(b [4]float64) [4]float64 {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/geom/geom.go#L49-L56)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/geom/geom.go#L49-L56)
 
 `geom` also holds `Sigmoid`, `NormToInput` (a box normalized to 0..1 in `cxcywh` or `xyxy`
 format, to input pixels) and `IoU` (intersection over union, the overlap measure between two
@@ -304,7 +304,7 @@ type Bitmap struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/mask/mask.go#L12-L15)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/mask/mask.go#L12-L15)
 
 SAM2, for instance, upsamples its best low-resolution mask straight to the original image size
 and thresholds it in one pass, without allocating a full-size float plane:
@@ -321,7 +321,7 @@ and thresholds it in one pass, without allocating a full-size float plane:
 	}, nil
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/sam2/postprocess.go#L278-L286)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/sam2/postprocess.go#L278-L286)
 
 The bitmap is then sent as **RLE** (run-length encoding): counts of consecutive background and
 foreground pixels, walked column by column, always starting with a background run. This is the
@@ -351,7 +351,7 @@ func EncodeRLE(b Bitmap) string {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/mask/rle.go#L15-L37)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/mask/rle.go#L15-L37)
 
 All `mask` functions take dimensions rows first, `(h, w)`, like the `[.., H, W]` tensors they
 come from; the encoder takes a `Bitmap`, so it cannot be called with swapped dimensions.
@@ -378,7 +378,7 @@ type Options struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/nms/nms.go#L16-L30)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/nms/nms.go#L16-L30)
 
 The textbook loop compares every pair of boxes, which took about 2 seconds for 16,800 SCRFD
 proposals. From 512 boxes upward, `nms.Detections` first puts boxes into a uniform grid (cell
@@ -401,7 +401,7 @@ func FirstName(names []string, fallback string) string {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/vision/util/util.go#L18-L23)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/vision/util/util.go#L18-L23)
 
 `internal/imageproc` predates the library. It still draws results onto images, and its
 resize/letterbox/tensor helpers are now thin wrappers over `vision/preprocess`, kept for drawing
@@ -416,7 +416,7 @@ func Letterbox(src image.Image, w, h int, padColor color.NRGBA) LetterboxResult 
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/imageproc/letterbox.go#L32-L39)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/imageproc/letterbox.go#L32-L39)
 
 ### How it is kept correct
 

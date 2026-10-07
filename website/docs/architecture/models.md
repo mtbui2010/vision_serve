@@ -54,7 +54,7 @@ type Model interface {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L46-L65)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/model.go#L46-L65)
 
 The lifecycle manager glues those two calls around the engine. This is the whole "simple" path:
 
@@ -72,7 +72,7 @@ func (s *Session) predictSimple(ctx context.Context, img image.Image) (api.Resul
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L213-L223)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/session.go#L213-L223)
 
 A **`PipelineModel`** is for anything that needs a *prompt* (a box, a point or a text phrase)
 and/or chains several ONNX graphs. MobileSAM, for example, runs an image encoder once and then a
@@ -102,7 +102,7 @@ type PipelineModel interface {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L227-L289)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/model.go#L227-L289)
 
 Two optional interfaces let a pipeline ask the runtime for a concurrency policy instead of
 implementing one itself:
@@ -117,7 +117,7 @@ type PoolSizer interface {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L261-L274)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/model.go#L261-L274)
 
 - `Exclusive() == true` makes the lifecycle hold a per-loaded-model lock around `Infer`
   (GroundingDINO and Grounded-SAM use it; grasp only in its GroundingDINO-detector variant).
@@ -139,7 +139,7 @@ type Prompt struct {
 	ROI [4]float64
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/model.go#L146-L198)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/model.go#L146-L198)
 
 Besides `Text`, `Boxes` and `Points` it holds the size filter (`MinSize`/`MaxSize`), grasp
 gripper bounds, GroundingDINO thresholds, background-model knobs, the automask `GridSize`, a
@@ -157,7 +157,7 @@ var ErrBadPrompt = errors.New("invalid prompt")
 func BadPrompt(err error) error { return badPrompt{err} }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/prompt.go#L87-L91)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/prompt.go#L87-L91)
 
 ### Registering a model family
 
@@ -176,7 +176,7 @@ func init() {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/detr/detr.go#L24-L31)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/detr/detr.go#L24-L31)
 
 The `var _ models.Model = (*detr)(nil)` line is a compile-time check. Lifecycle only finds out
 which interface a model implements by a type assertion at load time, so without it a misspelled
@@ -196,7 +196,7 @@ which pulls the package in so its `init()` runs:
 	_ "visionserve/internal/models/textalign"
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/cmd/visionserve/main.go#L12-L31)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/cmd/visionserve/main.go#L12-L31)
 
 `models.Register` panics on a duplicate name. That is the one deliberate panic: it can only
 happen at program start, as a programming mistake, never while serving a request.
@@ -239,7 +239,7 @@ runtime:
   idle_unload_seconds: 300
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/models/mobile-sam/manifest.yaml#L4-L32)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/models/mobile-sam/manifest.yaml#L4-L32)
 
 | Field | What it means |
 |---|---|
@@ -271,7 +271,7 @@ runtime:
     head: 1
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/models/rfdetr-gdino-fastpath/manifest.yaml#L74-L81)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/models/rfdetr-gdino-fastpath/manifest.yaml#L74-L81)
 
 The full field list is in the [manifest reference](../reference/manifest.md).
 
@@ -289,7 +289,7 @@ reported as a warning; it never crashes the server. Folders whose name starts wi
 		}
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/registry.go#L98-L102)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/registry.go#L98-L102)
 
 The license check is the first rule that matters. The allowlist is keyed by the lowercased SPDX
 id, so `apache-2.0` copied from a HuggingFace model card is accepted and stored back as
@@ -304,7 +304,7 @@ var licenseAllowlist = map[string]string{
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L29-L34)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/manifest.go#L29-L34)
 
 ```go title="internal/registry/manifest.go"
 	canonLicense, ok := canonicalLicense(m.License)
@@ -314,7 +314,7 @@ var licenseAllowlist = map[string]string{
 	m.License = canonLicense
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/registry/manifest.go#L292-L296)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/registry/manifest.go#L292-L296)
 
 The rest of `validate()` rejects:
 
@@ -363,7 +363,7 @@ type Result struct {
 	// ...
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/pkg/api/types.go#L21-L34)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/pkg/api/types.go#L21-L34)
 
 | Field | Filled by | Shape |
 |---|---|---|
@@ -388,7 +388,7 @@ type Mask struct {
 }
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/pkg/api/types.go#L54-L81)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/pkg/api/types.go#L54-L81)
 
 A mask is stored as **RLE** (run-length encoding): instead of one true/false value per pixel, it
 lists how many pixels in a row are background, then foreground, then background again, and so
@@ -419,7 +419,7 @@ image.
 		bbox := geom.Clamp(toOrig.BoxToOrig(in), meta.OrigWidth, meta.OrigHeight)
 ```
 
-[View on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/detr/postprocess.go#L84-L88)
+[View on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/models/detr/postprocess.go#L84-L88)
 
 `PreprocessMeta` is the same type as `preprocess.Meta`, and the mapping helpers live in the
 shared vision library; see [vision.md](vision.md).

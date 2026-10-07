@@ -15,7 +15,7 @@ code from this repository, with a link to the exact lines on GitHub.
 
 VisionServe wants to be "Ollama for computer vision": one program you copy to a laptop, a
 server or a Jetson, start, and send images to. Rule 3 of the project's
-[CLAUDE.md](https://github.com/mtbui2010/vision_serve/blob/main/CLAUDE.md) says it plainly:
+[CLAUDE.md](https://github.com/mtbui2010/visionserve/blob/main/CLAUDE.md) says it plainly:
 **do not pull Python into the runtime.** Go gives the project what it needs for that:
 
 | Need | What Go gives | What it would take in Python |
@@ -39,7 +39,7 @@ module visionserve
 go 1.22
 ```
 
-[go.mod#L1-L3 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/go.mod#L1-L3)
+[go.mod#L1-L3 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/go.mod#L1-L3)
 
 1. Download Go 1.22 or newer from <https://go.dev/dl/> and unpack it, for example into
    `/usr/local/go` (or your home directory if you have no root access).
@@ -98,7 +98,7 @@ Both work with most commands.
 ## How the repository is laid out
 
 ```text
-vision_serve/
+visionserve/
 ├── cmd/visionserve/      the main package: builds the `visionserve` binary
 ├── internal/             all the server code; importable only from inside this module
 │   ├── cli/              subcommands: serve, run, list, pull, ...
@@ -156,13 +156,13 @@ sequenceDiagram
 
 | Step | Function | File |
 |---|---|---|
-| 1. Route | `routes()` maps `POST /api/predict` to `handlePredict` | [server/server.go#L75-L92](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/server.go#L75-L92) |
-| 2. Parse | `handlePredict` / `predict`: admit, decode the image, build the prompt | [server/handlers.go#L136-L168](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/handlers.go#L136-L168) |
-| 3. Wrap | `Predict`: region-of-interest crop, client-gone check, size filter | [server/predict.go#L24-L43](https://github.com/mtbui2010/vision_serve/blob/main/internal/server/predict.go#L24-L43) |
-| 4. Load | `Manager.PredictPrompt`: load once, lease the session | [lifecycle/manager.go#L106-L116](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/manager.go#L106-L116) |
-| 5. Run | `Session.predictSimple`: pre → infer → post | [lifecycle/session.go#L213-L223](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L213-L223) |
-| 6. Model | `Preprocess` / `Postprocess` of one architecture, e.g. classification | [models/classification/classification.go#L53-L59](https://github.com/mtbui2010/vision_serve/blob/main/internal/models/classification/classification.go#L53-L59) |
-| 7. ORT | `engine.Session.Run` hands the job to the session's own OS thread | [engine/ort.go#L472-L643](https://github.com/mtbui2010/vision_serve/blob/main/internal/engine/ort.go#L472-L643) |
+| 1. Route | `routes()` maps `POST /api/predict` to `handlePredict` | [server/server.go#L75-L92](https://github.com/mtbui2010/visionserve/blob/main/internal/server/server.go#L75-L92) |
+| 2. Parse | `handlePredict` / `predict`: admit, decode the image, build the prompt | [server/handlers.go#L136-L168](https://github.com/mtbui2010/visionserve/blob/main/internal/server/handlers.go#L136-L168) |
+| 3. Wrap | `Predict`: region-of-interest crop, client-gone check, size filter | [server/predict.go#L24-L43](https://github.com/mtbui2010/visionserve/blob/main/internal/server/predict.go#L24-L43) |
+| 4. Load | `Manager.PredictPrompt`: load once, lease the session | [lifecycle/manager.go#L106-L116](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/manager.go#L106-L116) |
+| 5. Run | `Session.predictSimple`: pre → infer → post | [lifecycle/session.go#L213-L223](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/session.go#L213-L223) |
+| 6. Model | `Preprocess` / `Postprocess` of one architecture, e.g. classification | [models/classification/classification.go#L53-L59](https://github.com/mtbui2010/visionserve/blob/main/internal/models/classification/classification.go#L53-L59) |
+| 7. ORT | `engine.Session.Run` hands the job to the session's own OS thread | [engine/ort.go#L472-L643](https://github.com/mtbui2010/visionserve/blob/main/internal/engine/ort.go#L472-L643) |
 
 The core of step 5 is only a few lines. It is worth reading now, even before you know Go:
 
@@ -181,7 +181,7 @@ func (s *Session) predictSimple(ctx context.Context, img image.Image) (api.Resul
 }
 ```
 
-[session.go#L212-L223 on GitHub](https://github.com/mtbui2010/vision_serve/blob/main/internal/lifecycle/session.go#L212-L223)
+[session.go#L212-L223 on GitHub](https://github.com/mtbui2010/visionserve/blob/main/internal/lifecycle/session.go#L212-L223)
 
 In Python you would write `inp, meta = model.preprocess(img); outs = sess.run(inp); return
 model.postprocess(outs, meta)` and let exceptions fly. Go returns the error next to the
